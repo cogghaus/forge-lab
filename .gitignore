@@ -8,3 +8,10 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# Vibe Forge
+# Temporary tooling used during forge-lab development. All contents stay
+# out of git; task bookkeeping lives on disk only. Once the personality
+# port is complete, _vibe-forge/ gets removed entirely and we spawn agents
+# directly from forge-lab itself.
+_vibe-forge/
