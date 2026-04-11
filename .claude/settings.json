@@ -11,6 +11,7 @@
       "Grep",
       "WebFetch",
       "WebSearch",
+      "Bash",
       "Bash(git:*)",
       "Bash(gh:*)",
       "Bash(pnpm:*)",
