@@ -10,21 +10,8 @@ coverage/
 !.env.example
 
 # Vibe Forge
-# Tool internals (regenerated on update)
-_vibe-forge/.git/
-_vibe-forge/bin/
-_vibe-forge/agents/
-_vibe-forge/config/
-_vibe-forge/docs/
-_vibe-forge/tests/
-_vibe-forge/src/
-_vibe-forge/node_modules/
-_vibe-forge/package*.json
-_vibe-forge/*.md
-_vibe-forge/LICENSE
-_vibe-forge/.github/
-
-# Keep project data (tasks, context) - these ARE committed
-# !_vibe-forge/tasks/
-# !_vibe-forge/context/
-# !_vibe-forge/.claude/
+# Temporary tooling used during forge-lab development. All contents stay
+# out of git; task bookkeeping lives on disk only. Once the personality
+# port is complete, _vibe-forge/ gets removed entirely and we spawn agents
+# directly from forge-lab itself.
+_vibe-forge/
