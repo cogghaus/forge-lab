@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>forge-lab · community</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0D0D0F;
+    --card:      #1A1A1F;
+    --card-hi:   #24242C;
+    --border:    rgba(255,255,255,0.06);
+    --border-hi: rgba(255,255,255,0.12);
+    --text:      #F5F0EB;
+    --text-dim:  rgba(245,240,235,0.6);
+    --text-mute: rgba(245,240,235,0.35);
+    --orange:    #FF6B2B;
+    --gold:      #FFB547;
+    --blue:      #4A9EFF;
+    --green:     #2DD4A0;
+    --red:       #FF4757;
+  }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(at 20% 0%, rgba(255,107,43,0.04) 0px, transparent 50%),
+      radial-gradient(at 80% 100%, rgba(74,158,255,0.03) 0px, transparent 50%);
+    background-attachment: fixed;
+  }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+  .card { background: var(--card); border: 1px solid var(--border); }
+  .card:hover { border-color: var(--border-hi); }
+  .heat-idle   { box-shadow: 0 0 0 1px rgba(74,158,255,0.10), 0 0 20px rgba(74,158,255,0.06); }
+  .heat-warm   { box-shadow: 0 0 0 1px rgba(255,107,43,0.30), 0 0 24px rgba(255,107,43,0.15); }
+  .heat-hot    { box-shadow: 0 0 0 1px rgba(255,107,43,0.50), 0 0 32px rgba(255,107,43,0.22); }
+  .heat-standby{ box-shadow: 0 0 0 1px rgba(255,255,255,0.05); opacity: 0.55; }
+  .heat-offline{ box-shadow: 0 0 0 1px rgba(255,255,255,0.04); opacity: 0.3; }
+  .dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+  .dot-active  { background: var(--orange); }
+  .dot-idle    { background: var(--blue); }
+  .dot-standby { background: rgba(255,255,255,0.25); }
+  .dot-offline { background: rgba(255,255,255,0.15); }
+  .bar { background: rgba(255,255,255,0.06); height: 6px; border-radius: 4px; overflow: hidden; }
+  .bar-fill { background: var(--orange); height: 100%; transition: width 400ms ease; }
+  .badge { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; display: inline-block; }
+  .badge-pending  { background: rgba(255,255,255,0.06); color: var(--text-dim); }
+  .badge-active   { background: rgba(255,107,43,0.15); color: var(--orange); border: 1px solid rgba(255,107,43,0.3); }
+  .badge-review   { background: rgba(255,181,71,0.15); color: var(--gold); border: 1px solid rgba(255,181,71,0.3); }
+  .badge-complete { background: rgba(45,212,160,0.15); color: var(--green); border: 1px solid rgba(45,212,160,0.3); }
+  .badge-attention{ background: rgba(255,71,87,0.15); color: var(--red); border: 1px solid rgba(255,71,87,0.3); }
+  .temp-pill { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 6px 12px; border-radius: 999px; cursor: pointer; transition: all 200ms ease; }
+  .temp-cold { background: rgba(74,158,255,0.1); color: var(--blue); border: 1px solid rgba(74,158,255,0.3); }
+  .temp-warm { background: rgba(255,107,43,0.12); color: var(--orange); border: 1px solid rgba(255,107,43,0.35); }
+  .temp-hot  { background: rgba(255,181,71,0.15); color: var(--gold); border: 1px solid rgba(255,181,71,0.45); }
+  button { cursor: pointer; }
+  .scroll-thin::-webkit-scrollbar { width: 6px; }
+  .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+  .scroll-thin::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+  [role="button"]:focus-visible, button:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; border-radius: 4px; }
+
+  /* Task title truncation with marquee fallback when overflowing.
+     Ticket number stays visible as a fixed sibling; title lives inside
+     a .title-wrap that clips overflow. If JS detects the inner span is
+     wider than the wrap, it adds .marquee and sets --marquee-distance so
+     the keyframe below can scroll the text back and forth. */
+  .title-wrap { overflow: hidden; white-space: nowrap; min-width: 0; }
+  .title-wrap > span { display: inline-block; }
+  .title-wrap.marquee > span {
+    animation: marquee-slide 14s cubic-bezier(.4,0,.6,1) infinite;
+  }
+  @keyframes marquee-slide {
+    0%, 6%    { transform: translateX(0); }
+    40%, 60%  { transform: translateX(var(--marquee-distance, 0px)); }
+    94%, 100% { transform: translateX(0); }
+  }
+  .ticket { color: rgba(245,240,235,0.85); font-weight: 600; flex-shrink: 0; }
+  .sep { color: rgba(245,240,235,0.25); flex-shrink: 0; padding: 0 2px; }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<header class="border-b border-white/5 sticky top-0 z-30 backdrop-blur bg-[#0D0D0F]/90">
+  <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="text-2xl leading-none">🔥</span>
+      <h1 class="mono text-lg font-bold tracking-tight">forge-lab</h1>
+      <span class="badge badge-pending">community</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <button id="temp-btn" class="temp-pill temp-warm" title="Click to cycle temperature">🌡 warm</button>
+      <div class="text-xs mono text-white/60"><span id="active-count">2</span> active</div>
+      <button class="w-8 h-8 rounded hover:bg-white/5 flex items-center justify-center text-white/60">⚙</button>
+      <button class="w-8 h-8 rounded bg-white/5 hover:bg-white/10 flex items-center justify-center text-sm mono">A</button>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+
+  <!-- Pipeline pillars -->
+  <section aria-label="Task pipeline">
+    <div class="grid grid-cols-4 gap-4" id="pipeline-grid"></div>
+  </section>
+
+  <!-- Agent ring -->
+  <section aria-label="Agent ring">
+    <div class="flex items-baseline justify-between mb-3">
+      <h2 class="mono text-xs uppercase tracking-wider text-white/50">Agent ring</h2>
+      <div class="text-xs mono text-white/40">Click any agent for detail</div>
+    </div>
+    <div class="grid grid-cols-4 gap-3" id="agent-grid"></div>
+  </section>
+
+  <!-- Activity + devices -->
+  <section class="grid grid-cols-3 gap-4">
+    <div class="col-span-2 card rounded-lg p-5" aria-label="Activity stream">
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 class="mono text-xs uppercase tracking-wider text-white/50">Activity stream</h2>
+        <div class="text-xs mono text-white/40">live</div>
+      </div>
+      <div id="activity-list" class="space-y-2 max-h-80 overflow-y-auto scroll-thin"></div>
+    </div>
+    <div class="card rounded-lg p-5" aria-label="Devices">
+      <h2 class="mono text-xs uppercase tracking-wider text-white/50 mb-3">Devices</h2>
+      <div class="space-y-3" id="device-list"></div>
+      <div class="mt-5 pt-4 border-t border-white/5">
+        <h3 class="mono text-xs uppercase tracking-wider text-white/50 mb-2">Forge queue</h3>
+        <div class="text-sm mono text-white/70"><span id="queue-count">0</span> waiting</div>
+        <div class="text-xs mono text-white/40 mt-1">Auto-spawn: <span class="text-white/60">off</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Attention -->
+  <section id="attention-wrap" class="hidden"></section>
+
+</main>
+
+<!-- Modal -->
+<div id="modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-start justify-center p-6 overflow-y-auto" onclick="if(event.target.id==='modal')closeModal()">
+  <div class="card rounded-xl max-w-3xl w-full mt-16 mb-16 p-6 shadow-2xl" id="modal-card">
+    <div class="flex items-start justify-between mb-4">
+      <div id="modal-header"></div>
+      <button onclick="closeModal()" class="text-white/40 hover:text-white text-xl leading-none">&times;</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<footer class="max-w-7xl mx-auto px-6 pb-8 pt-4 text-xs mono text-white/30 flex items-center justify-between border-t border-white/5 mt-8">
+  <div>forge-lab · community edition · HeroUI primitives only</div>
+  <div>mockup · clickable · offline · no real data</div>
+</footer>
+
+<script>
+/* Task metadata -- title plus the agent currently working (or who last
+   touched) the task, with an icon for visual identification in the
+   pipeline pillars. Used by renderPipeline (with icon) and renderAgents
+   (title only). Titles that overflow get marquee scrolled via
+   applyMarquees() after render. */
+const TASKS = {
+  'FL-001':     { title: 'Port minimum-viable-council personalities',             agent: 'scribe',   icon: '📜' },
+  'FL-001b':    { title: 'Deny-list smoke test',                                   agent: 'crucible', icon: '🧪' },
+  'FL-002R':    { title: 'Composition helper + daemon wiring + first smoke test', agent: 'anvil',    icon: '🔨' },
+  'FL-003':     { title: 'BOM handling + content gate refactor',                  agent: null,       icon: null },
+  'FL-004':     { title: 'forge-dash-community scaffold',                         agent: null,       icon: null },
+  'FL-005':     { title: 'Heimdall v1 daemon proxy',                              agent: null,       icon: null },
+  'FL-006':     { title: 'Deployment automation for accserver',                   agent: null,       icon: null },
+  'FL-REV-001': { title: 'Code review of FL-001 delivery',                        agent: 'temper',   icon: '⚖️' },
+  'FL-PHASE1':  { title: 'Phase 1 vertical slice',                                agent: 'anvil',    icon: '🔨' },
+};
+
+/* ========== STATE ========== */
+const STATE = {
+  temperature: 'warm', // cold | warm | hot
+  pipeline: {
+    pending:  { count: 4, label: 'Pending', ids: ['FL-003','FL-004','FL-005','FL-006'] },
+    active:   { count: 2, label: 'Active',  ids: ['FL-002R','FL-001b'] },
+    review:   { count: 1, label: 'Review',  ids: ['FL-REV-001'] },
+    complete: { count: 27,label: 'Complete',ids: ['FL-001','FL-PHASE1','...'] },
+  },
+  agents: [
+    { id:'architect', name:'Architect', icon:'🏛️', status:'idle',    heat:'idle',    task:null,     progress:0,  runtime:'claude-code', device:'workstation', lastSeen:'3m ago' },
+    { id:'anvil',     name:'Anvil',     icon:'🔨', status:'working', heat:'warm',    task:'FL-002R',progress:62, runtime:'claude-code', device:'workstation', lastSeen:'just now' },
+    { id:'furnace',   name:'Furnace',   icon:'🔥', status:'standby', heat:'standby', task:null,     progress:0,  runtime:'claude-code', device:'—',           lastSeen:'—' },
+    { id:'crucible',  name:'Crucible',  icon:'🧪', status:'working', heat:'warm',    task:'FL-001b',progress:12, runtime:'claude-code', device:'laptop',     lastSeen:'just now' },
+    { id:'temper',    name:'Temper',    icon:'⚖️', status:'idle',    heat:'idle',    task:null,     progress:0,  runtime:'claude-code', device:'workstation', lastSeen:'42m ago' },
+    { id:'scribe',    name:'Scribe',    icon:'📜', status:'idle',    heat:'idle',    task:null,     progress:0,  runtime:'claude-code', device:'workstation', lastSeen:'4h ago' },
+    { id:'aegis',     name:'Aegis',     icon:'🛡️', status:'standby', heat:'standby', task:null,     progress:0,  runtime:'claude-code', device:'—',           lastSeen:'—' },
+    { id:'loki',      name:'Loki',      icon:'🎭', status:'hub',     heat:'offline', task:null,     progress:0,  runtime:'hub-inline',  device:'—',           lastSeen:'hub-side' },
+  ],
+  devices: [
+    { id:'workstation', label:'workstation', kind:'🖥', status:'online',  lastSeen:'live' },
+    { id:'laptop',      label:'laptop',      kind:'💻', status:'online',  lastSeen:'live' },
+    { id:'workbench',   label:'workbench',   kind:'🏢', status:'offline', lastSeen:'2h ago' },
+  ],
+  activity: [
+    { t:'12:04', icon:'⟡', agent:'🔨', actor:'Anvil',    verb:'claimed',   id:'FL-002R', kind:'active' },
+    { t:'12:03', icon:'✓', agent:'⚖️', actor:'Temper',   verb:'approved',  id:'FL-001',  kind:'review' },
+    { t:'12:01', icon:'✓', agent:'🧪', actor:'Crucible', verb:'completed', id:'FL-REV-002', kind:'complete' },
+    { t:'11:58', icon:'⟡', agent:'📜', actor:'Scribe',   verb:'started',   id:'FL-001',  kind:'active' },
+    { t:'11:45', icon:'✓', agent:'⚒️', actor:'Hub',      verb:'approved',  id:'FL-PHASE1', kind:'review' },
+    { t:'11:30', icon:'⚠', agent:'🎭', actor:'Loki',     verb:'flagged',   id:'FL-REV-004', kind:'attention' },
+    { t:'11:22', icon:'⟡', agent:'🔨', actor:'Anvil',    verb:'claimed',   id:'FL-PHASE1', kind:'active' },
+    { t:'11:05', icon:'✓', agent:'🛡️', actor:'Aegis',    verb:'cleared',   id:'FL-001',  kind:'complete' },
+  ],
+  tasks: {
+    'FL-002R': {
+      id:'FL-002R', title:'Composition helper + daemon wiring + first smoke test',
+      status:'active', priority:'high', epic:'FL-EPIC-PHASE2-AGENTS',
+      agent:'anvil', runtime:'claude-code', device:'workstation', progress:62,
+      description:'Wire composeSystemPrompt() into the daemon spawn path. Prove end-to-end ClaudeCodeRuntime spawn with real personality + project context layered correctly.',
+      timeline:[
+        {t:'12:04',kind:'done',text:'🔨 Anvil claimed'},
+        {t:'12:04',kind:'done',text:'daemon wrote .forge/tasks/FL-002R.md'},
+        {t:'12:04',kind:'done',text:'ClaudeCodeRuntime spawned in new tab'},
+        {t:'12:05',kind:'done',text:'agent read task file'},
+        {t:'12:07',kind:'live',text:'agent editing packages/forge-agents/src/compose-prompt.ts'},
+        {t:'—',    kind:'pending',text:'unit tests'},
+        {t:'—',    kind:'pending',text:'daemon wiring'},
+        {t:'—',    kind:'pending',text:'integration test'},
+      ],
+    },
+    'FL-001b': {
+      id:'FL-001b', title:'Deny-list smoke test',
+      status:'active', priority:'high', epic:'FL-EPIC-PHASE2-AGENTS',
+      agent:'crucible', runtime:'claude-code', device:'laptop', progress:12,
+      description:'One-shot smoke test to confirm bypassPermissions + deny list actually blocks matching tool calls. Innocuous marker: Read(G:/dev/forge-lab/LICENSE).',
+      timeline:[
+        {t:'12:12',kind:'done',text:'🧪 Crucible claimed'},
+        {t:'12:12',kind:'done',text:'daemon wrote task file'},
+        {t:'12:12',kind:'live',text:'running innocuous Bash smoke sequence'},
+        {t:'—',    kind:'pending',text:'attempt denied Read'},
+        {t:'—',    kind:'pending',text:'record result'},
+      ],
+    },
+  },
+};
+
+/* ========== RENDER: pipeline pillars ========== */
+const PILLARS = ['pending','active','review','complete'];
+function renderPipeline() {
+  const root = document.getElementById('pipeline-grid');
+  root.innerHTML = '';
+  for (const key of PILLARS) {
+    const p = STATE.pipeline[key];
+    const el = document.createElement('div');
+    el.className = 'card rounded-lg p-4 transition cursor-pointer';
+    el.onclick = () => showPillar(key);
+    const activeAccent = key === 'active' ? 'border-[rgba(255,107,43,0.4)]' : '';
+    el.classList.add(...activeAccent.split(' ').filter(Boolean));
+    el.innerHTML = `
+      <div class="flex items-center justify-between">
+        <div class="mono text-[11px] uppercase tracking-wider text-white/55">${p.label}</div>
+        <span class="badge badge-${key}">${key}</span>
+      </div>
+      <div class="mono text-4xl font-bold mt-2 leading-none">${p.count}</div>
+      <div class="mt-3 flex gap-1">
+        ${Array.from({length:10}).map((_,i)=>{
+          const filled = i < Math.min(10, p.count);
+          const color = key==='active'?'bg-orange-500':key==='review'?'bg-[#FFB547]':key==='complete'?'bg-[#2DD4A0]':'bg-white/20';
+          return `<div class="flex-1 h-1 rounded ${filled?color:'bg-white/10'}"></div>`;
+        }).join('')}
+      </div>
+      <div class="mt-3 space-y-1 text-[11px] mono text-white/60">
+        ${p.ids.slice(0,3).map(i => {
+          const meta = TASKS[i];
+          if (!meta) return `<div>${i}</div>`;
+          return `<div class="flex items-center gap-1"><span class="w-4 text-center text-sm leading-none shrink-0">${meta.icon ?? ''}</span><span class="ticket">${i}</span><span class="sep">·</span><div class="title-wrap flex-1"><span>${meta.title}</span></div></div>`;
+        }).join('')}
+        ${p.ids.length>3?`<div class="text-white/30">+${p.ids.length-3} more</div>`:''}
+      </div>
+    `;
+    root.appendChild(el);
+  }
+}
+
+/* ========== RENDER: agent ring ========== */
+function renderAgents() {
+  const root = document.getElementById('agent-grid');
+  root.innerHTML = '';
+  for (const a of STATE.agents) {
+    const el = document.createElement('div');
+    el.className = `card rounded-lg p-4 transition cursor-pointer heat-${a.heat}`;
+    el.onclick = () => showAgent(a.id);
+    el.setAttribute('role', 'button');
+    el.tabIndex = 0;
+    el.innerHTML = `
+      <div class="flex items-start gap-3">
+        <div class="text-3xl leading-none">${a.icon}</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2">
+            <h3 class="mono font-bold text-sm">${a.name}</h3>
+            <span class="dot dot-${a.heat==='warm'||a.heat==='hot'?'active':a.heat==='idle'?'idle':a.heat==='standby'?'standby':'offline'}"></span>
+          </div>
+          <div class="text-[11px] mono text-white/50">
+            ${a.status==='working'
+              ? `<div class="flex items-center"><span class="ticket">${a.task}</span><span class="sep">·</span><div class="title-wrap flex-1"><span>${TASKS[a.task]?.title ?? ''}</span></div></div>`
+              : a.status==='hub' ? 'hub-side' : a.status}
+          </div>
+        </div>
+      </div>
+      ${a.progress > 0 ? `
+        <div class="mt-3">
+          <div class="bar"><div class="bar-fill" style="width:${a.progress}%"></div></div>
+          <div class="text-[10px] mono text-white/40 mt-1">${a.progress}%</div>
+        </div>
+      ` : ''}
+    `;
+    root.appendChild(el);
+  }
+}
+
+/* ========== RENDER: activity stream ========== */
+function renderActivity() {
+  const root = document.getElementById('activity-list');
+  root.innerHTML = STATE.activity.map(e => `
+    <div class="flex items-center gap-3 text-xs mono py-1.5 px-2 rounded hover:bg-white/5 cursor-pointer" onclick="showTask('${e.id}')">
+      <span class="text-white/40 w-10">${e.t}</span>
+      <span class="text-base">${e.agent}</span>
+      <span class="text-white/70 flex-1"><span class="text-white/90 font-semibold">${e.actor}</span> ${e.verb} <span class="text-white">${e.id}</span></span>
+      <span class="badge badge-${e.kind}">${e.kind}</span>
+    </div>
+  `).join('');
+}
+
+/* ========== RENDER: devices ========== */
+function renderDevices() {
+  const root = document.getElementById('device-list');
+  root.innerHTML = STATE.devices.map(d => `
+    <div class="flex items-center gap-3 text-sm">
+      <span class="text-lg">${d.kind}</span>
+      <div class="flex-1 min-w-0">
+        <div class="mono font-semibold truncate">${d.label}</div>
+        <div class="text-[11px] mono text-white/40">${d.lastSeen}</div>
+      </div>
+      <span class="dot ${d.status==='online'?'dot-active':'dot-offline'}"></span>
+    </div>
+  `).join('');
+}
+
+/* ========== TEMPERATURE CYCLE ========== */
+const TEMP_CYCLE = ['cold','warm','hot'];
+function cycleTemp() {
+  const i = TEMP_CYCLE.indexOf(STATE.temperature);
+  STATE.temperature = TEMP_CYCLE[(i+1) % TEMP_CYCLE.length];
+  applyTemp();
+}
+function applyTemp() {
+  const btn = document.getElementById('temp-btn');
+  btn.classList.remove('temp-cold','temp-warm','temp-hot');
+  const t = STATE.temperature;
+  btn.classList.add(`temp-${t}`);
+  btn.innerHTML = t==='cold'?'🌡 cold':t==='warm'?'🌡 warm':'🌡 hot';
+  // In community edition we only shift the palette; no particles, no beams.
+  document.body.style.backgroundImage = ({
+    cold: 'radial-gradient(at 20% 0%, rgba(74,158,255,0.05) 0px, transparent 50%), radial-gradient(at 80% 100%, rgba(74,158,255,0.03) 0px, transparent 50%)',
+    warm: 'radial-gradient(at 20% 0%, rgba(255,107,43,0.05) 0px, transparent 50%), radial-gradient(at 80% 100%, rgba(74,158,255,0.03) 0px, transparent 50%)',
+    hot:  'radial-gradient(at 20% 0%, rgba(255,107,43,0.08) 0px, transparent 50%), radial-gradient(at 80% 100%, rgba(255,181,71,0.05) 0px, transparent 50%)',
+  })[t];
+}
+
+/* ========== MODALS ========== */
+function showPillar(key) {
+  const p = STATE.pipeline[key];
+  openModal(`
+    <h2 class="mono text-xl font-bold">${p.label} <span class="text-white/40">(${p.count})</span></h2>
+    <div class="text-xs mono text-white/50 mt-1">pipeline · filter by status</div>
+  `, `
+    <div class="space-y-2">
+      ${p.ids.map(id => {
+        // Placeholder for "and more older items" rows in the completed pillar.
+        if (id === '...') {
+          return `<div class="text-center text-xs mono text-white/30 py-2">+${Math.max(0, p.count - p.ids.length + 1)} older ${p.label.toLowerCase()} tasks</div>`;
+        }
+        const meta = TASKS[id];
+        const title = meta?.title ?? '';
+        const icon = meta?.icon ?? '';
+        const agent = meta?.agent ?? null;
+        return `
+          <div class="card rounded p-3 cursor-pointer hover:bg-white/5 transition" onclick="closeModal();showTask('${id}')">
+            <div class="flex items-center gap-3">
+              <span class="text-xl leading-none w-7 text-center shrink-0">${icon}</span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center">
+                  <span class="ticket mono text-sm">${id}</span>
+                  ${title ? `<span class="sep">·</span><div class="title-wrap flex-1"><span class="mono text-sm">${title}</span></div>` : ''}
+                </div>
+                <div class="text-[11px] mono text-white/45 mt-1">
+                  ${agent ? `assigned <span class="text-white/30">·</span> <span class="text-white/75">${agent}</span>` : 'unassigned'}
+                </div>
+              </div>
+              <span class="badge badge-${key} shrink-0">${key}</span>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+    <div class="mt-4 text-xs mono text-white/30">Community edition: basic filtering, no animated transitions</div>
+  `);
+}
+function showAgent(id) {
+  const a = STATE.agents.find(x=>x.id===id);
+  openModal(`
+    <div class="flex items-center gap-4">
+      <div class="text-5xl">${a.icon}</div>
+      <div>
+        <h2 class="mono text-2xl font-bold">${a.name}</h2>
+        <div class="text-xs mono text-white/50 uppercase tracking-wider mt-1">${a.status} · runtime: ${a.runtime}</div>
+      </div>
+    </div>
+  `, `
+    ${a.task ? `
+      <div class="card rounded p-4 mb-4">
+        <div class="text-xs mono text-white/50 uppercase tracking-wider">current work</div>
+        <div class="mt-2 flex items-center gap-3">
+          <div class="flex-1 min-w-0 flex items-center">
+            <span class="ticket mono font-semibold">${a.task}</span>
+            <span class="sep">·</span>
+            <div class="title-wrap flex-1"><span class="mono font-semibold">${TASKS[a.task]?.title ?? ''}</span></div>
+          </div>
+          <button class="text-xs mono px-3 py-1.5 rounded bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 shrink-0" onclick="closeModal();showTask('${a.task}')">view task</button>
+        </div>
+        <div class="bar mt-3"><div class="bar-fill" style="width:${a.progress}%"></div></div>
+        <div class="text-[11px] mono text-white/40 mt-1">${a.progress}% complete</div>
+      </div>
+    ` : `
+      <div class="card rounded p-4 mb-4">
+        <div class="text-sm text-white/60">No active task. Agent is ${a.status}.</div>
+      </div>
+    `}
+
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <div class="text-xs mono text-white/50 uppercase tracking-wider mb-2">stats (7d)</div>
+        <div class="space-y-1 text-sm mono">
+          <div class="flex justify-between"><span class="text-white/60">completed</span><span>5</span></div>
+          <div class="flex justify-between"><span class="text-white/60">avg duration</span><span>45m</span></div>
+          <div class="flex justify-between"><span class="text-white/60">approved first try</span><span class="text-[#2DD4A0]">80%</span></div>
+          <div class="flex justify-between"><span class="text-white/60">escalations</span><span>1</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="text-xs mono text-white/50 uppercase tracking-wider mb-2">recent activity</div>
+        <div class="space-y-1 text-xs mono">
+          <div class="flex items-center gap-2"><span class="text-[#2DD4A0]">✓</span><span>FL-001</span><span class="text-white/40">4h</span></div>
+          <div class="flex items-center gap-2"><span class="text-[#2DD4A0]">✓</span><span>FL-PHASE1</span><span class="text-white/40">1d</span></div>
+          <div class="flex items-center gap-2"><span class="text-[#FFB547]">⚠</span><span>FL-SPAWN</span><span class="text-white/40">2d</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-5 flex gap-2">
+      <button class="flex-1 text-xs mono px-3 py-2 rounded bg-white/5 border border-white/10 hover:bg-white/10">view personality</button>
+      <button class="flex-1 text-xs mono px-3 py-2 rounded bg-white/5 border border-white/10 hover:bg-white/10">new task</button>
+      ${a.status==='working' ? `<button class="flex-1 text-xs mono px-3 py-2 rounded bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20">stop</button>` : ''}
+    </div>
+  `);
+}
+function showTask(id) {
+  const t = STATE.tasks[id];
+  if (!t) {
+    openModal(`<h2 class="mono text-xl font-bold">${id}</h2>`, `<div class="text-sm text-white/60">Task detail not in mockup data.</div>`);
+    return;
+  }
+  openModal(`
+    <div>
+      <div class="flex items-center gap-2">
+        <h2 class="mono text-xl font-bold">${t.id}</h2>
+        <span class="badge badge-${t.status}">${t.status}</span>
+        <span class="badge badge-pending">priority ${t.priority}</span>
+      </div>
+      <div class="mt-2 text-base text-white/90">${t.title}</div>
+      <div class="mt-1 text-xs mono text-white/40">${t.epic}</div>
+    </div>
+  `, `
+    <div class="grid grid-cols-3 gap-4 mb-5">
+      <div class="card rounded p-3">
+        <div class="text-[10px] mono text-white/50 uppercase tracking-wider">assigned to</div>
+        <div class="mt-1 text-sm mono font-semibold flex items-center gap-2"><span class="text-lg leading-none">${agentIcon(t.agent)}</span>${t.agent}</div>
+      </div>
+      <div class="card rounded p-3">
+        <div class="text-[10px] mono text-white/50 uppercase tracking-wider">device</div>
+        <div class="mt-1 text-sm mono font-semibold">${t.device}</div>
+      </div>
+      <div class="card rounded p-3">
+        <div class="text-[10px] mono text-white/50 uppercase tracking-wider">progress</div>
+        <div class="mt-1 text-sm mono font-semibold">${t.progress}%</div>
+        <div class="bar mt-1.5"><div class="bar-fill" style="width:${t.progress}%"></div></div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-5 gap-4">
+      <div class="col-span-3">
+        <div class="text-xs mono text-white/50 uppercase tracking-wider mb-2">description</div>
+        <p class="text-sm text-white/80 leading-relaxed">${t.description}</p>
+
+        <div class="text-xs mono text-white/50 uppercase tracking-wider mt-5 mb-2">timeline</div>
+        <div class="space-y-1.5">
+          ${t.timeline.map(e=>`
+            <div class="flex items-start gap-3 text-xs mono">
+              <span class="text-white/40 w-12 shrink-0">${e.t}</span>
+              <span class="${e.kind==='done'?'text-[#2DD4A0]':e.kind==='live'?'text-[#FF6B2B]':'text-white/25'} shrink-0">${e.kind==='done'?'⟡':e.kind==='live'?'◉':'◯'}</span>
+              <span class="${e.kind==='pending'?'text-white/40':'text-white/80'}">${e.text}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      <div class="col-span-2">
+        <div class="text-xs mono text-white/50 uppercase tracking-wider mb-2">instructions</div>
+        <div class="card rounded p-3 mb-3 text-xs text-white/50">💬 No mid-task instructions queued</div>
+        <div class="flex gap-2">
+          <button class="flex-1 text-xs mono px-2 py-1.5 rounded bg-[#FFB547]/10 border border-[#FFB547]/30 text-[#FFB547] hover:bg-[#FFB547]/20">redirect</button>
+          <button class="flex-1 text-xs mono px-2 py-1.5 rounded bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20">stop</button>
+        </div>
+
+        <div class="text-xs mono text-white/50 uppercase tracking-wider mt-5 mb-2">comments</div>
+        <div class="text-xs text-white/60">No comments yet.</div>
+      </div>
+    </div>
+
+    <div class="mt-5 pt-5 border-t border-white/5 flex gap-2">
+      <button class="text-xs mono px-3 py-1.5 rounded bg-white/5 border border-white/10 hover:bg-white/10">reassign</button>
+      <button class="text-xs mono px-3 py-1.5 rounded bg-white/5 border border-white/10 hover:bg-white/10">edit</button>
+      <button class="text-xs mono px-3 py-1.5 rounded bg-white/5 border border-white/10 hover:bg-white/10">escalate</button>
+      <button class="ml-auto text-xs mono px-3 py-1.5 rounded bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20">cancel</button>
+    </div>
+  `);
+}
+function openModal(header, body) {
+  document.getElementById('modal-header').innerHTML = header;
+  document.getElementById('modal-body').innerHTML = body;
+  document.getElementById('modal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  // Re-measure any .title-wrap elements in the newly-visible modal content.
+  // Two rAFs: first pass ensures layout has happened, second pass measures.
+  requestAnimationFrame(() => requestAnimationFrame(applyMarquees));
+}
+function closeModal() {
+  document.getElementById('modal').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+/* Look up an agent's emoji icon by id from STATE.agents. Used to prefix
+   the "assigned to" field in the task detail modal so the reader can see
+   at a glance which agent is on the job. */
+function agentIcon(id) {
+  return STATE.agents.find(a => a.id === id)?.icon ?? '';
+}
+
+/* ========== MARQUEE ==========
+ * For every .title-wrap on the page, measure whether the inner span
+ * overflows its wrapper. If yes, add .marquee and compute the exact
+ * translateX distance needed to reveal the hidden tail. The CSS keyframe
+ * handles the scroll-out / hold / scroll-back animation. */
+function applyMarquees() {
+  document.querySelectorAll('.title-wrap').forEach(w => {
+    const span = w.querySelector('span');
+    if (!span) return;
+    w.classList.remove('marquee');
+    w.style.removeProperty('--marquee-distance');
+    const overflow = span.scrollWidth - w.clientWidth;
+    if (overflow > 4) {
+      w.classList.add('marquee');
+      // Extra 8px so the tail fully clears the right edge before reversing.
+      w.style.setProperty('--marquee-distance', `-${overflow + 8}px`);
+    }
+  });
+}
+let marqueeDebounce;
+window.addEventListener('resize', () => {
+  clearTimeout(marqueeDebounce);
+  marqueeDebounce = setTimeout(applyMarquees, 150);
+});
+
+/* ========== INIT ========== */
+document.getElementById('temp-btn').addEventListener('click', cycleTemp);
+renderPipeline();
+renderAgents();
+renderActivity();
+renderDevices();
+applyTemp();
+requestAnimationFrame(() => requestAnimationFrame(applyMarquees));
+</script>
+</body>
+</html>
