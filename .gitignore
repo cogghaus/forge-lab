@@ -15,3 +15,7 @@ coverage/
 # port is complete, _vibe-forge/ gets removed entirely and we spawn agents
 # directly from forge-lab itself.
 _vibe-forge/
+
+# Deploy secrets (keep .gitkeep, ignore actual secrets)
+deploy/secrets/*
+!deploy/secrets/.gitkeep
