@@ -25,6 +25,7 @@
     "dev": "tsx watch src/bin/forge-daemon.ts"
   },
   "dependencies": {
+    "@forge-lab/agents": "workspace:*",
     "@forge-lab/core": "workspace:*",
     "nanoid": "^5.0.9",
     "ws": "^8.18.0",

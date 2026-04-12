@@ -1,5 +1,8 @@
 import type { FSWatcher } from 'node:fs';
+import path from 'node:path';
 import type { EventEnvelope } from '@forge-lab/core';
+import { composeSystemPrompt } from '@forge-lab/agents';
+import type { PersonalityRegistry } from '@forge-lab/agents';
 import { HubClient } from './hub-client.js';
 import { RuntimeRegistry } from './runtime/registry.js';
 import {
@@ -19,6 +22,7 @@ export interface DaemonOptions {
   defaultRuntimeId: string;
   defaultAgentId?: string;
   defaultPersonality?: string;
+  personalityRegistry?: PersonalityRegistry;
   logger?: DaemonLogger;
 }
 
@@ -88,10 +92,31 @@ export class Daemon {
       const claimed = await this.client.getTask(taskId);
       await writeTaskFile(this.opts.workdir, claimed);
       const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
+      const agentId = this.opts.defaultAgentId ?? 'default';
+
+      let personalityStr = this.opts.defaultPersonality ?? 'default';
+      const registry = this.opts.personalityRegistry;
+      if (registry) {
+        const personality = registry.get(agentId);
+        if (personality) {
+          personalityStr = await composeSystemPrompt({
+            personality,
+            projectContextPath: path.join(this.opts.workdir, 'context', 'project-context.md'),
+            agentOverridesDir: path.join(this.opts.workdir, 'context', 'agent-overrides'),
+            handoffDir: path.join(this.opts.workdir, 'context', 'handoffs'),
+            taskContext: {
+              taskId: claimed.id,
+              title: claimed.title,
+              description: claimed.description ?? null,
+            },
+          });
+        }
+      }
+
       await runtime.spawn(
         {
-          agentId: this.opts.defaultAgentId ?? 'default',
-          personality: this.opts.defaultPersonality ?? 'default',
+          agentId,
+          personality: personalityStr,
           workdir: this.opts.workdir,
           taskId: claimed.id,
           config: {},

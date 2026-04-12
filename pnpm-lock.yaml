@@ -70,6 +70,9 @@ importers:
 
   packages/forge-daemon:
     dependencies:
+      '@forge-lab/agents':
+        specifier: workspace:*
+        version: link:../forge-agents
       '@forge-lab/core':
         specifier: workspace:*
         version: link:../forge-core

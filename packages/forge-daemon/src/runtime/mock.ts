@@ -14,6 +14,7 @@ export interface MockRuntimeOptions {
   resultFactory?: (ctx: {
     taskId: string;
     prompt: string;
+    personality: string;
     taskFileContent: string;
   }) => string;
 }
@@ -54,7 +55,7 @@ export class MockRuntime implements AgentRuntime {
           // task file not present yet
         }
         const result = resultFactory
-          ? resultFactory({ taskId, prompt: initialPrompt, taskFileContent: content })
+          ? resultFactory({ taskId, prompt: initialPrompt, personality: config.personality, taskFileContent: content })
           : `mock completed ${taskId}`;
         const payload = JSON.stringify({
           result,
@@ -70,7 +71,7 @@ export class MockRuntime implements AgentRuntime {
       agentId: config.agentId,
       pid: null,
       startedAt: new Date(),
-      metadata: { prompt: initialPrompt },
+      metadata: { prompt: initialPrompt, personality: config.personality, config },
     });
   }
 
