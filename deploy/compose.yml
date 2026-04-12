@@ -40,7 +40,7 @@ services:
 
   # forge-dash-pro will bind to port 4275 once scaffolded
   # Cloudflare tunnel: forge.cogg.haus -> accserver:4275
-  # Cloudflare tunnel: api.forge.cogg.haus -> accserver:4276
+  # Cloudflare tunnel: forgeapi.cogg.haus -> accserver:4276
 
 secrets:
   session_secret:
