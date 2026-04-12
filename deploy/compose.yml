@@ -20,7 +20,7 @@ services:
     volumes:
       - hub-data:/data
     ports:
-      - "127.0.0.1:4276:3000"
+      - "4276:3000"
     networks:
       - forge
       - apps-internal
