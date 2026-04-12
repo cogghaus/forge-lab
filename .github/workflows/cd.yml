@@ -1,0 +1,29 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, linux, x64, deploy-host]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t forge-hub:latest -f packages/forge-hub/Dockerfile .
+
+      - name: Deploy
+        run: docker compose -f deploy/compose.yml up -d --remove-orphans --wait
+
+      - name: Verify health
+        run: |
+          sleep 5
+          docker inspect --format='{{.State.Health.Status}}' forge-hub
