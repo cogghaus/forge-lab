@@ -40,7 +40,7 @@ services:
 
   # forge-dash-pro will bind to port 4275 once scaffolded
   # Cloudflare tunnel: forge.example.com -> deploy-host:4275
-  # Cloudflare tunnel: api.forge.example.com -> deploy-host:4276
+  # Cloudflare tunnel: forgeapi.example.com -> deploy-host:4276
 
 secrets:
   session_secret:
