@@ -1,5 +1,6 @@
 services:
   forge-hub:
+    image: forge-hub:latest
     build:
       context: ..
       dockerfile: packages/forge-hub/Dockerfile
@@ -13,7 +14,7 @@ services:
       FORGE_HUB_HOST: "0.0.0.0"
       FORGE_HUB_DATABASE_URL: "file:/data/forge-hub.db"
       FORGE_HUB_SESSION_SECRET_FILE: /run/secrets/session_secret
-      FORGE_HUB_COOKIE_SECURE: "false"
+      FORGE_HUB_COOKIE_SECURE: "true"
     secrets:
       - session_secret
     volumes:
@@ -22,32 +23,33 @@ services:
       - "127.0.0.1:4276:3000"
     networks:
       - forge
-      - traefik
-    labels:
-      # Traefik: LAN access via hub.local.cogg.haus
-      traefik.enable: "true"
-      traefik.http.routers.forge-hub.rule: "Host(`hub.local.cogg.haus`)"
-      traefik.http.routers.forge-hub.entrypoints: "web"
-      traefik.http.services.forge-hub.loadbalancer.server.port: "3000"
-      # Cloudflare tunnel handles api.forge.cogg.haus -> accserver:4276 externally
+      - apps-internal
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.forge-hub.rule: "Host(`hub.local.cogg.haus`)"
+      traefik.http.routers.forge-hub.entrypoints: "websecure"
+      traefik.http.routers.forge-hub.tls: "true"
+      traefik.http.routers.forge-hub.tls.certresolver: "cloudflare"
+      traefik.http.services.forge-hub.loadbalancer.server.port: "3000"
 
   # forge-dash-pro will bind to port 4275 once scaffolded
-  # Cloudflare tunnel handles forge.cogg.haus -> accserver:4275 externally
+  # Cloudflare tunnel: forge.cogg.haus -> accserver:4275
+  # Cloudflare tunnel: api.forge.cogg.haus -> accserver:4276
 
 secrets:
   session_secret:
-    file: ./secrets/session_secret
+    file: /datapool/docker/forge-lab/secrets/session_secret
 
 volumes:
   hub-data:
 
 networks:
   forge:
-  traefik:
+  apps-internal:
     external: true
