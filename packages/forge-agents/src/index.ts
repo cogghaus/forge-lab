@@ -10,3 +10,5 @@ export {
   builtinPersonalitiesDir,
 } from './load-builtin.js';
 export type { TaskFileFrontmatter, CompletionMarker } from './worker-protocol.js';
+export { composeSystemPrompt } from './compose-prompt.js';
+export type { ComposeInput } from './compose-prompt.js';
