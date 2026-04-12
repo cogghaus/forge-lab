@@ -24,6 +24,12 @@ LICENSE
 *.md
 !packages/*/README.md
 
+# Claude / deploy / env
+.claude
+deploy
+.env
+.env.*
+
 # Test artifacts
 coverage
 .vitest
