@@ -1,0 +1,29 @@
+node_modules
+dist
+*.tsbuildinfo
+
+# IDE / OS
+.vscode
+.idea
+*.swp
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# CI / docs / non-build
+.github
+mockups
+context
+_vibe-forge
+scripts
+README.md
+LICENSE
+*.md
+!packages/*/README.md
+
+# Test artifacts
+coverage
+.vitest
