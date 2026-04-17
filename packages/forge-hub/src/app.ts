@@ -1,6 +1,8 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import websocket from '@fastify/websocket';
 import cookie from '@fastify/cookie';
+import rateLimit from '@fastify/rate-limit';
+import { ZodError } from 'zod';
 import { openDatabase, type Db, type DbHandle } from './db/index.js';
 import { runMigrations } from './db/migrate.js';
 import type { HubConfig } from './config.js';
@@ -8,6 +10,11 @@ import { populateAuth } from './auth/middleware.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerDeviceRoutes } from './routes/devices.js';
 import { registerTaskRoutes } from './routes/tasks.js';
+import { registerAgentRoutes } from './routes/agents.js';
+import { registerAgentInstanceRoutes } from './routes/agent-instances.js';
+import { registerRuntimeConfigRoutes } from './routes/runtime-configs.js';
+import { registerInstructionRoutes } from './routes/instructions.js';
+import { registerCommentRoutes } from './routes/comments.js';
 import { registerWsRoutes } from './routes/ws.js';
 import { EventBus } from './events/bus.js';
 
@@ -28,6 +35,23 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
 
   const fastify = Fastify({
     logger: { level: process.env['NODE_ENV'] === 'test' ? 'warn' : 'info' },
+    bodyLimit: 1024 * 1024,
+    trustProxy: true,
+  });
+
+  fastify.setErrorHandler((error, _req, reply) => {
+    if (error instanceof ZodError) {
+      return reply.code(400).send({ error: 'invalid_input', issues: error.issues });
+    }
+    fastify.log.error(error);
+    return reply.code(500).send({ error: 'internal_server_error' });
+  });
+
+  await fastify.register(rateLimit, {
+    global: true,
+    max: 100,
+    timeWindow: '1 minute',
+    skip: (_req) => process.env['NODE_ENV'] === 'test',
   });
 
   await fastify.register(cookie, { secret: config.sessionSecret });
@@ -40,6 +64,11 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
     registerAuthRoutes(scope, handle.db, config);
     registerDeviceRoutes(scope, handle.db);
     registerTaskRoutes(scope, handle.db, bus);
+    registerAgentRoutes(scope, handle.db);
+    registerAgentInstanceRoutes(scope, handle.db);
+    registerRuntimeConfigRoutes(scope, handle.db);
+    registerInstructionRoutes(scope, handle.db);
+    registerCommentRoutes(scope, handle.db);
     registerWsRoutes(scope, handle.db, bus);
     return Promise.resolve();
   });
