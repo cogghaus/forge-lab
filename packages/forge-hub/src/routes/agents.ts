@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
-import { requireUser, getUser } from '../auth/middleware.js';
+import { requireUser } from '../auth/middleware.js';
 
 const CreateAgentInputSchema = z.object({
   name: z.string().min(1).max(100),
