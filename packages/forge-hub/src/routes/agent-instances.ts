@@ -117,12 +117,7 @@ export function registerAgentInstanceRoutes(fastify: FastifyInstance, db: Db): v
         await reply.code(409).send({ error: 'instance_terminal' });
         return;
       }
-      const updates: Partial<{
-        status: string;
-        taskId: string | null;
-        runtimeInstanceId: string | null;
-        endedAt: Date;
-      }> = {};
+      const updates: Partial<typeof schema.agentInstances.$inferInsert> = {};
       if (body.status !== undefined) updates.status = body.status;
       if (body.taskId !== undefined) updates.taskId = body.taskId;
       if (body.runtimeInstanceId !== undefined) updates.runtimeInstanceId = body.runtimeInstanceId;

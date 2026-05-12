@@ -47,12 +47,13 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
     return reply.code(500).send({ error: 'internal_server_error' });
   });
 
-  await fastify.register(rateLimit, {
-    global: true,
-    max: 100,
-    timeWindow: '1 minute',
-    skip: (_req) => process.env['NODE_ENV'] === 'test',
-  });
+  if (process.env['NODE_ENV'] !== 'test') {
+    await fastify.register(rateLimit, {
+      global: true,
+      max: 100,
+      timeWindow: '1 minute',
+    });
+  }
 
   await fastify.register(cookie, { secret: config.sessionSecret });
   await fastify.register(websocket);
