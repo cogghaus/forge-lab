@@ -24,6 +24,9 @@ services:
     networks:
       - forge
       - apps-internal
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 200
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 30s

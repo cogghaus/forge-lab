@@ -82,6 +82,12 @@ export const requireDevice: preHandlerHookHandler = async (req, reply) => {
   }
 };
 
+export const requireUserOrDevice: preHandlerHookHandler = async (req, reply) => {
+  if (!req.authUser && !req.authDevice) {
+    await reply.code(401).send({ error: 'unauthorized' });
+  }
+};
+
 export function getUser(req: { authUser?: AuthUser }): AuthUser {
   if (!req.authUser) throw new Error('getUser called without requireUser preHandler');
   return req.authUser;
