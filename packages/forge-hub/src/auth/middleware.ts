@@ -116,9 +116,13 @@ export function requireWorkspaceMember(db: Db, role?: WorkspaceRole): preHandler
       await reply.code(400).send({ error: 'missing_workspace_id' });
       return;
     }
-    const member = await db
-      .select({ role: schema.workspaceMembers.role })
+    const result = await db
+      .select({
+        role: schema.workspaceMembers.role,
+        workspaceStatus: schema.workspaces.status,
+      })
       .from(schema.workspaceMembers)
+      .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.workspaceMembers.workspaceId))
       .where(
         and(
           eq(schema.workspaceMembers.workspaceId, workspaceId),
@@ -126,15 +130,19 @@ export function requireWorkspaceMember(db: Db, role?: WorkspaceRole): preHandler
         ),
       )
       .get();
-    if (!member) {
+    if (!result) {
       await reply.code(403).send({ error: 'forbidden' });
       return;
     }
-    if (role && !rankAtLeast(member.role, role)) {
+    if (result.workspaceStatus === 'deleted') {
+      await reply.code(404).send({ error: 'not_found' });
+      return;
+    }
+    if (role && !rankAtLeast(result.role, role)) {
       await reply.code(403).send({ error: 'insufficient_role' });
       return;
     }
-    req.authWorkspace = { id: workspaceId, role: member.role };
+    req.authWorkspace = { id: workspaceId, role: result.role };
   };
 }
 

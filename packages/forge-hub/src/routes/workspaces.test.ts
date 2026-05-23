@@ -261,13 +261,7 @@ describe('/workspaces routes', () => {
       headers: { cookie },
     });
     expect(res.statusCode).toBe(200);
-
-    const getRes = await hub.fastify.inject({
-      method: 'GET',
-      url: `/workspaces/${wsId}`,
-      headers: { cookie },
-    });
-    expect((getRes.json() as { status: string }).status).toBe('deleted');
+    expect((res.json() as { ok: boolean }).ok).toBe(true);
   });
 
   it('DELETE /workspaces/:workspaceId - 403 for admin (not owner)', async () => {
@@ -392,6 +386,63 @@ describe('/workspaces routes', () => {
       headers: { cookie },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('GET /workspaces excludes soft-deleted workspaces from list', async () => {
+    const { cookie } = await setupOwner(hub);
+    const wsId = await createWorkspace(hub, cookie, 'del-list');
+    await hub.fastify.inject({ method: 'DELETE', url: `/workspaces/${wsId}`, headers: { cookie } });
+    const res = await hub.fastify.inject({ method: 'GET', url: '/workspaces', headers: { cookie } });
+    const { workspaces } = res.json() as { workspaces: unknown[] };
+    expect(workspaces).toHaveLength(0);
+  });
+
+  it('GET /workspaces/:workspaceId returns 404 after soft-delete', async () => {
+    const { cookie } = await setupOwner(hub);
+    const wsId = await createWorkspace(hub, cookie, 'dead-ws');
+    await hub.fastify.inject({ method: 'DELETE', url: `/workspaces/${wsId}`, headers: { cookie } });
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${wsId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('POST /workspaces/:workspaceId/members returns 404 after soft-delete', async () => {
+    const { cookie } = await setupOwner(hub);
+    const wsId = await createWorkspace(hub, cookie, 'dead-mem');
+    const { userId: userBId } = await setupSecondUser(hub);
+    await hub.fastify.inject({ method: 'DELETE', url: `/workspaces/${wsId}`, headers: { cookie } });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${wsId}/members`,
+      headers: { cookie },
+      payload: { userId: userBId, role: 'viewer' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('POST /workspaces returns 409 when UNIQUE constraint fires (no pre-check race)', async () => {
+    const { cookie, ownerId } = await setupOwner(hub);
+    await hub.db.insert(schema.workspaces).values({
+      id: 'pre-existing-id',
+      name: 'Pre-inserted',
+      slug: 'no-precheck-slug',
+      ownerUserId: ownerId,
+      status: 'active',
+      budgetMonthlyCents: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'Late Arrival', slug: 'no-precheck-slug' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('slug_taken');
   });
 
   it('added member can access workspace', async () => {

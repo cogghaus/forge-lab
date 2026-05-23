@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, ne } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { CreateWorkspaceInputSchema, schema } from '@forge-lab/core';
@@ -20,25 +20,22 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
   fastify.post('/workspaces', { preHandler: requireUser }, async (req, reply) => {
     const user = getUser(req);
     const body = CreateWorkspaceInputSchema.parse(req.body);
-
-    const existing = await db
-      .select({ id: schema.workspaces.id })
-      .from(schema.workspaces)
-      .where(eq(schema.workspaces.slug, body.slug))
-      .get();
-    if (existing) {
-      await reply.code(409).send({ error: 'slug_taken' });
-      return;
-    }
-
     const id = nanoid();
-    await db.insert(schema.workspaces).values({
-      id,
-      name: body.name,
-      slug: body.slug,
-      description: body.description ?? null,
-      ownerUserId: user.id,
-    });
+    try {
+      await db.insert(schema.workspaces).values({
+        id,
+        name: body.name,
+        slug: body.slug,
+        description: body.description ?? null,
+        ownerUserId: user.id,
+      });
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('UNIQUE constraint failed: workspaces.slug')) {
+        await reply.code(409).send({ error: 'slug_taken' });
+        return;
+      }
+      throw err;
+    }
     await db.insert(schema.workspaceMembers).values({
       workspaceId: id,
       userId: user.id,
@@ -70,6 +67,7 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
           eq(schema.workspaceMembers.userId, user.id),
         ),
       )
+      .where(ne(schema.workspaces.status, 'deleted'))
       .orderBy(desc(schema.workspaces.createdAt));
     return { workspaces };
   });
