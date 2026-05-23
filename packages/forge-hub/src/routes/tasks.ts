@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { eq, desc, asc } from 'drizzle-orm';
+import { and, eq, desc, asc, inArray, isNull, or } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import {
@@ -110,23 +110,37 @@ export function registerTaskRoutes(
     async (req, reply) => {
       const device = getDevice(req);
       const id = TaskIdSchema.parse(req.params.id);
-      const task = await db.select().from(schema.tasks).where(eq(schema.tasks.id, id)).get();
-      if (!task) {
+
+      const existing = await db
+        .select({ id: schema.tasks.id })
+        .from(schema.tasks)
+        .where(eq(schema.tasks.id, id))
+        .get();
+      if (!existing) {
         await reply.code(404).send({ error: 'not_found' });
         return;
       }
-      if (task.status !== 'pending_agent' && task.status !== 'assigned') {
-        await reply.code(409).send({ error: 'not_claimable', status: task.status });
-        return;
-      }
-      await db
+
+      const claimed = await db
         .update(schema.tasks)
         .set({
           status: 'in_progress',
           assignedDeviceId: device.id,
           updatedAt: new Date(),
         })
-        .where(eq(schema.tasks.id, id));
+        .where(
+          and(
+            eq(schema.tasks.id, id),
+            inArray(schema.tasks.status, ['pending_agent', 'assigned']),
+            or(isNull(schema.tasks.assignedDeviceId), eq(schema.tasks.assignedDeviceId, device.id)),
+          ),
+        )
+        .returning({ id: schema.tasks.id });
+
+      if (claimed.length === 0) {
+        await reply.code(409).send({ error: 'not_claimable' });
+        return;
+      }
       await db.insert(schema.taskHistory).values({
         id: nanoid(),
         taskId: id,

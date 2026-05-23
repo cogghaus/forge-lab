@@ -1,6 +1,6 @@
 ---
 description: Vibe Forge - multi-agent development orchestration
-argument-hint: [status|spawn <agent>|task [desc]|redteam [scope]|help]
+argument-hint: [status|spawn <agent>|task [desc]|review [basic|thorough|full|red-team] [target]|redteam [scope]|help]
 ---
 
 # Vibe Forge Command Router
@@ -156,6 +156,7 @@ Display:
 /forge status       Show status dashboard
 /forge spawn <agent> Spawn worker in new terminal
 /forge task [desc]  Create a new task
+/forge review [variant] [target]  Code review (basic|thorough|full|red-team)
 /forge redteam [scope] Launch red team engagement
 /forge help         Show this help
 
@@ -175,6 +176,74 @@ Agents (with aliases):
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
+
+---
+
+### If `$1` is "review" → Run Code Review
+
+**Variant:** `$2` (basic | thorough | full | red-team) — defaults to `thorough`
+**Target:** `$3+` (description of what to review; defaults to "recent changes")
+
+#### Review Team Variants
+
+| Variant | Reviewers | When to Use |
+|---------|-----------|-------------|
+| `basic` | 🧪 Crucible | Quick QA pass — edge cases, test gaps, bug hunting |
+| `thorough` | 🔥🧪 Crucible-X + 🛡️ Aegis | Pre-merge standard — adversarial testing + security audit |
+| `full` | 🔥🧪 Crucible-X + 🛡️ Aegis + 🎭 Loki + 💀 Slag + ⚡ Flux | High-stakes release — all of thorough + assumption challenge + red team |
+| `red-team` | 💀 Slag + ⚡ Flux | Dedicated offensive engagement — app attack + infra probe |
+
+Display:
+
+```text
+🔥 VIBE FORGE - Code Review
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Variant: [variant]
+Target:  [target]
+Team:    [reviewers for this variant]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Then conduct the review by embodying each reviewer **in order**, clearly labelling each section with the reviewer's name and icon. Each reviewer reads the code and produces their report in their own voice and format:
+
+**basic** — run Crucible only:
+1. 🧪 **Crucible** — QA pass: test coverage gaps, edge cases, bug risk, missing error paths. Use Crucible's bug report format.
+
+**thorough** — run Crucible-X, then Aegis:
+1. 🔥🧪 **Crucible-X** — Adversarial review: map attack surface, write failing tests for any issues found, use Crucible-X's four-phase protocol.
+2. 🛡️ **Aegis** — Security audit: auth/authz, input validation, secrets, severity classification. Use Aegis's Risk/Impact/Fix format.
+
+**full** — run thorough reviewers, then:
+3. 🎭 **Loki** — Assumption challenge: 2-3 provocations max, challenge/alternative/inversion format.
+4. 💀 **Slag** — Red team engagement: OWASP attack vectors, auth bypass attempts, business logic exploitation. Full engagement report format.
+5. ⚡ **Flux** — Infrastructure probe: dependency CVEs, CI/CD pipeline risks, secret exposure, container security. Tabular findings format.
+
+**red-team** — run Slag then Flux only.
+
+**Rules for full/red-team reviews:**
+- Slag and Flux operate with `requires_approval: true` — flag any test that would touch production systems and stop for confirmation.
+- Slag and Aegis maintain separation of duties: Aegis findings are not shared with Slag during the engagement.
+- All findings include severity (CRITICAL/HIGH/MEDIUM/LOW) and location (file:line).
+
+After all reviewers complete, print a **Review Summary** table:
+
+```text
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Review Summary
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Reviewer     | Findings           | Verdict
+─────────────┼────────────────────┼──────────
+Crucible-X   | N (C/H/M/L)        | Pass / Block
+Aegis        | N (C/H/M/L)        | Pass / Block
+Loki         | N provocations     | Yielded
+Slag         | N (C/H/M/L)        | Pass / Block
+Flux         | N (C/H/M/L)        | Pass / Block
+─────────────┼────────────────────┼──────────
+OVERALL      |                    | PASS / BLOCK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+OVERALL is BLOCK if any reviewer has an unaddressed CRITICAL or HIGH finding.
 
 ---
 
