@@ -107,6 +107,7 @@ export const taskHistory = sqliteTable(
   },
   (t) => ({
     taskIdIdx: index('task_history_task_id_idx').on(t.taskId),
+    workspaceIdx: index('task_history_workspace_idx').on(t.workspaceId),
   }),
 );
 
@@ -126,6 +127,7 @@ export const taskInstructions = sqliteTable(
   },
   (t) => ({
     taskIdIdx: index('task_instructions_task_id_idx').on(t.taskId),
+    workspaceIdx: index('task_instructions_workspace_idx').on(t.workspaceId),
   }),
 );
 
@@ -144,6 +146,7 @@ export const taskComments = sqliteTable(
   },
   (t) => ({
     taskIdIdx: index('task_comments_task_id_idx').on(t.taskId),
+    workspaceIdx: index('task_comments_workspace_idx').on(t.workspaceId),
   }),
 );
 

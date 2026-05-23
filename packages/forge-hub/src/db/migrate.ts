@@ -1,4 +1,4 @@
-import type { Client, InStatement } from '@libsql/client';
+import type { Client } from '@libsql/client';
 
 interface Migration {
   name: string;
@@ -172,8 +172,13 @@ ALTER TABLE agent_instances ADD COLUMN workspace_id TEXT REFERENCES workspaces(i
 CREATE INDEX agent_instances_workspace_idx ON agent_instances(workspace_id);
 
 ALTER TABLE task_history ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+CREATE INDEX task_history_workspace_idx ON task_history(workspace_id);
+
 ALTER TABLE task_instructions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+CREATE INDEX task_instructions_workspace_idx ON task_instructions(workspace_id);
+
 ALTER TABLE task_comments ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+CREATE INDEX task_comments_workspace_idx ON task_comments(workspace_id);
 `,
   },
 ];
@@ -198,11 +203,13 @@ export async function runMigrations(client: Client): Promise<void> {
   }
   for (const m of MIGRATIONS) {
     if (applied.has(m.name)) continue;
-    const statements: InStatement[] = splitStatements(m.sql).map((sql) => ({ sql, args: [] }));
-    statements.push({
+    // Run each DDL statement individually — ALTER TABLE cannot be batched in libsql.
+    for (const sql of splitStatements(m.sql)) {
+      await client.execute({ sql, args: [] });
+    }
+    await client.execute({
       sql: 'INSERT INTO _migrations (name, applied_at) VALUES (?, ?)',
       args: [m.name, Date.now()],
     });
-    await client.batch(statements, 'write');
   }
 }

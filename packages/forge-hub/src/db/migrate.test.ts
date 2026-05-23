@@ -96,4 +96,30 @@ describe('runMigrations', () => {
     ).rejects.toThrow();
     client.close();
   });
+
+  it('tasks.workspace_id FK is enforced — inserting nonexistent workspace_id fails', async () => {
+    const client = await freshDb();
+    await client.execute(
+      `INSERT INTO users (id, email, password_hash, role) VALUES ('u1', 'a@b.com', 'hash', 'admin')`,
+    );
+    await expect(
+      client.execute(
+        `INSERT INTO tasks (id, project_prefix, title, status, priority, created_by, workspace_id)
+         VALUES ('fl-001', 'fl', 'Test', 'pending_agent', 'normal', 'u1', 'nonexistent-ws')`,
+      ),
+    ).rejects.toThrow();
+    client.close();
+  });
+
+  it('task_history, task_instructions, task_comments have workspace_id indexes', async () => {
+    const client = await freshDb();
+    const indexRes = await client.execute(
+      `SELECT name FROM sqlite_master WHERE type='index' AND name LIKE '%workspace%'`,
+    );
+    const idxNames = indexRes.rows.map((r) => r['name'] as string);
+    expect(idxNames).toContain('task_history_workspace_idx');
+    expect(idxNames).toContain('task_instructions_workspace_idx');
+    expect(idxNames).toContain('task_comments_workspace_idx');
+    client.close();
+  });
 });
