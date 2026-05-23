@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { createHub, type Hub } from '../app.js';
+import { schema } from '@forge-lab/core';
 import type { HubConfig } from '../config.js';
 
 const testConfig: HubConfig = {
@@ -27,6 +29,110 @@ async function setup(hub: Hub) {
   const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!;
   return { cookie };
 }
+
+async function setupWorkspace(hub: Hub, cookie: string): Promise<string> {
+  const res = await hub.fastify.inject({
+    method: 'POST',
+    url: '/workspaces',
+    headers: { cookie },
+    payload: { name: 'Test WS', slug: 'test-ws' },
+  });
+  return (res.json() as { id: string }).id;
+}
+
+describe('/workspaces/:workspaceId/agents', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    const { cookie: c } = await setup(hub);
+    cookie = c;
+    workspaceId = await setupWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('POST creates an agent scoped to the workspace', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/agents`,
+      headers: { cookie },
+      payload: { name: 'ws-forge', personality: 'coder', runtimeId: 'claude-code' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const agent = await hub.db
+      .select({ workspaceId: schema.agents.workspaceId })
+      .from(schema.agents)
+      .where(eq(schema.agents.id, id))
+      .get();
+    expect(agent?.workspaceId).toBe(workspaceId);
+  });
+
+  it('GET lists only agents for that workspace', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/agents`,
+      headers: { cookie },
+      payload: { name: 'ws-agent', personality: 'coder', runtimeId: 'claude-code' },
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/agents',
+      headers: { cookie },
+      payload: { name: 'flat-agent', personality: 'coder', runtimeId: 'claude-code' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/agents`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const { agents } = res.json() as { agents: { name: string }[] };
+    expect(agents).toHaveLength(1);
+    expect(agents[0]!.name).toBe('ws-agent');
+  });
+
+  it('GET /agents excludes workspace-scoped agents', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/agents`,
+      headers: { cookie },
+      payload: { name: 'ws-agent', personality: 'coder', runtimeId: 'claude-code' },
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/agents',
+      headers: { cookie },
+      payload: { name: 'flat-agent', personality: 'coder', runtimeId: 'claude-code' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/agents',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const { agents } = res.json() as { agents: { name: string }[] };
+    expect(agents).toHaveLength(1);
+    expect(agents[0]!.name).toBe('flat-agent');
+  });
+
+  it('POST requires workspace membership', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/agents`,
+      payload: { name: 'ws-agent', personality: 'coder', runtimeId: 'claude-code' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
 
 describe('/agents routes', () => {
   let hub: Hub;

@@ -56,6 +56,136 @@ async function createTask(hub: Hub, cookie: string): Promise<string> {
   return body.id;
 }
 
+async function createWorkspace(hub: Hub, cookie: string): Promise<string> {
+  const res = await hub.fastify.inject({
+    method: 'POST',
+    url: '/workspaces',
+    headers: { cookie },
+    payload: { name: 'Test WS', slug: 'test-ws' },
+  });
+  return (res.json() as { id: string }).id;
+}
+
+describe('/workspaces/:workspaceId/tasks', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('POST creates a task scoped to the workspace', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ws', title: 'Workspace task' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+    expect(id).toBe('ws-001');
+
+    const task = await hub.db
+      .select({ workspaceId: schema.tasks.workspaceId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.workspaceId).toBe(workspaceId);
+  });
+
+  it('GET lists only tasks for that workspace', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ws', title: 'WS task 1' },
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Flat task' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const { tasks } = res.json() as { tasks: { id: string }[] };
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.id).toBe('ws-001');
+  });
+
+  it('POST requires workspace membership', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      payload: { projectPrefix: 'ws', title: 'No auth' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('GET /tasks without workspaceId excludes workspace tasks', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ws', title: 'WS task' },
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Flat task' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const { tasks } = res.json() as { tasks: { id: string }[] };
+    const ids = tasks.map((t) => t.id);
+    expect(ids).toContain('fl-001');
+    expect(ids).not.toContain('ws-001');
+  });
+
+  it('GET /tasks?workspaceId= returns only that workspace tasks', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ws', title: 'WS task' },
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Flat task' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks?workspaceId=${workspaceId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const { tasks } = res.json() as { tasks: { id: string }[] };
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.id).toBe('ws-001');
+  });
+});
+
 describe('/tasks/:id/claim', () => {
   let hub: Hub;
   let cookie: string;

@@ -1,10 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { eq, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
-import { requireUser } from '../auth/middleware.js';
+import { requireUser, requireWorkspaceMember, getWorkspace } from '../auth/middleware.js';
 
 const CreateAgentInputSchema = z.object({
   name: z.string().min(1).max(100),
@@ -22,7 +22,11 @@ const UpdateAgentInputSchema = z.object({
 
 export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
   fastify.get('/agents', { preHandler: requireUser }, async () => {
-    const agents = await db.select().from(schema.agents).orderBy(schema.agents.createdAt);
+    const agents = await db
+      .select()
+      .from(schema.agents)
+      .where(isNull(schema.agents.workspaceId))
+      .orderBy(schema.agents.createdAt);
     return { agents };
   });
 
@@ -100,6 +104,39 @@ export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
       }
       await db.delete(schema.agents).where(eq(schema.agents.id, req.params.id));
       return { ok: true };
+    },
+  );
+
+  fastify.post<{ Params: { workspaceId: string } }>(
+    '/workspaces/:workspaceId/agents',
+    { preHandler: requireWorkspaceMember(db, 'collaborator') },
+    async (req, reply) => {
+      const { id: workspaceId } = getWorkspace(req);
+      const body = CreateAgentInputSchema.parse(req.body);
+      const id = nanoid();
+      await db.insert(schema.agents).values({
+        id,
+        name: body.name,
+        personality: body.personality,
+        runtimeId: body.runtimeId,
+        config: body.config ?? {},
+        workspaceId,
+      });
+      await reply.code(201).send({ id });
+    },
+  );
+
+  fastify.get<{ Params: { workspaceId: string } }>(
+    '/workspaces/:workspaceId/agents',
+    { preHandler: requireWorkspaceMember(db) },
+    async (req) => {
+      const { id: workspaceId } = getWorkspace(req);
+      const agents = await db
+        .select()
+        .from(schema.agents)
+        .where(eq(schema.agents.workspaceId, workspaceId))
+        .orderBy(schema.agents.createdAt);
+      return { agents };
     },
   );
 }

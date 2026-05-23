@@ -64,8 +64,11 @@ export class HubClient extends EventEmitter {
     return this.request<Task>('GET', `/tasks/${id}`);
   }
 
-  listTasks(): Promise<{ tasks: Task[] }> {
-    return this.request<{ tasks: Task[] }>('GET', '/tasks');
+  listTasks(workspaceId?: string): Promise<{ tasks: Task[] }> {
+    const path = workspaceId
+      ? `/tasks?workspaceId=${encodeURIComponent(workspaceId)}`
+      : '/tasks';
+    return this.request<{ tasks: Task[] }>('GET', path);
   }
 
   async claimTask(id: string): Promise<void> {

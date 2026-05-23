@@ -10,7 +10,7 @@ import {
   schema,
 } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
-import { requireDevice, getDevice } from '../auth/middleware.js';
+import { requireDevice, getDevice, requireWorkspaceMember, getWorkspace } from '../auth/middleware.js';
 import type { EventBus } from '../events/bus.js';
 
 const CompleteTaskBodySchema = z.object({
@@ -67,12 +67,20 @@ export function registerTaskRoutes(
     await reply.code(201).send({ id });
   });
 
-  fastify.get('/tasks', async (req, reply) => {
+  fastify.get<{ Querystring: { workspaceId?: string } }>('/tasks', async (req, reply) => {
     if (!req.authUser && !req.authDevice) {
       await reply.code(401).send({ error: 'unauthorized' });
       return;
     }
-    const tasks = await db.select().from(schema.tasks).orderBy(desc(schema.tasks.createdAt));
+    const { workspaceId } = req.query;
+    const whereClause = workspaceId
+      ? eq(schema.tasks.workspaceId, workspaceId)
+      : isNull(schema.tasks.workspaceId);
+    const tasks = await db
+      .select()
+      .from(schema.tasks)
+      .where(whereClause)
+      .orderBy(desc(schema.tasks.createdAt));
     return { tasks };
   });
 
@@ -156,6 +164,65 @@ export function registerTaskRoutes(
         payload: { taskId: id, deviceId: device.id },
       });
       await reply.send({ ok: true });
+    },
+  );
+
+  fastify.post<{ Params: { workspaceId: string } }>(
+    '/workspaces/:workspaceId/tasks',
+    { preHandler: requireWorkspaceMember(db, 'collaborator') },
+    async (req, reply) => {
+      const { id: workspaceId } = getWorkspace(req);
+      const body = CreateTaskInputSchema.parse(req.body);
+      const existing = await db
+        .select({ id: schema.tasks.id })
+        .from(schema.tasks)
+        .where(eq(schema.tasks.projectPrefix, body.projectPrefix));
+      let maxSeq = 0;
+      for (const row of existing) {
+        const { sequence } = parseTaskId(row.id);
+        if (sequence > maxSeq) maxSeq = sequence;
+      }
+      const id = formatTaskId(body.projectPrefix, maxSeq + 1);
+      const createdBy = `user:${req.authUser!.id}`;
+      await db.insert(schema.tasks).values({
+        id,
+        projectPrefix: body.projectPrefix,
+        title: body.title,
+        description: body.description ?? null,
+        priority: body.priority ?? 'normal',
+        workspaceId,
+        createdBy,
+      });
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId: id,
+        eventName: 'task.created',
+        source: createdBy,
+        payload: { title: body.title },
+        workspaceId,
+      });
+      bus.emit({
+        id: nanoid(),
+        name: 'task.created',
+        occurredAt: new Date(),
+        source: createdBy,
+        payload: { taskId: id, projectPrefix: body.projectPrefix, workspaceId },
+      });
+      await reply.code(201).send({ id });
+    },
+  );
+
+  fastify.get<{ Params: { workspaceId: string } }>(
+    '/workspaces/:workspaceId/tasks',
+    { preHandler: requireWorkspaceMember(db) },
+    async (req) => {
+      const { id: workspaceId } = getWorkspace(req);
+      const tasks = await db
+        .select()
+        .from(schema.tasks)
+        .where(eq(schema.tasks.workspaceId, workspaceId))
+        .orderBy(desc(schema.tasks.createdAt));
+      return { tasks };
     },
   );
 
