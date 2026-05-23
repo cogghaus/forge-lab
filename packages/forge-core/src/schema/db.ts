@@ -201,7 +201,8 @@ export const workspaces = sqliteTable(
     description: text('description'),
     ownerUserId: text('owner_user_id')
       .notNull()
-      .references(() => users.id),
+      // RESTRICT: deleting a user who owns a workspace is blocked by design; transfer ownership first
+      .references(() => users.id, { onDelete: 'restrict' }),
     status: text('status', { enum: ['active', 'archived', 'deleted'] })
       .notNull()
       .default('active'),
