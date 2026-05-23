@@ -1,6 +1,6 @@
 import type { onRequestHookHandler, preHandlerHookHandler } from 'fastify';
-import { eq } from 'drizzle-orm';
-import { schema } from '@forge-lab/core';
+import { and, eq } from 'drizzle-orm';
+import { schema, type WorkspaceRole, rankAtLeast } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { verifySession } from './sessions.js';
 import { hashToken } from './tokens.js';
@@ -17,10 +17,16 @@ export interface AuthDevice {
   name: string;
 }
 
+export interface AuthWorkspace {
+  id: string;
+  role: WorkspaceRole;
+}
+
 declare module 'fastify' {
   interface FastifyRequest {
     authUser?: AuthUser;
     authDevice?: AuthDevice;
+    authWorkspace?: AuthWorkspace;
   }
 }
 
@@ -96,4 +102,43 @@ export function getUser(req: { authUser?: AuthUser }): AuthUser {
 export function getDevice(req: { authDevice?: AuthDevice }): AuthDevice {
   if (!req.authDevice) throw new Error('getDevice called without requireDevice preHandler');
   return req.authDevice;
+}
+
+export function requireWorkspaceMember(db: Db, role?: WorkspaceRole): preHandlerHookHandler {
+  return async (req, reply) => {
+    if (!req.authUser) {
+      await reply.code(401).send({ error: 'unauthorized' });
+      return;
+    }
+    const params = req.params as Record<string, string>;
+    const workspaceId = params['workspaceId'];
+    if (!workspaceId) {
+      await reply.code(400).send({ error: 'missing_workspace_id' });
+      return;
+    }
+    const member = await db
+      .select({ role: schema.workspaceMembers.role })
+      .from(schema.workspaceMembers)
+      .where(
+        and(
+          eq(schema.workspaceMembers.workspaceId, workspaceId),
+          eq(schema.workspaceMembers.userId, req.authUser.id),
+        ),
+      )
+      .get();
+    if (!member) {
+      await reply.code(403).send({ error: 'forbidden' });
+      return;
+    }
+    if (role && !rankAtLeast(member.role, role)) {
+      await reply.code(403).send({ error: 'insufficient_role' });
+      return;
+    }
+    req.authWorkspace = { id: workspaceId, role: member.role };
+  };
+}
+
+export function getWorkspace(req: { authWorkspace?: AuthWorkspace }): AuthWorkspace {
+  if (!req.authWorkspace) throw new Error('getWorkspace called without requireWorkspaceMember preHandler');
+  return req.authWorkspace;
 }
