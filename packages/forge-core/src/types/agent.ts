@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const AgentSchema = z.object({
   id: z.string(),
+  workspaceId: z.string().nullable(),
   name: z.string().min(1).max(100),
   personality: z.string(),
   runtimeId: z.string(),
@@ -22,6 +23,7 @@ export type AgentInstanceStatus = z.infer<typeof AgentInstanceStatusSchema>;
 
 export const AgentInstanceSchema = z.object({
   id: z.string(),
+  workspaceId: z.string().nullable(),
   agentId: z.string(),
   deviceId: z.string(),
   taskId: z.string().nullable(),
