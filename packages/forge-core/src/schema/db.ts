@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, primaryKey } from 'drizzle-orm/sqlite-core';
 
 const timestampMs = (name: string) => integer(name, { mode: 'timestamp_ms' });
 const nowDefault = sql`(unixepoch() * 1000)`;
@@ -189,5 +189,46 @@ export const runtimeConfigs = sqliteTable(
   },
   (t) => ({
     userIdx: index('runtime_configs_user_idx').on(t.userId),
+  }),
+);
+
+export const workspaces = sqliteTable(
+  'workspaces',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    slug: text('slug').notNull().unique(),
+    description: text('description'),
+    ownerUserId: text('owner_user_id')
+      .notNull()
+      // RESTRICT: deleting a user who owns a workspace is blocked by design; transfer ownership first
+      .references(() => users.id, { onDelete: 'restrict' }),
+    status: text('status', { enum: ['active', 'archived', 'deleted'] })
+      .notNull()
+      .default('active'),
+    budgetMonthlyCents: integer('budget_monthly_cents').notNull().default(0),
+    createdAt: timestampMs('created_at').notNull().default(nowDefault),
+    updatedAt: timestampMs('updated_at').notNull().default(nowDefault),
+  },
+  (t) => ({
+    ownerIdx: index('workspaces_owner_idx').on(t.ownerUserId),
+  }),
+);
+
+export const workspaceMembers = sqliteTable(
+  'workspace_members',
+  {
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role', { enum: ['owner', 'admin', 'collaborator', 'viewer'] }).notNull(),
+    joinedAt: timestampMs('joined_at').notNull().default(nowDefault),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.workspaceId, t.userId] }),
+    userIdx: index('workspace_members_user_idx').on(t.userId),
   }),
 );

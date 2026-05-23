@@ -131,6 +131,34 @@ CREATE TABLE runtime_configs (
 CREATE INDEX runtime_configs_user_idx ON runtime_configs(user_id);
 `,
   },
+  {
+    name: '0001_workspaces',
+    sql: `
+CREATE TABLE workspaces (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  description TEXT,
+  owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'deleted')),
+  budget_monthly_cents INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+
+CREATE INDEX workspaces_owner_idx ON workspaces(owner_user_id);
+
+CREATE TABLE workspace_members (
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'collaborator', 'viewer')),
+  joined_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  PRIMARY KEY (workspace_id, user_id)
+);
+
+CREATE INDEX workspace_members_user_idx ON workspace_members(user_id);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {
@@ -141,6 +169,7 @@ function splitStatements(sql: string): string[] {
 }
 
 export async function runMigrations(client: Client): Promise<void> {
+  await client.execute('PRAGMA foreign_keys = ON');
   await client.execute(
     `CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)`,
   );
