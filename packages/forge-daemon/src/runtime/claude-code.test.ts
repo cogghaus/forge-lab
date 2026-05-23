@@ -8,7 +8,7 @@ import {
   type SpawnOptions,
   type SpawnedProcess,
 } from './claude-code.js';
-import { doneFilePath, taskFilePath } from '../sync/task-file.js';
+import { doneFilePath, instructionFilePath, taskFilePath } from '../sync/task-file.js';
 
 interface RecordedSpawn {
   command: string;
@@ -177,15 +177,29 @@ describe('ClaudeCodeRuntime', () => {
     await expect(fs.access(taskFilePath(workdir, 'fl-005'))).rejects.toThrow();
   });
 
-  it('sendInstruction rejects as not-yet-implemented', async () => {
+  it('sendInstruction writes an instruction file to the task workdir', async () => {
     const { spawner } = makeFakeSpawner();
     const rt = new ClaudeCodeRuntime({ useWindowsTerminal: false, spawner });
+
+    await fs.writeFile(taskFilePath(workdir, 'fl-006'), '# fl-006\n', 'utf8');
     const instance = await rt.spawn(
       { agentId: 'a', personality: 'sys', workdir, taskId: 'fl-006', config: {} },
       'go',
     );
-    await expect(rt.sendInstruction(instance, 'stop what you are doing')).rejects.toThrow(
-      /Phase 2/,
+
+    await rt.sendInstruction(instance, 'stop and summarize');
+
+    const content = await fs.readFile(instructionFilePath(workdir, 'fl-006'), 'utf8');
+    expect(content).toBe('stop and summarize');
+  });
+
+  it('sendInstruction rejects when instance has no active task', async () => {
+    const { spawner } = makeFakeSpawner();
+    const rt = new ClaudeCodeRuntime({ useWindowsTerminal: false, spawner });
+    const instance = await rt.spawn(
+      { agentId: 'a', personality: 'sys', workdir, taskId: null, config: {} },
+      'go',
     );
+    await expect(rt.sendInstruction(instance, 'hello')).rejects.toThrow(/no active task/);
   });
 });

@@ -52,6 +52,34 @@ export async function cleanupTaskFiles(workdir: string, taskId: string): Promise
   ]);
 }
 
+export function instructionFilePath(workdir: string, taskId: string): string {
+  return path.join(taskDir(workdir), `${taskId}.instruction`);
+}
+
+export async function writeInstructionFile(
+  workdir: string,
+  taskId: string,
+  text: string,
+): Promise<void> {
+  const dir = taskDir(workdir);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(instructionFilePath(workdir, taskId), text, 'utf8');
+}
+
+export async function readAndClearInstructionFile(
+  workdir: string,
+  taskId: string,
+): Promise<string | null> {
+  const p = instructionFilePath(workdir, taskId);
+  try {
+    const text = await fs.readFile(p, 'utf8');
+    await fs.rm(p, { force: true });
+    return text;
+  } catch {
+    return null;
+  }
+}
+
 export type DoneListener = (taskId: string, result: DoneResult) => void | Promise<void>;
 
 export async function watchDoneFiles(

@@ -1,6 +1,6 @@
 import type { FSWatcher } from 'node:fs';
 import path from 'node:path';
-import type { EventEnvelope } from '@forge-lab/core';
+import type { EventEnvelope, RuntimeInstance } from '@forge-lab/core';
 import { composeSystemPrompt } from '@forge-lab/agents';
 import type { PersonalityRegistry } from '@forge-lab/agents';
 import { HubClient } from './hub-client.js';
@@ -23,6 +23,8 @@ export interface DaemonOptions {
   defaultAgentId?: string;
   defaultPersonality?: string;
   personalityRegistry?: PersonalityRegistry;
+  /** How often the worker loop polls for pending tasks (ms). Default: 5000 */
+  pollIntervalMs?: number;
   logger?: DaemonLogger;
 }
 
@@ -36,6 +38,11 @@ const noopLogger: DaemonLogger = {
   error: () => {},
 };
 
+interface ActiveInstance {
+  instance: RuntimeInstance;
+  runtimeId: string;
+}
+
 export class Daemon {
   private readonly client: HubClient;
   private readonly runtimes: RuntimeRegistry;
@@ -43,6 +50,8 @@ export class Daemon {
   private readonly logger: DaemonLogger;
   private watcher: FSWatcher | null = null;
   private running = false;
+  private loopController: AbortController | null = null;
+  private readonly activeInstances = new Map<string, ActiveInstance>();
 
   constructor(opts: DaemonOptions) {
     this.opts = opts;
@@ -67,11 +76,22 @@ export class Daemon {
     });
     const doneListener: DoneListener = (taskId, result) => this.handleTaskDone(taskId, result);
     this.watcher = await watchDoneFiles(this.opts.workdir, doneListener);
+
+    this.loopController = new AbortController();
+    void runWorkerLoop({
+      signal: this.loopController.signal,
+      pollIntervalMs: this.opts.pollIntervalMs ?? 5000,
+      poll: () => this.pollForPendingTasks(),
+      logger: this.logger,
+    });
+
     this.logger.info('daemon started', { hubUrl: this.opts.hubUrl, workdir: this.opts.workdir });
   }
 
   async stop(): Promise<void> {
     this.running = false;
+    this.loopController?.abort();
+    this.loopController = null;
     if (this.watcher) {
       this.watcher.close();
       this.watcher = null;
@@ -80,9 +100,37 @@ export class Daemon {
     this.logger.info('daemon stopped');
   }
 
+  private async pollForPendingTasks(): Promise<void> {
+    for (const [taskId, active] of this.activeInstances) {
+      const runtime = this.runtimes.get(active.runtimeId);
+      const alive = await runtime.isAlive(active.instance);
+      if (!alive) {
+        this.logger.error('agent instance appears dead', {
+          taskId,
+          runtimeId: active.runtimeId,
+        });
+        this.activeInstances.delete(taskId);
+      }
+    }
+
+    const { tasks } = await this.client.listTasks();
+    for (const task of tasks) {
+      if (task.status === 'pending_agent') {
+        await this.handleIncomingTask({
+          id: 'poll-synthetic',
+          name: 'task.created',
+          occurredAt: new Date(),
+          source: 'worker-loop',
+          payload: { taskId: task.id },
+        });
+      }
+    }
+  }
+
   private async handleIncomingTask(env: EventEnvelope): Promise<void> {
     const taskId = (env.payload as { taskId?: string }).taskId;
     if (!taskId) return;
+    if (this.activeInstances.has(taskId)) return;
     try {
       const task = await this.client.getTask(taskId);
       if (task.status !== 'pending_agent' && task.status !== 'assigned') {
@@ -113,7 +161,7 @@ export class Daemon {
         }
       }
 
-      await runtime.spawn(
+      const instance = await runtime.spawn(
         {
           agentId,
           personality: personalityStr,
@@ -123,6 +171,7 @@ export class Daemon {
         },
         claimed.title,
       );
+      this.activeInstances.set(claimed.id, { instance, runtimeId: this.opts.defaultRuntimeId });
       this.logger.info('task spawned', { taskId: claimed.id, runtime: this.opts.defaultRuntimeId });
     } catch (err) {
       this.logger.error('failed to handle incoming task', {
@@ -136,26 +185,8 @@ export class Daemon {
     try {
       await this.client.completeTask(taskId, result.result);
       await cleanupTaskFiles(this.opts.workdir, taskId);
+      this.activeInstances.delete(taskId);
       this.logger.info('task completed', { taskId });
-      await runWorkerLoop({
-        hasMoreWork: async () => {
-          const { tasks } = await this.client.listTasks();
-          return tasks.some((t) => t.status === 'pending_agent');
-        },
-        onMoreWork: async () => {
-          const { tasks } = await this.client.listTasks();
-          const next = tasks.find((t) => t.status === 'pending_agent');
-          if (next) {
-            await this.handleIncomingTask({
-              id: 'synthetic',
-              name: 'task.created',
-              occurredAt: new Date(),
-              source: 'worker-loop',
-              payload: { taskId: next.id },
-            });
-          }
-        },
-      });
     } catch (err) {
       this.logger.error('failed to complete task', {
         taskId,
