@@ -6,6 +6,7 @@ describe('TaskSchema', () => {
     const now = new Date();
     const task = TaskSchema.parse({
       id: 'fl-001',
+      workspaceId: null,
       projectPrefix: 'fl',
       title: 'Scaffold monorepo',
       description: null,
@@ -30,6 +31,7 @@ describe('TaskSchema', () => {
     expect(() =>
       TaskSchema.parse({
         id: 'fl-001',
+        workspaceId: null,
         projectPrefix: 'fl',
         title: '',
         description: null,

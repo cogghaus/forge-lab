@@ -19,6 +19,7 @@ export type TaskPriority = z.infer<typeof TaskPrioritySchema>;
 
 export const TaskSchema = z.object({
   id: TaskIdSchema,
+  workspaceId: z.string().nullable(),
   projectPrefix: z.string().min(2).max(6),
   title: z.string().min(1).max(500),
   description: z.string().nullable(),
