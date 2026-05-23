@@ -1,6 +1,6 @@
 import type { onRequestHookHandler, preHandlerHookHandler } from 'fastify';
-import { eq } from 'drizzle-orm';
-import { schema } from '@forge-lab/core';
+import { and, eq } from 'drizzle-orm';
+import { schema, type WorkspaceRole, rankAtLeast } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { verifySession } from './sessions.js';
 import { hashToken } from './tokens.js';
@@ -17,10 +17,16 @@ export interface AuthDevice {
   name: string;
 }
 
+export interface AuthWorkspace {
+  id: string;
+  role: WorkspaceRole;
+}
+
 declare module 'fastify' {
   interface FastifyRequest {
     authUser?: AuthUser;
     authDevice?: AuthDevice;
+    authWorkspace?: AuthWorkspace;
   }
 }
 
@@ -96,4 +102,51 @@ export function getUser(req: { authUser?: AuthUser }): AuthUser {
 export function getDevice(req: { authDevice?: AuthDevice }): AuthDevice {
   if (!req.authDevice) throw new Error('getDevice called without requireDevice preHandler');
   return req.authDevice;
+}
+
+export function requireWorkspaceMember(db: Db, role?: WorkspaceRole): preHandlerHookHandler {
+  return async (req, reply) => {
+    if (!req.authUser) {
+      await reply.code(401).send({ error: 'unauthorized' });
+      return;
+    }
+    const params = req.params as Record<string, string>;
+    const workspaceId = params['workspaceId'];
+    if (!workspaceId) {
+      await reply.code(400).send({ error: 'missing_workspace_id' });
+      return;
+    }
+    const result = await db
+      .select({
+        role: schema.workspaceMembers.role,
+        workspaceStatus: schema.workspaces.status,
+      })
+      .from(schema.workspaceMembers)
+      .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.workspaceMembers.workspaceId))
+      .where(
+        and(
+          eq(schema.workspaceMembers.workspaceId, workspaceId),
+          eq(schema.workspaceMembers.userId, req.authUser.id),
+        ),
+      )
+      .get();
+    if (!result) {
+      await reply.code(403).send({ error: 'forbidden' });
+      return;
+    }
+    if (result.workspaceStatus === 'deleted') {
+      await reply.code(404).send({ error: 'not_found' });
+      return;
+    }
+    if (role && !rankAtLeast(result.role, role)) {
+      await reply.code(403).send({ error: 'insufficient_role' });
+      return;
+    }
+    req.authWorkspace = { id: workspaceId, role: result.role };
+  };
+}
+
+export function getWorkspace(req: { authWorkspace?: AuthWorkspace }): AuthWorkspace {
+  if (!req.authWorkspace) throw new Error('getWorkspace called without requireWorkspaceMember preHandler');
+  return req.authWorkspace;
 }

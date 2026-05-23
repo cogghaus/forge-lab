@@ -15,6 +15,7 @@ import { registerAgentInstanceRoutes } from './routes/agent-instances.js';
 import { registerRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import { registerInstructionRoutes } from './routes/instructions.js';
 import { registerCommentRoutes } from './routes/comments.js';
+import { registerWorkspaceRoutes } from './routes/workspaces.js';
 import { registerWsRoutes } from './routes/ws.js';
 import { EventBus } from './events/bus.js';
 
@@ -70,6 +71,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
     registerRuntimeConfigRoutes(scope, handle.db);
     registerInstructionRoutes(scope, handle.db);
     registerCommentRoutes(scope, handle.db);
+    registerWorkspaceRoutes(scope, handle.db);
     registerWsRoutes(scope, handle.db, bus);
     return Promise.resolve();
   });
