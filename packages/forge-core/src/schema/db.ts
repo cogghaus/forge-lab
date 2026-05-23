@@ -53,6 +53,7 @@ export const tasks = sqliteTable(
   'tasks',
   {
     id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').references(() => workspaces.id),
     projectPrefix: text('project_prefix').notNull(),
     title: text('title').notNull(),
     description: text('description'),
@@ -87,6 +88,7 @@ export const tasks = sqliteTable(
     statusIdx: index('tasks_status_idx').on(t.status),
     projectIdx: index('tasks_project_idx').on(t.projectPrefix),
     assignedDeviceIdx: index('tasks_assigned_device_idx').on(t.assignedDeviceId),
+    workspaceIdx: index('tasks_workspace_idx').on(t.workspaceId),
   }),
 );
 
@@ -94,6 +96,7 @@ export const taskHistory = sqliteTable(
   'task_history',
   {
     id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').references(() => workspaces.id),
     taskId: text('task_id')
       .notNull()
       .references(() => tasks.id, { onDelete: 'cascade' }),
@@ -111,6 +114,7 @@ export const taskInstructions = sqliteTable(
   'task_instructions',
   {
     id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').references(() => workspaces.id),
     taskId: text('task_id')
       .notNull()
       .references(() => tasks.id, { onDelete: 'cascade' }),
@@ -129,6 +133,7 @@ export const taskComments = sqliteTable(
   'task_comments',
   {
     id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').references(() => workspaces.id),
     taskId: text('task_id')
       .notNull()
       .references(() => tasks.id, { onDelete: 'cascade' }),
@@ -142,19 +147,27 @@ export const taskComments = sqliteTable(
   }),
 );
 
-export const agents = sqliteTable('agents', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  personality: text('personality').notNull(),
-  runtimeId: text('runtime_id').notNull(),
-  config: text('config', { mode: 'json' }).notNull().default(sql`'{}'`),
-  createdAt: timestampMs('created_at').notNull().default(nowDefault),
-});
+export const agents = sqliteTable(
+  'agents',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').references(() => workspaces.id),
+    name: text('name').notNull(),
+    personality: text('personality').notNull(),
+    runtimeId: text('runtime_id').notNull(),
+    config: text('config', { mode: 'json' }).notNull().default(sql`'{}'`),
+    createdAt: timestampMs('created_at').notNull().default(nowDefault),
+  },
+  (t) => ({
+    workspaceIdx: index('agents_workspace_idx').on(t.workspaceId),
+  }),
+);
 
 export const agentInstances = sqliteTable(
   'agent_instances',
   {
     id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').references(() => workspaces.id),
     agentId: text('agent_id')
       .notNull()
       .references(() => agents.id, { onDelete: 'cascade' }),
@@ -172,6 +185,7 @@ export const agentInstances = sqliteTable(
   (t) => ({
     deviceIdx: index('agent_instances_device_idx').on(t.deviceId),
     taskIdx: index('agent_instances_task_idx').on(t.taskId),
+    workspaceIdx: index('agent_instances_workspace_idx').on(t.workspaceId),
   }),
 );
 

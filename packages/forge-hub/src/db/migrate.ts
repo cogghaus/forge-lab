@@ -159,6 +159,23 @@ CREATE TABLE workspace_members (
 CREATE INDEX workspace_members_user_idx ON workspace_members(user_id);
 `,
   },
+  {
+    name: '0002_workspace_scoping',
+    sql: `
+ALTER TABLE tasks ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+CREATE INDEX tasks_workspace_idx ON tasks(workspace_id);
+
+ALTER TABLE agents ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+CREATE INDEX agents_workspace_idx ON agents(workspace_id);
+
+ALTER TABLE agent_instances ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+CREATE INDEX agent_instances_workspace_idx ON agent_instances(workspace_id);
+
+ALTER TABLE task_history ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+ALTER TABLE task_instructions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+ALTER TABLE task_comments ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {
