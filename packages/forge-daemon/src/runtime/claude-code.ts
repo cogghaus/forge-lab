@@ -6,7 +6,7 @@ import type {
   AgentRuntimeSpawnConfig,
   RuntimeInstance,
 } from '@forge-lab/core';
-import { doneFilePath, taskFilePath } from '../sync/task-file.js';
+import { doneFilePath, instructionFilePath, taskFilePath, writeInstructionFile } from '../sync/task-file.js';
 
 /**
  * Injection point for tests. Real callers use {@link defaultSpawner} which
@@ -175,10 +175,12 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     return Promise.resolve(instance);
   }
 
-  sendInstruction(_instance: RuntimeInstance, _text: string): Promise<void> {
-    return Promise.reject(
-      new Error('ClaudeCodeRuntime.sendInstruction lands in Phase 2 (worker-loop signal files)'),
-    );
+  async sendInstruction(instance: RuntimeInstance, text: string): Promise<void> {
+    const live = this.instances.get(instance.id);
+    if (!live?.taskId) {
+      throw new Error('sendInstruction: no active task for instance');
+    }
+    await writeInstructionFile(live.workdir, live.taskId, text);
   }
 
   async stop(instance: RuntimeInstance): Promise<void> {

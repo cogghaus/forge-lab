@@ -83,7 +83,22 @@ export class MockRuntime implements AgentRuntime {
     return Promise.resolve();
   }
 
-  isAlive(): Promise<boolean> {
-    return Promise.resolve(false);
+  async isAlive(instance: RuntimeInstance): Promise<boolean> {
+    const spawnConfig = instance.metadata['config'] as AgentRuntimeSpawnConfig;
+    if (!spawnConfig?.taskId) return false;
+    const [hasTask, hasDone] = await Promise.all([
+      fileExists(taskFilePath(spawnConfig.workdir, spawnConfig.taskId)),
+      fileExists(doneFilePath(spawnConfig.workdir, spawnConfig.taskId)),
+    ]);
+    return hasTask && !hasDone;
+  }
+}
+
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
   }
 }
