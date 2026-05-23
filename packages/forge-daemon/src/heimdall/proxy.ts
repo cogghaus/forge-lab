@@ -1,7 +1,4 @@
-/**
- * Heimdall proxy. Phase 1 is a pass-through stub. Phase 2 adds real policy
- * enforcement (path allowlists, secret scanning, audit events to hub).
- */
+import path from 'node:path';
 
 export interface HeimdallOperation {
   type: 'read' | 'write' | 'execute';
@@ -14,6 +11,41 @@ export interface HeimdallDecision {
   reason?: string;
 }
 
-export function checkOperation(_op: HeimdallOperation): HeimdallDecision {
+export interface HeimdallPolicy {
+  /** Absolute directory roots that agents are permitted to access. */
+  allowedPaths: string[];
+}
+
+/**
+ * Returns a policy that restricts agent file access to the given workdir tree.
+ */
+export function createPolicy(workdir: string): HeimdallPolicy {
+  return { allowedPaths: [workdir] };
+}
+
+/**
+ * Checks whether an operation is permitted by the policy.
+ * With no policy (pass-through mode), all operations are allowed.
+ * Path traversal sequences are resolved before comparison.
+ *
+ * Note: `op.path` should be absolute. Relative paths are resolved against
+ * `process.cwd()`, not the agent workdir, which may produce unexpected results.
+ */
+export function checkOperation(op: HeimdallOperation, policy?: HeimdallPolicy): HeimdallDecision {
+  if (!policy) return { allow: true };
+  if (op.path === undefined) return { allow: true };
+
+  const resolved = path.resolve(op.path);
+  const allowed = policy.allowedPaths.some((root) => {
+    const resolvedRoot = path.resolve(root);
+    return (
+      resolved === resolvedRoot ||
+      resolved.startsWith(resolvedRoot + path.sep)
+    );
+  });
+
+  if (!allowed) {
+    return { allow: false, reason: `path outside allowed roots: ${resolved}` };
+  }
   return { allow: true };
 }

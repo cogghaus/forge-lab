@@ -53,6 +53,42 @@ describe('MockRuntime', () => {
     }
   });
 
+  it('isAlive returns true while task file exists and done marker is absent', async () => {
+    const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-mock-alive-'));
+    try {
+      const taskId = 'fl-003';
+      await fs.mkdir(path.join(workdir, '.forge', 'tasks'), { recursive: true });
+      await fs.writeFile(taskFilePath(workdir, taskId), '# fl-003\n', 'utf8');
+
+      const rt = new MockRuntime({ completionDelayMs: 100000 });
+      const instance = await rt.spawn(
+        { agentId: 'a', personality: 'sys', workdir, taskId, config: {} },
+        'work',
+      );
+
+      expect(await rt.isAlive(instance)).toBe(true);
+
+      await fs.writeFile(doneFilePath(workdir, taskId), '{"result":"done"}', 'utf8');
+      expect(await rt.isAlive(instance)).toBe(false);
+    } finally {
+      await fs.rm(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('isAlive returns false when task file is missing', async () => {
+    const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-mock-nofile-'));
+    try {
+      const rt = new MockRuntime({ completionDelayMs: 100000 });
+      const instance = await rt.spawn(
+        { agentId: 'a', personality: 'sys', workdir, taskId: 'fl-004', config: {} },
+        'work',
+      );
+      expect(await rt.isAlive(instance)).toBe(false);
+    } finally {
+      await fs.rm(workdir, { recursive: true, force: true });
+    }
+  });
+
   it('uses custom result factory when provided', async () => {
     const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-mock-'));
     try {
