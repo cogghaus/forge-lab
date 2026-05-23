@@ -51,6 +51,7 @@ export class Daemon {
   private watcher: FSWatcher | null = null;
   private running = false;
   private loopController: AbortController | null = null;
+  private loopPromise: Promise<void> | null = null;
   private readonly activeInstances = new Map<string, ActiveInstance>();
 
   constructor(opts: DaemonOptions) {
@@ -78,11 +79,15 @@ export class Daemon {
     this.watcher = await watchDoneFiles(this.opts.workdir, doneListener);
 
     this.loopController = new AbortController();
-    void runWorkerLoop({
+    this.loopPromise = runWorkerLoop({
       signal: this.loopController.signal,
       pollIntervalMs: this.opts.pollIntervalMs ?? 5000,
       poll: () => this.pollForPendingTasks(),
       logger: this.logger,
+    }).catch((err) => {
+      this.logger.error('worker loop crashed unexpectedly', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
 
     this.logger.info('daemon started', { hubUrl: this.opts.hubUrl, workdir: this.opts.workdir });
@@ -92,6 +97,8 @@ export class Daemon {
     this.running = false;
     this.loopController?.abort();
     this.loopController = null;
+    await this.loopPromise;
+    this.loopPromise = null;
     if (this.watcher) {
       this.watcher.close();
       this.watcher = null;
@@ -131,12 +138,25 @@ export class Daemon {
     const taskId = (env.payload as { taskId?: string }).taskId;
     if (!taskId) return;
     if (this.activeInstances.has(taskId)) return;
+
+    // Pre-claim checks — safe to fail silently.
     try {
       const task = await this.client.getTask(taskId);
       if (task.status !== 'pending_agent' && task.status !== 'assigned') {
         return;
       }
       await this.client.claimTask(taskId);
+    } catch (err) {
+      this.logger.error('failed to claim task', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    // Task is now claimed. Any failure past this point leaves it stuck in_progress.
+    // A future failTask() hub endpoint would allow recovery.
+    try {
       const claimed = await this.client.getTask(taskId);
       await writeTaskFile(this.opts.workdir, claimed);
       const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
@@ -174,7 +194,7 @@ export class Daemon {
       this.activeInstances.set(claimed.id, { instance, runtimeId: this.opts.defaultRuntimeId });
       this.logger.info('task spawned', { taskId: claimed.id, runtime: this.opts.defaultRuntimeId });
     } catch (err) {
-      this.logger.error('failed to handle incoming task', {
+      this.logger.error('task claimed but spawn failed — task stuck in_progress', {
         taskId,
         error: err instanceof Error ? err.message : String(err),
       });

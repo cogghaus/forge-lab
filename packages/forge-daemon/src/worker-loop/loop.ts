@@ -38,7 +38,11 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
       resolve();
       return;
     }
-    const timer = setTimeout(resolve, ms);
+    const timer = setTimeout(() => {
+      // Remove the abort listener so it doesn't accumulate on long-lived signals.
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
     signal.addEventListener('abort', onAbort, { once: true });
 
     function onAbort() {

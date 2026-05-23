@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { platform } from 'node:os';
 import path from 'node:path';
 import { checkOperation, createPolicy } from './proxy.js';
 
@@ -40,9 +41,14 @@ describe('checkOperation — with policy', () => {
 
   it('denies read outside workdir', () => {
     const policy = createPolicy(WORKDIR);
-    const result = checkOperation({ type: 'read', path: '/etc/passwd' }, policy);
+    // Use a path that is clearly outside the workdir on any platform.
+    const outsidePath = platform() === 'win32'
+      ? 'C:\\Windows\\System32\\secret.txt'
+      : '/etc/passwd';
+    const result = checkOperation({ type: 'read', path: outsidePath }, policy);
     expect(result.allow).toBe(false);
-    expect(result.reason).toContain('/etc/passwd');
+    // reason contains the resolved (normalized) path
+    expect(result.reason).toContain(path.resolve(outsidePath));
   });
 
   it('denies write to sibling directory', () => {

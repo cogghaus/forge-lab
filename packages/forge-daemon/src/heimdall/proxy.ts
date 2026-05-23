@@ -27,6 +27,9 @@ export function createPolicy(workdir: string): HeimdallPolicy {
  * Checks whether an operation is permitted by the policy.
  * With no policy (pass-through mode), all operations are allowed.
  * Path traversal sequences are resolved before comparison.
+ *
+ * Note: `op.path` should be absolute. Relative paths are resolved against
+ * `process.cwd()`, not the agent workdir, which may produce unexpected results.
  */
 export function checkOperation(op: HeimdallOperation, policy?: HeimdallPolicy): HeimdallDecision {
   if (!policy) return { allow: true };
@@ -42,7 +45,7 @@ export function checkOperation(op: HeimdallOperation, policy?: HeimdallPolicy): 
   });
 
   if (!allowed) {
-    return { allow: false, reason: `path outside allowed roots: ${op.path}` };
+    return { allow: false, reason: `path outside allowed roots: ${resolved}` };
   }
   return { allow: true };
 }

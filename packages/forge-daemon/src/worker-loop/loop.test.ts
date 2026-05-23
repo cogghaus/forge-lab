@@ -1,3 +1,4 @@
+import { setMaxListeners } from 'node:events';
 import { describe, it, expect } from 'vitest';
 import { runWorkerLoop } from './loop.js';
 
@@ -112,6 +113,30 @@ describe('runWorkerLoop', () => {
       const gapAfterReset = timestamps[2]! - timestamps[1]!;
       expect(gapAfterReset).toBeLessThan(50);
     }
+  });
+
+  it('does not leak abort listeners across natural timer expirations', async () => {
+    const ctrl = new AbortController();
+    setMaxListeners(5, ctrl.signal);
+
+    const warnings: string[] = [];
+    const onWarning = (w: Error & { name?: string }) => {
+      if (w.name === 'MaxListenersExceededWarning') warnings.push(w.message);
+    };
+    process.on('warning', onWarning);
+
+    const loopPromise = runWorkerLoop({
+      signal: ctrl.signal,
+      pollIntervalMs: 10,
+      poll: async () => {},
+    });
+
+    await new Promise((r) => setTimeout(r, 120));
+    ctrl.abort();
+    await loopPromise;
+    process.off('warning', onWarning);
+
+    expect(warnings).toHaveLength(0);
   });
 
   it('logs errors via the logger option', async () => {
