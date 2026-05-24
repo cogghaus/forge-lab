@@ -16,6 +16,7 @@ import {
 import { useState } from 'react';
 import { createTaskAction } from '@/actions/tasks';
 import { derivePrefix } from '@/lib/task-prefix';
+import { resolveSelection } from '@/lib/form-fields';
 import type { HubGoal } from '@/lib/hub';
 
 interface Props {
@@ -28,6 +29,8 @@ export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [priority, setPriority] = useState('normal');
+  const [goalId, setGoalId] = useState('');
   const projectPrefix = derivePrefix(workspaceSlug);
 
   async function handleAction(formData: FormData) {
@@ -46,7 +49,11 @@ export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
   }
 
   function handleOpenChange(open: boolean) {
-    if (!open) setError(null);
+    if (!open) {
+      setError(null);
+      setPriority('normal');
+      setGoalId('');
+    }
     onOpenChange();
   }
 
@@ -65,6 +72,8 @@ export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
               <ModalHeader>Create Task</ModalHeader>
               <ModalBody className="flex flex-col gap-4">
                 <input type="hidden" name="projectPrefix" value={projectPrefix} />
+                <input type="hidden" name="priority" value={priority} />
+                {goalId && <input type="hidden" name="goalId" value={goalId} />}
                 <Input label="Title" name="title" placeholder="Task title" isRequired />
                 <Textarea
                   label="Description"
@@ -72,14 +81,22 @@ export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
                   placeholder="Optional description"
                   minRows={2}
                 />
-                <Select label="Priority" name="priority" defaultSelectedKeys={['normal']}>
+                <Select
+                  label="Priority"
+                  defaultSelectedKeys={['normal']}
+                  onSelectionChange={(keys) => setPriority(resolveSelection(keys, 'normal'))}
+                >
                   <SelectItem key="low">Low</SelectItem>
                   <SelectItem key="normal">Normal</SelectItem>
                   <SelectItem key="high">High</SelectItem>
                   <SelectItem key="urgent">Urgent</SelectItem>
                 </Select>
                 {activeGoals.length > 0 && (
-                  <Select label="Link to goal" name="goalId" placeholder="None">
+                  <Select
+                    label="Link to goal"
+                    placeholder="None"
+                    onSelectionChange={(keys) => setGoalId(resolveSelection(keys, ''))}
+                  >
                     {activeGoals.map((goal) => (
                       <SelectItem key={goal.id}>
                         {goal.title}
