@@ -651,6 +651,23 @@ describe('task goalId linking', () => {
     expect(task?.goalId).toBeNull();
   });
 
+  it('CX-01: empty string goalId is normalized to null, not stored as ""', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'gw', title: 'Empty goal string', goalId: '' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+    const task = await hub.db
+      .select({ goalId: schema.tasks.goalId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.goalId).toBeNull();
+  });
+
   it('returns 404 when goalId does not exist in workspace', async () => {
     const res = await hub.fastify.inject({
       method: 'POST',
