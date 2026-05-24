@@ -27,15 +27,21 @@ interface Props {
 export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const projectPrefix = derivePrefix(workspaceSlug);
 
   async function handleAction(formData: FormData) {
     setError(null);
-    const result = await createTaskAction(workspaceId, formData);
-    if (result?.error) {
-      setError(result.error);
-    } else {
-      onOpenChange();
+    setIsSubmitting(true);
+    try {
+      const result = await createTaskAction(workspaceId, formData);
+      if (result?.error) {
+        setError(result.error);
+      } else {
+        onOpenChange();
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -84,10 +90,10 @@ export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
                 {error && <p className="text-danger text-sm">{error}</p>}
               </ModalBody>
               <ModalFooter>
-                <Button variant="light" onPress={onClose}>
+                <Button type="button" variant="light" onPress={onClose} isDisabled={isSubmitting}>
                   Cancel
                 </Button>
-                <Button color="primary" type="submit">
+                <Button color="primary" type="submit" isLoading={isSubmitting}>
                   Create
                 </Button>
               </ModalFooter>
