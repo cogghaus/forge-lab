@@ -4,13 +4,14 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { hubFetch } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
+import { normalizeOptional } from '@/lib/form-fields';
 
 export async function createGoalAction(
   workspaceId: string,
   formData: FormData,
 ): Promise<{ error?: string }> {
   const title = (formData.get('title') as string | null)?.trim();
-  const description = (formData.get('description') as string | null)?.trim() || null;
+  const description = normalizeOptional(formData.get('description') as string | null);
   const parentId = (formData.get('parentId') as string | null)?.trim() || undefined;
   if (!title) return { error: 'Title is required.' };
 
