@@ -1,6 +1,7 @@
 'use client';
 
 import { Card, CardBody, Chip } from '@heroui/react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import type { HubTask } from '@/lib/hub';
@@ -28,7 +29,7 @@ function statusLabel(s: string): string {
   return s.replace(/_/g, ' ');
 }
 
-export function TaskList({ tasks, workspaceId: _workspaceId }: { tasks: HubTask[]; workspaceId: string }) {
+export function TaskList({ tasks, workspaceId }: { tasks: HubTask[]; workspaceId: string }) {
   const router = useRouter();
 
   useEffect(() => {
@@ -53,7 +54,8 @@ export function TaskList({ tasks, workspaceId: _workspaceId }: { tasks: HubTask[
   return (
     <div className="flex flex-col gap-2">
       {tasks.map((task) => (
-        <Card key={task.id}>
+        <Link key={task.id} href={`/workspaces/${workspaceId}/tasks/${task.id}`}>
+        <Card isPressable className="w-full">
           <CardBody className="flex flex-row items-center gap-4 py-3">
             <span className="font-mono text-xs text-default-400 w-16 shrink-0">{task.id}</span>
             <div className="flex-1 min-w-0">
@@ -82,6 +84,7 @@ export function TaskList({ tasks, workspaceId: _workspaceId }: { tasks: HubTask[
             </div>
           </CardBody>
         </Card>
+        </Link>
       ))}
     </div>
   );
