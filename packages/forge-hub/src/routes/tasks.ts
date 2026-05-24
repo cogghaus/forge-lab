@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { and, eq, desc, asc, inArray, isNull, or } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
@@ -16,6 +16,10 @@ import type { EventBus } from '../events/bus.js';
 const CompleteTaskBodySchema = z.object({
   result: z.string().optional(),
 });
+
+function maybeRunId(req: FastifyRequest): Record<string, string> {
+  return req.runId ? { runId: req.runId } : {};
+}
 
 export function registerTaskRoutes(
   fastify: FastifyInstance,
@@ -55,7 +59,7 @@ export function registerTaskRoutes(
       taskId: id,
       eventName: 'task.created',
       source: createdBy,
-      payload: { title: body.title },
+      payload: { title: body.title, ...maybeRunId(req) },
     });
     bus.emit({
       id: nanoid(),
@@ -159,7 +163,7 @@ export function registerTaskRoutes(
         taskId: id,
         eventName: 'task.claimed',
         source: `device:${device.id}`,
-        payload: { deviceId: device.id },
+        payload: { deviceId: device.id, ...maybeRunId(req) },
       });
       bus.emit({
         id: nanoid(),
@@ -203,7 +207,7 @@ export function registerTaskRoutes(
         taskId: id,
         eventName: 'task.created',
         source: createdBy,
-        payload: { title: body.title },
+        payload: { title: body.title, ...maybeRunId(req) },
         workspaceId,
       });
       bus.emit({
@@ -260,7 +264,7 @@ export function registerTaskRoutes(
         taskId: id,
         eventName: 'task.completed',
         source: `device:${device.id}`,
-        payload: { result: body.result ?? null },
+        payload: { result: body.result ?? null, ...maybeRunId(req) },
       });
       bus.emit({
         id: nanoid(),
