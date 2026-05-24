@@ -79,6 +79,8 @@ export const tasks = sqliteTable(
       onDelete: 'set null',
     }),
     assignedAgentId: text('assigned_agent_id'),
+    parentId: text('parent_id'),
+    goalId: text('goal_id'),
     createdBy: text('created_by').notNull(),
     createdAt: timestampMs('created_at').notNull().default(nowDefault),
     updatedAt: timestampMs('updated_at').notNull().default(nowDefault),
@@ -261,4 +263,16 @@ export const invites = sqliteTable('invites', {
   createdAt: timestampMs('created_at').notNull().default(nowDefault),
   acceptedAt: timestampMs('accepted_at'),
   acceptedBy: text('accepted_by'),
+});
+
+export const goals = sqliteTable('goals', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  parentId: text('parent_id'),
+  title: text('title').notNull(),
+  description: text('description'),
+  status: text('status', { enum: ['active', 'completed', 'cancelled'] }).notNull().default('active'),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestampMs('created_at').notNull().default(nowDefault),
+  updatedAt: timestampMs('updated_at').notNull().default(nowDefault),
 });

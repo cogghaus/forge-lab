@@ -199,6 +199,30 @@ CREATE TABLE invites (
 CREATE INDEX invites_token_hash_idx ON invites(token_hash);
 `,
   },
+  {
+    name: '0004_goals',
+    sql: `
+CREATE TABLE goals (
+  id TEXT PRIMARY KEY NOT NULL,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  parent_id TEXT REFERENCES goals(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'cancelled')),
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+CREATE INDEX goals_workspace_idx ON goals(workspace_id);
+CREATE INDEX goals_parent_idx ON goals(parent_id);
+
+ALTER TABLE tasks ADD COLUMN parent_id TEXT REFERENCES tasks(id) ON DELETE SET NULL;
+CREATE INDEX tasks_parent_idx ON tasks(parent_id);
+
+ALTER TABLE tasks ADD COLUMN goal_id TEXT REFERENCES goals(id) ON DELETE SET NULL;
+CREATE INDEX tasks_goal_idx ON tasks(goal_id);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {
