@@ -329,3 +329,75 @@ describe('/tasks/:id/claim', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+describe('X-Forge-Run-Id header', () => {
+  let hub: Hub;
+  let cookie: string;
+  let deviceToken: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    ({ cookie } = await setupAdmin(hub));
+    ({ token: deviceToken } = await registerDevice(hub, cookie, 'run-device'));
+  });
+  afterEach(async () => { await hub.close(); });
+
+  it('runId is recorded in task history when X-Forge-Run-Id header is present', async () => {
+    const createRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie, 'x-forge-run-id': 'run-abc-123' },
+      payload: { projectPrefix: 'fl', title: 'Run test task' },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const { id } = createRes.json() as { id: string };
+
+    const histRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks/${id}/history`,
+      headers: { cookie },
+    });
+    const { history } = histRes.json() as { history: { payload: unknown }[] };
+    expect(history.length).toBeGreaterThan(0);
+    const payload = history[0]?.payload as Record<string, unknown>;
+    expect(payload?.['runId']).toBe('run-abc-123');
+  });
+
+  it('runId is omitted from history when header is absent', async () => {
+    const createRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'No run task' },
+    });
+    const { id } = createRes.json() as { id: string };
+
+    const histRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks/${id}/history`,
+      headers: { cookie },
+    });
+    const { history } = histRes.json() as { history: { payload: unknown }[] };
+    const payload = history[0]?.payload as Record<string, unknown> | undefined;
+    expect(payload?.['runId']).toBeUndefined();
+  });
+
+  it('runId is recorded when device claims a task', async () => {
+    const taskId = await createTask(hub, cookie);
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${deviceToken}`, 'x-forge-run-id': 'run-claim-99' },
+    });
+
+    const histRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks/${taskId}/history`,
+      headers: { cookie },
+    });
+    const { history } = histRes.json() as { history: { eventName: string; payload: unknown }[] };
+    const claimEntry = history.find((h) => h.eventName === 'task.claimed');
+    const payload = claimEntry?.payload as Record<string, unknown> | undefined;
+    expect(payload?.['runId']).toBe('run-claim-99');
+  });
+});

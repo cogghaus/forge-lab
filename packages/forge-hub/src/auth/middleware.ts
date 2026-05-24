@@ -27,6 +27,7 @@ declare module 'fastify' {
     authUser?: AuthUser;
     authDevice?: AuthDevice;
     authWorkspace?: AuthWorkspace;
+    runId?: string;
   }
 }
 

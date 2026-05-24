@@ -60,6 +60,12 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
   await fastify.register(cookie, { secret: config.sessionSecret });
   await fastify.register(websocket);
   fastify.addHook('onRequest', populateAuth(handle.db));
+  fastify.addHook('onRequest', async (req) => {
+    const runId = req.headers['x-forge-run-id'];
+    if (typeof runId === 'string' && runId.length > 0) {
+      req.runId = runId;
+    }
+  });
 
   fastify.get('/healthz', () => ({ status: 'ok' }));
 
