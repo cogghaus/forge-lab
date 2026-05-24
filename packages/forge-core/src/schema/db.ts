@@ -249,3 +249,16 @@ export const workspaceMembers = sqliteTable(
     userIdx: index('workspace_members_user_idx').on(t.userId),
   }),
 );
+
+export const invites = sqliteTable('invites', {
+  id: text('id').primaryKey(),
+  tokenHash: text('token_hash').notNull().unique(),
+  email: text('email'),
+  createdBy: text('created_by').notNull(),
+  workspaceId: text('workspace_id'),
+  workspaceRole: text('workspace_role'),
+  expiresAt: timestampMs('expires_at').notNull(),
+  createdAt: timestampMs('created_at').notNull().default(nowDefault),
+  acceptedAt: timestampMs('accepted_at'),
+  acceptedBy: text('accepted_by'),
+});
