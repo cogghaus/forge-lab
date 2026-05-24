@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Card, CardBody, Chip } from '@heroui/react';
-import { hubFetch, type HubTask, type HubTaskHistory, type HubWorkspace } from '@/lib/hub';
+import { hubFetch, type HubGoal, type HubTask, type HubTaskHistory, type HubWorkspace } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { TaskDetailRefresh } from './task-detail-refresh';
 import { TaskActionButton } from './task-action-button';
@@ -87,6 +87,12 @@ export default async function TaskDetailPage({ params }: Props) {
   const task = taskRes.data;
   const history = historyRes.ok ? historyRes.data.history : [];
 
+  const linkedGoal: HubGoal | null = task.goalId
+    ? await hubFetch<HubGoal>(`/workspaces/${workspaceId}/goals/${task.goalId}`, {
+        cookie: cookieHeader,
+      }).then((r) => (r.ok ? r.data : null))
+    : null;
+
   const isActive =
     task.status === 'pending_agent' ||
     task.status === 'assigned' ||
@@ -144,6 +150,21 @@ export default async function TaskDetailPage({ params }: Props) {
 
           {task.description && (
             <p className="text-sm text-default-600 whitespace-pre-wrap">{task.description}</p>
+          )}
+
+          {linkedGoal && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-default-400">Goal</span>
+              <Link
+                href={`/workspaces/${workspaceId}/goals`}
+                className="text-xs text-primary hover:underline"
+              >
+                {linkedGoal.title}
+              </Link>
+              <Chip size="sm" variant="flat" color="default">
+                {linkedGoal.status}
+              </Chip>
+            </div>
           )}
 
           <div className="flex gap-4 text-xs text-default-400 pt-1 border-t border-default-100">

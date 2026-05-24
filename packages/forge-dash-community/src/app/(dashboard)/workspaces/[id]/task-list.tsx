@@ -4,7 +4,7 @@ import { Card, CardBody, Chip } from '@heroui/react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
-import type { HubTask } from '@/lib/hub';
+import type { HubGoal, HubTask } from '@/lib/hub';
 
 const STATUS_COLOR: Record<string, 'default' | 'primary' | 'warning' | 'success' | 'danger'> = {
   pending_agent: 'default',
@@ -29,8 +29,16 @@ function statusLabel(s: string): string {
   return s.replace(/_/g, ' ');
 }
 
-export function TaskList({ tasks, workspaceId }: { tasks: HubTask[]; workspaceId: string }) {
+interface Props {
+  tasks: HubTask[];
+  workspaceId: string;
+  goals?: HubGoal[];
+}
+
+export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
   const router = useRouter();
+
+  const goalMap = new Map(goals.map((g) => [g.id, g.title]));
 
   useEffect(() => {
     const hasActive = tasks.some(
@@ -62,6 +70,11 @@ export function TaskList({ tasks, workspaceId }: { tasks: HubTask[]; workspaceId
               <p className="font-medium truncate">{task.title}</p>
               {task.description && (
                 <p className="text-xs text-default-500 truncate">{task.description}</p>
+              )}
+              {task.goalId && goalMap.has(task.goalId) && (
+                <p className="text-xs text-primary-400 truncate mt-0.5">
+                  {goalMap.get(task.goalId)}
+                </p>
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
