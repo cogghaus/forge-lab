@@ -4,7 +4,7 @@ const ConfigSchema = z.object({
   hubUrl: z.string().url(),
   deviceToken: z.string().min(1),
   workdir: z.string().min(1),
-  defaultRuntimeId: z.string().default('mock'),
+  defaultRuntimeId: z.enum(['mock', 'claude-code', 'background']).default('background'),
 });
 
 export type DaemonConfig = z.infer<typeof ConfigSchema>;

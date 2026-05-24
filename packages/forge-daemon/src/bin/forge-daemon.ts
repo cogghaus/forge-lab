@@ -2,6 +2,7 @@
 import { Daemon } from '../daemon.js';
 import { MockRuntime } from '../runtime/mock.js';
 import { ClaudeCodeRuntime } from '../runtime/claude-code.js';
+import { BackgroundRuntime } from '../runtime/background.js';
 import { RuntimeRegistry } from '../runtime/registry.js';
 import { loadConfig } from '../config.js';
 
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
   const runtimes = new RuntimeRegistry();
   runtimes.register(new MockRuntime());
   runtimes.register(new ClaudeCodeRuntime());
+  runtimes.register(new BackgroundRuntime({ dangerouslySkipPermissions: true }));
 
   const daemon = new Daemon({
     hubUrl: config.hubUrl,

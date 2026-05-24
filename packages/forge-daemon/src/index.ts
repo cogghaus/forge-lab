@@ -6,6 +6,13 @@ export { RuntimeRegistry } from './runtime/registry.js';
 export { MockRuntime } from './runtime/mock.js';
 export type { MockRuntimeOptions } from './runtime/mock.js';
 export { ClaudeCodeRuntime } from './runtime/claude-code.js';
+export { BackgroundRuntime } from './runtime/background.js';
+export type {
+  BackgroundRuntimeOptions,
+  BackgroundProcess,
+  BackgroundSpawner,
+  BackgroundSpawnOptions,
+} from './runtime/background.js';
 export { loadConfig } from './config.js';
 export type { DaemonConfig } from './config.js';
 export {
@@ -19,6 +26,6 @@ export {
 } from './sync/task-file.js';
 export type { DoneListener, DoneResult } from './sync/task-file.js';
 export { runWorkerLoop } from './worker-loop/loop.js';
-export type { WorkerLoopDeps } from './worker-loop/loop.js';
+export type { WorkerLoopOptions } from './worker-loop/loop.js';
 export { checkOperation } from './heimdall/proxy.js';
 export type { HeimdallOperation, HeimdallDecision } from './heimdall/proxy.js';
