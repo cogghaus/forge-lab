@@ -1,13 +1,14 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useEffect, useTransition } from 'react';
 
 export function TaskDetailRefresh() {
   const router = useRouter();
+  const [, startTransition] = useTransition();
 
   useEffect(() => {
-    const id = setInterval(() => router.refresh(), 4000);
+    const id = setInterval(() => startTransition(() => router.refresh()), 5000);
     return () => clearInterval(id);
   }, [router]);
 
