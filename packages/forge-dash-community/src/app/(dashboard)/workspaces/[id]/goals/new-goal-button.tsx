@@ -14,6 +14,7 @@ import {
   useDisclosure,
 } from '@heroui/react';
 import { useState } from 'react';
+import { toast } from 'sonner';
 import { createGoalAction } from '@/actions/goals';
 import { resolveSelection } from '@/lib/form-fields';
 import type { HubGoal } from '@/lib/hub';
@@ -36,7 +37,9 @@ export function NewGoalButton({ workspaceId, goals }: Props) {
       const result = await createGoalAction(workspaceId, formData);
       if (result?.error) {
         setError(result.error);
+        toast.error(result.error);
       } else {
+        toast.success('Goal created');
         onOpenChange();
       }
     } finally {

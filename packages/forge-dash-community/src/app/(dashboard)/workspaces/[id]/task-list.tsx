@@ -3,7 +3,7 @@
 import { Card, CardBody, Chip } from '@heroui/react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import type { HubGoal, HubTask } from '@/lib/hub';
 
 const STATUS_COLOR: Record<string, 'default' | 'primary' | 'warning' | 'success' | 'danger'> = {
@@ -38,6 +38,7 @@ interface Props {
 export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
   const router = useRouter();
   const [, startTransition] = useTransition();
+  const [isLive, setIsLive] = useState(false);
 
   const goalMap = new Map(goals.map((g) => [g.id, g.title]));
 
@@ -45,6 +46,7 @@ export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
     const hasActive = tasks.some(
       (t) => t.status === 'pending_agent' || t.status === 'assigned' || t.status === 'in_progress',
     );
+    setIsLive(hasActive);
     if (!hasActive) return;
     const id = setInterval(() => startTransition(() => router.refresh()), 5000);
     return () => clearInterval(id);
@@ -62,6 +64,15 @@ export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
 
   return (
     <div className="flex flex-col gap-2">
+      {isLive && (
+        <div className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider text-white/40 mb-1">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#FF6B2B] opacity-60" />
+            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#FF6B2B]" />
+          </span>
+          live
+        </div>
+      )}
       {tasks.map((task) => (
         <Card
           key={task.id}
