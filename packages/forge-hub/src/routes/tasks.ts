@@ -66,6 +66,7 @@ export function registerTaskRoutes(
       title: body.title,
       description: body.description ?? null,
       priority: body.priority ?? 'normal',
+      goalId: body.goalId || null,
       createdBy,
     });
     await db.insert(schema.taskHistory).values({
@@ -207,12 +208,27 @@ export function registerTaskRoutes(
       }
       const id = formatTaskId(body.projectPrefix, maxSeq + 1);
       const createdBy = `user:${getUser(req).id}`;
+      const goalId = body.goalId || null;
+
+      if (goalId) {
+        const goal = await db
+          .select({ id: schema.goals.id })
+          .from(schema.goals)
+          .where(and(eq(schema.goals.id, goalId), eq(schema.goals.workspaceId, workspaceId)))
+          .get();
+        if (!goal) {
+          await reply.code(404).send({ error: 'goal_not_found' });
+          return;
+        }
+      }
+
       await db.insert(schema.tasks).values({
         id,
         projectPrefix: body.projectPrefix,
         title: body.title,
         description: body.description ?? null,
         priority: body.priority ?? 'normal',
+        goalId,
         workspaceId,
         createdBy,
       });

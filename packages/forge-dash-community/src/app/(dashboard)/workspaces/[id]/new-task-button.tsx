@@ -8,13 +8,22 @@ import {
   ModalContent,
   ModalFooter,
   ModalHeader,
+  Select,
+  SelectItem,
   Textarea,
   useDisclosure,
 } from '@heroui/react';
 import { createTaskAction } from '@/actions/tasks';
 import { derivePrefix } from '@/lib/task-prefix';
+import type { HubGoal } from '@/lib/hub';
 
-export function NewTaskButton({ workspaceId, workspaceSlug }: { workspaceId: string; workspaceSlug: string }) {
+interface Props {
+  workspaceId: string;
+  workspaceSlug: string;
+  goals: HubGoal[];
+}
+
+export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
   const projectPrefix = derivePrefix(workspaceSlug);
 
@@ -24,6 +33,8 @@ export function NewTaskButton({ workspaceId, workspaceSlug }: { workspaceId: str
       onOpenChange();
     }
   }
+
+  const activeGoals = goals.filter((g) => g.status === 'active');
 
   return (
     <>
@@ -45,6 +56,15 @@ export function NewTaskButton({ workspaceId, workspaceSlug }: { workspaceId: str
                   placeholder="Optional description"
                   minRows={2}
                 />
+                {activeGoals.length > 0 && (
+                  <Select label="Link to goal" name="goalId" placeholder="None">
+                    {activeGoals.map((goal) => (
+                      <SelectItem key={goal.id}>
+                        {goal.title}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                )}
               </ModalBody>
               <ModalFooter>
                 <Button variant="light" onPress={onClose}>

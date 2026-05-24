@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { hubFetch, type HubTask, type HubWorkspace } from '@/lib/hub';
+import { hubFetch, type HubGoal, type HubTask, type HubWorkspace } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { NewTaskButton } from './new-task-button';
 import { TaskList } from './task-list';
@@ -16,17 +16,17 @@ export default async function WorkspaceTasksPage({ params }: Props) {
 
   const cookieHeader = `${SESSION_COOKIE}=${session}`;
 
-  const [wsRes, tasksRes] = await Promise.all([
+  const [wsRes, tasksRes, goalsRes] = await Promise.all([
     hubFetch<HubWorkspace>(`/workspaces/${workspaceId}`, { cookie: cookieHeader }),
-    hubFetch<{ tasks: HubTask[] }>(`/workspaces/${workspaceId}/tasks`, {
-      cookie: cookieHeader,
-    }),
+    hubFetch<{ tasks: HubTask[] }>(`/workspaces/${workspaceId}/tasks`, { cookie: cookieHeader }),
+    hubFetch<{ goals: HubGoal[] }>(`/workspaces/${workspaceId}/goals`, { cookie: cookieHeader }),
   ]);
 
   if (!wsRes.ok) redirect('/workspaces');
 
   const workspace = wsRes.data;
   const tasks = tasksRes.ok ? tasksRes.data.tasks : [];
+  const goals = goalsRes.ok ? goalsRes.data.goals : [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -52,7 +52,7 @@ export default async function WorkspaceTasksPage({ params }: Props) {
 
       <div className="flex items-center justify-between">
         <p className="text-sm text-default-500">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</p>
-        <NewTaskButton workspaceId={workspaceId} workspaceSlug={workspace.slug} />
+        <NewTaskButton workspaceId={workspaceId} workspaceSlug={workspace.slug} goals={goals} />
       </div>
 
       <TaskList tasks={tasks} workspaceId={workspaceId} />
