@@ -16,7 +16,7 @@ export async function hubFetch<T>(
   } = {},
 ): Promise<HubResponse<T>> {
   const headers: Record<string, string> = {};
-  if (options.cookie) headers['cookie'] = options.cookie;
+  if (options.cookie) headers['cookie'] = options.cookie.replace(/[\r\n\0]/g, '');
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
 
   const res = await fetch(`${HUB_URL}${path}`, {
