@@ -127,29 +127,28 @@
 <header style="background: rgba(13,13,15,0.92); border-bottom: 1px solid rgba(255,255,255,0.05); backdrop-filter: blur(12px); flex-shrink: 0; height: 52px; display: flex; align-items: center; position: relative; z-index: 30;">
   <div style="width: 100%; padding: 0 20px; display: flex; align-items: center; justify-content: space-between;">
 
-    <!-- Logo -->
+    <!-- Left: logo + workspace switcher -->
     <div style="display:flex; align-items:center; gap:10px;">
-      <span style="font-size:20px; line-height:1;">🔥</span>
-      <span class="mono" style="font-size:15px; font-weight:700; letter-spacing:-0.02em;">forge-lab</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:20px; line-height:1;">🔥</span>
+        <span class="mono" style="font-size:15px; font-weight:700; letter-spacing:-0.02em;">forge-lab</span>
+      </div>
+      <span style="color:rgba(255,255,255,0.15); font-size:18px; font-weight:200; line-height:1;">/</span>
+      <button onclick="toggleWsSwitcher()" style="display:flex; align-items:center; gap:6px; padding:4px 8px; border-radius:6px; background:transparent; border:none; font-family:'JetBrains Mono',monospace; font-size:12px; color:rgba(245,240,235,0.55); transition:all 150ms; cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.05)'; this.style.color='var(--text)'" onmouseout="this.style.background='transparent'; this.style.color='rgba(245,240,235,0.55)'">
+        <span id="active-ws-name">Sugar Crash Studios</span>
+        <span style="color:rgba(255,255,255,0.25); font-size:10px;">▾</span>
+      </button>
     </div>
-
-    <!-- Workspace switcher -->
-    <button onclick="toggleWsSwitcher()" style="display:flex; align-items:center; gap:8px; padding:6px 12px; border-radius:8px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--text-dim); transition:all 150ms;" onmouseover="this.style.borderColor='rgba(255,255,255,0.14)'; this.style.color='var(--text)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.08)'; this.style.color='var(--text-dim)'">
-      <span id="active-ws-name">Sugar Crash Studios</span>
-      <span style="color:rgba(255,255,255,0.3); font-size:10px;">▾</span>
-    </button>
 
     <!-- Right controls -->
     <div style="display:flex; align-items:center; gap:10px;">
-      <button id="temp-btn" class="temp-pill temp-warm" onclick="cycleTemp()">🌡 warm</button>
+      <button id="temp-btn" class="temp-pill temp-warm" onclick="cycleTemp()" title="System temperature — ambient activity indicator">🌡 warm</button>
       <div class="mono" style="font-size:11px; color:rgba(255,255,255,0.5);"><span id="active-count">2</span> active</div>
-      <button style="width:30px; height:30px; border-radius:6px; background:transparent; border:none; display:flex; align-items:center; justify-content:center; color:rgba(255,255,255,0.4); font-size:14px;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">⚙</button>
-      <button style="width:30px; height:30px; border-radius:6px; background:rgba(255,255,255,0.06); border:none; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600;" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.06)'">A</button>
     </div>
   </div>
 
   <!-- Workspace switcher dropdown -->
-  <div id="ws-dropdown" style="display:none; position:absolute; top:52px; left:50%; transform:translateX(-50%); width:280px; background:var(--card-hi); border:1px solid var(--border-hi); border-radius:10px; padding:8px; box-shadow:0 16px 40px rgba(0,0,0,0.5); z-index:100;">
+  <div id="ws-dropdown" style="display:none; position:absolute; top:52px; left:20px; width:280px; background:var(--card-hi); border:1px solid var(--border-hi); border-radius:10px; padding:8px; box-shadow:0 16px 40px rgba(0,0,0,0.5); z-index:100;">
     <div style="font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:rgba(245,240,235,0.3); padding:4px 8px 8px;">My Workspaces</div>
     <div class="ws-option active-ws" onclick="switchWs('sugar-crash', 'Sugar Crash Studios')" style="display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-radius:6px; cursor:pointer; background:rgba(255,107,43,0.08);">
       <span style="font-size:13px; color:var(--text);">Sugar Crash Studios</span>
@@ -176,13 +175,13 @@
   <div class="rail-section">Workspaces</div>
 
   <!-- Sugar Crash expanded -->
-  <div>
-    <div class="rail-item active" onclick="navTo('workshop')" id="nav-ws-sugar">
-      <span style="font-size:11px; color:var(--orange);">▾</span>
+  <div id="ws-item-sugar">
+    <div class="rail-item active" onclick="toggleWsExpand('sugar')" id="nav-ws-sugar">
+      <span id="ws-arrow-sugar" style="font-size:11px; color:var(--orange); flex-shrink:0;">▾</span>
       <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Sugar Crash Studios</span>
       <span style="font-family:'JetBrains Mono',monospace; font-size:10px; background:rgba(255,107,43,0.15); color:var(--orange); padding:1px 6px; border-radius:999px;">2</span>
     </div>
-    <div id="ws-subnav" style="margin-bottom:2px;">
+    <div id="ws-subnav-sugar" style="margin-bottom:2px;">
       <div class="ws-sub active" id="sub-workshop" onclick="navTo('workshop')">Workshop</div>
       <div class="ws-sub" id="sub-tasks" onclick="navTo('tasks')">Tasks</div>
       <div class="ws-sub" id="sub-goals" onclick="navTo('goals')">Goals</div>
@@ -192,10 +191,19 @@
   </div>
 
   <!-- my-project collapsed -->
-  <div class="rail-item" id="nav-ws-myproject" onclick="navTo('workshop-2')" style="margin-bottom:4px;">
-    <span style="font-size:11px; color:rgba(255,255,255,0.25);">▸</span>
-    <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px;">my-project</span>
-    <span style="font-family:'JetBrains Mono',monospace; font-size:10px; background:rgba(255,255,255,0.06); color:var(--text-mute); padding:1px 6px; border-radius:999px;">1</span>
+  <div id="ws-item-myproject">
+    <div class="rail-item" onclick="toggleWsExpand('myproject')" id="nav-ws-myproject" style="margin-bottom:2px;">
+      <span id="ws-arrow-myproject" style="font-size:11px; color:rgba(255,255,255,0.25); flex-shrink:0;">▸</span>
+      <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px;">my-project</span>
+      <span style="font-family:'JetBrains Mono',monospace; font-size:10px; background:rgba(255,255,255,0.06); color:var(--text-mute); padding:1px 6px; border-radius:999px;">1</span>
+    </div>
+    <div id="ws-subnav-myproject" style="margin-bottom:2px; display:none;">
+      <div class="ws-sub" onclick="navTo('workshop-2')">Workshop</div>
+      <div class="ws-sub" onclick="navTo('tasks')">Tasks</div>
+      <div class="ws-sub" onclick="navTo('goals')">Goals</div>
+      <div class="ws-sub" onclick="navTo('members')">Members</div>
+      <div class="ws-sub" onclick="navTo('ws-settings')">Settings</div>
+    </div>
   </div>
 
   <div style="padding:4px 12px 6px;">
@@ -244,6 +252,17 @@
   <div class="rail-item" id="nav-settings" onclick="navTo('settings')">
     <span class="rail-icon" style="font-size:13px; width:16px; text-align:center;">⚙</span>
     <span>Settings</span>
+  </div>
+
+  <!-- Profile -->
+  <div style="border-top:1px solid rgba(255,255,255,0.05); margin:10px 0 0;">
+    <div style="display:flex; align-items:center; gap:9px; padding:8px 8px; border-radius:6px; cursor:pointer; transition:background 150ms;" onmouseover="this.style.background='rgba(255,255,255,0.04)'" onmouseout="this.style.background='transparent'" onclick="navTo('settings')">
+      <div style="width:28px; height:28px; border-radius:50%; background:rgba(255,107,43,0.2); display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; color:var(--orange); flex-shrink:0;">A</div>
+      <div style="flex:1; min-width:0;">
+        <div style="font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Adam Coggrave</div>
+        <div style="font-size:10px; color:var(--text-mute); font-family:'JetBrains Mono',monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">adam@cogg.haus</div>
+      </div>
+    </div>
   </div>
 
 </nav>
@@ -366,15 +385,11 @@
 
   <!-- ─── Skills view ─── -->
   <div id="view-skills" class="view-panel" style="display:none; padding:24px;">
-    <h1 class="mono" style="font-size:18px; font-weight:700; margin-bottom:20px;">Skills</h1>
-    <div style="display:flex; flex-direction:column; gap:4px;">
-      ${['bash_exec','file_read','file_write','web_search','code_review','test_runner','deploy_trigger'].map(s=>`
-      <div class="card" style="border-radius:8px; padding:12px 16px; display:flex; align-items:center; gap:16px;">
-        <span class="mono" style="font-size:12px; color:var(--orange); min-width:140px;">${s}</span>
-        <span style="font-size:12px; color:var(--text-dim); flex:1;">System skill · available to all agents</span>
-        <span class="mono" style="font-size:11px; color:var(--text-mute);">0 calls today</span>
-      </div>`).join('')}
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+      <h1 class="mono" style="font-size:18px; font-weight:700;">Skills</h1>
+      <button class="badge badge-active" style="padding:6px 14px; border-radius:6px; font-size:11px; border:1px solid rgba(255,107,43,0.3);">+ Register skill</button>
     </div>
+    <div style="display:flex; flex-direction:column; gap:4px;" id="skills-list"></div>
   </div>
 
   <!-- ─── Org view ─── -->
@@ -680,6 +695,55 @@ function renderTasksList() {
   }).join('');
 }
 
+/* ──────────────── RENDER: skills ──────────────── */
+const SKILLS_DATA = [
+  { name:'bash_exec',       desc:'Execute shell commands in a sandboxed environment', agents:'all',      calls:14 },
+  { name:'file_read',       desc:'Read files from the working directory',              agents:'all',      calls:38 },
+  { name:'file_write',      desc:'Write and edit files in the working directory',      agents:'all',      calls:22 },
+  { name:'web_search',      desc:'Search the web via Brave Search API',                agents:'all',      calls:7  },
+  { name:'code_review',     desc:'Static analysis and diff review tooling',            agents:'sentinel', calls:5  },
+  { name:'test_runner',     desc:'Run vitest / pytest / jest suites',                  agents:'crucible', calls:11 },
+  { name:'deploy_trigger',  desc:'Trigger CI/CD pipeline via webhook',                 agents:'herald',   calls:2  },
+];
+function renderSkills() {
+  const root = document.getElementById('skills-list');
+  if (!root) return;
+  root.innerHTML = SKILLS_DATA.map(s => `
+    <div class="card" style="border-radius:8px; padding:12px 16px; display:flex; align-items:center; gap:16px; cursor:pointer;" onmouseover="this.style.background='var(--card-hi)'" onmouseout="this.style.background='var(--card)'">
+      <span class="mono" style="font-size:12px; color:var(--orange); min-width:130px; flex-shrink:0;">${s.name}</span>
+      <span style="font-size:12px; color:var(--text-dim); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${s.desc}</span>
+      <span class="mono" style="font-size:11px; color:var(--text-mute); flex-shrink:0; min-width:56px; text-align:right;">${s.agents}</span>
+      <span class="mono" style="font-size:11px; color:rgba(74,158,255,0.7); flex-shrink:0; min-width:60px; text-align:right;">${s.calls} calls</span>
+    </div>`).join('');
+}
+
+/* ──────────────── WORKSPACE EXPAND / COLLAPSE ──────────────── */
+const WS_EXPANDED = { sugar: true, myproject: false };
+function toggleWsExpand(wsId) {
+  // Collapse all others
+  Object.keys(WS_EXPANDED).forEach(id => {
+    if (id !== wsId) {
+      WS_EXPANDED[id] = false;
+      const subnav = document.getElementById('ws-subnav-' + id);
+      const arrow  = document.getElementById('ws-arrow-' + id);
+      const row    = document.getElementById('nav-ws-' + id);
+      if (subnav) subnav.style.display = 'none';
+      if (arrow)  { arrow.style.color = 'rgba(255,255,255,0.25)'; arrow.textContent = '▸'; }
+      if (row)    row.classList.remove('active');
+    }
+  });
+  // Toggle target
+  WS_EXPANDED[wsId] = !WS_EXPANDED[wsId];
+  const subnav = document.getElementById('ws-subnav-' + wsId);
+  const arrow  = document.getElementById('ws-arrow-' + wsId);
+  const row    = document.getElementById('nav-ws-' + wsId);
+  if (subnav) subnav.style.display = WS_EXPANDED[wsId] ? 'block' : 'none';
+  if (arrow)  { arrow.style.color = WS_EXPANDED[wsId] ? 'var(--orange)' : 'rgba(255,255,255,0.25)'; arrow.textContent = WS_EXPANDED[wsId] ? '▾' : '▸'; }
+  if (row)    { if (WS_EXPANDED[wsId]) row.classList.add('active'); else row.classList.remove('active'); }
+  // Navigate to that workspace's workshop on expand
+  if (WS_EXPANDED[wsId]) navTo(wsId === 'sugar' ? 'workshop' : 'workshop-2');
+}
+
 /* ──────────────── NAVIGATION ──────────────── */
 const VIEW_MAP = {
   'workshop':    'view-workshop',
@@ -803,6 +867,25 @@ function showAgentPanel(id) {
       </div>
     </div>
 
+    <div class="card" style="border-radius:8px; padding:12px; margin-bottom:12px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-mute);">Output</div>
+        ${a.status==='active' ? `<span style="display:flex; align-items:center; gap:4px; font-family:'JetBrains Mono',monospace; font-size:9px; color:var(--orange);"><span style="width:5px; height:5px; border-radius:50%; background:var(--orange); display:inline-block;"></span>live</span>` : ''}
+      </div>
+      <div style="font-family:'JetBrains Mono',monospace; font-size:10px; line-height:1.7; color:rgba(245,240,235,0.5); background:rgba(0,0,0,0.35); border-radius:6px; padding:8px 10px; max-height:160px; overflow-y:auto;">
+        ${a.status==='active' ? `
+          <div><span style="color:rgba(245,240,235,0.28);">[12:07]</span> <span style="color:rgba(245,240,235,0.85);">editing</span> <span style="color:var(--orange);">compose-prompt.ts:42</span></div>
+          <div><span style="color:rgba(245,240,235,0.28);">[12:07]</span> &gt; writing composeSystemPrompt function</div>
+          <div><span style="color:rgba(245,240,235,0.28);">[12:06]</span> <span style="color:rgba(245,240,235,0.85);">read</span> <span style="color:var(--blue);">src/compose-prompt.ts</span> (88 lines)</div>
+          <div><span style="color:rgba(245,240,235,0.28);">[12:05]</span> <span style="color:rgba(245,240,235,0.85);">read</span> <span style="color:var(--blue);">.forge/tasks/FL-002R.md</span></div>
+          <div><span style="color:rgba(245,240,235,0.28);">[12:04]</span> task claimed · starting work</div>
+        ` : a.status==='waiting' ? `
+          <div><span style="color:rgba(245,240,235,0.28);">[12:00]</span> waiting in queue · ${a.task}</div>
+          <div><span style="color:rgba(245,240,235,0.28);">[11:59]</span> orchestrator queued task</div>
+        ` : `<div style="color:rgba(245,240,235,0.2);">No recent output.</div>`}
+      </div>
+    </div>
+
     <div style="display:flex; gap:6px; margin-top:4px;">
       <button style="flex:1; font-family:'JetBrains Mono',monospace; font-size:11px; padding:7px; border-radius:6px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); color:var(--text-dim); transition:all 150ms;" onmouseover="this.style.background='rgba(255,255,255,0.08)'; this.style.color='var(--text)'" onmouseout="this.style.background='rgba(255,255,255,0.04)'; this.style.color='var(--text-dim)'">New task</button>
       ${a.status==='active' ? `<button style="flex:1; font-family:'JetBrains Mono',monospace; font-size:11px; padding:7px; border-radius:6px; background:rgba(255,71,87,0.08); border:1px solid rgba(255,71,87,0.25); color:var(--red); transition:all 150ms;" onmouseover="this.style.background='rgba(255,71,87,0.15)'" onmouseout="this.style.background='rgba(255,71,87,0.08)'">Stop</button>` : ''}
@@ -922,6 +1005,7 @@ renderDevices();
 renderOrgAgents();
 renderCosts();
 renderTasksList();
+renderSkills();
 requestAnimationFrame(() => requestAnimationFrame(applyMarquees));
 </script>
 </body>
