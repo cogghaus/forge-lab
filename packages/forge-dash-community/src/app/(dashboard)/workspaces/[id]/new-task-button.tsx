@@ -66,6 +66,12 @@ export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
                   placeholder="Optional description"
                   minRows={2}
                 />
+                <Select label="Priority" name="priority" defaultSelectedKeys={['normal']}>
+                  <SelectItem key="low">Low</SelectItem>
+                  <SelectItem key="normal">Normal</SelectItem>
+                  <SelectItem key="high">High</SelectItem>
+                  <SelectItem key="urgent">Urgent</SelectItem>
+                </Select>
                 {activeGoals.length > 0 && (
                   <Select label="Link to goal" name="goalId" placeholder="None">
                     {activeGoals.map((goal) => (
