@@ -1,4 +1,4 @@
-import { Card, CardBody } from '@heroui/react';
+import { Card, CardBody, Chip } from '@heroui/react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { hubFetch, type HubWorkspace } from '@/lib/hub';
@@ -35,12 +35,19 @@ export default async function WorkspacesPage() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {workspaces.map((ws) => (
             <Link key={ws.id} href={`/workspaces/${ws.id}`}>
-              <Card isPressable className="h-full">
+              <Card isPressable className={`h-full ${ws.status === 'archived' ? 'opacity-60' : ''}`}>
                 <CardBody className="gap-1">
-                  <p className="font-semibold">{ws.name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold flex-1 min-w-0 truncate">{ws.name}</p>
+                    {ws.status === 'archived' && (
+                      <Chip size="sm" variant="flat" color="default" className="shrink-0">
+                        archived
+                      </Chip>
+                    )}
+                  </div>
                   <p className="text-xs text-default-400">{ws.slug}</p>
                   {ws.description && (
-                    <p className="mt-1 text-sm text-default-500">{ws.description}</p>
+                    <p className="mt-1 text-sm text-default-500 line-clamp-2">{ws.description}</p>
                   )}
                   <p className="mt-2 text-xs text-default-400 capitalize">Role: {ws.role}</p>
                 </CardBody>
