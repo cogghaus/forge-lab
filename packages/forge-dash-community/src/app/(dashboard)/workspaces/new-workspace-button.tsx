@@ -17,14 +17,20 @@ import { createWorkspaceAction } from '@/actions/workspaces';
 export function NewWorkspaceButton() {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function handleAction(formData: FormData) {
     setError(null);
-    const result = await createWorkspaceAction(formData);
-    if (result?.error) {
-      setError(result.error);
-    } else {
-      onOpenChange();
+    setIsSubmitting(true);
+    try {
+      const result = await createWorkspaceAction(formData);
+      if (result?.error) {
+        setError(result.error);
+      } else {
+        onOpenChange();
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -62,10 +68,10 @@ export function NewWorkspaceButton() {
                 {error && <p className="text-danger text-sm">{error}</p>}
               </ModalBody>
               <ModalFooter>
-                <Button variant="light" onPress={onClose}>
+                <Button type="button" variant="light" onPress={onClose} isDisabled={isSubmitting}>
                   Cancel
                 </Button>
-                <Button color="primary" type="submit">
+                <Button color="primary" type="submit" isLoading={isSubmitting}>
                   Create
                 </Button>
               </ModalFooter>
