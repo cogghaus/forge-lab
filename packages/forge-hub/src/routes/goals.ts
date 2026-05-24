@@ -195,7 +195,15 @@ export function registerGoalRoutes(fastify: FastifyInstance, db: Db): void {
         if (body.status !== undefined) updates['status'] = body.status;
         if (body.parentId !== undefined) updates['parentId'] = body.parentId;
 
-        await tx.update(schema.goals).set(updates).where(eq(schema.goals.id, goalId));
+        const updated = await tx
+          .update(schema.goals)
+          .set(updates)
+          .where(and(eq(schema.goals.id, goalId), eq(schema.goals.workspaceId, workspaceId)))
+          .returning({ id: schema.goals.id });
+        if (updated.length === 0) {
+          errorCode = 404;
+          errorBody = { error: 'not_found' };
+        }
       });
 
       if (errorCode !== null) {
