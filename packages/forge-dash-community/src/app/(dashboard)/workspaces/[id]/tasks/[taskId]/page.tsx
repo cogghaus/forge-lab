@@ -177,6 +177,12 @@ export default async function TaskDetailPage({ params }: Props) {
                 <span>Device: {task.assignedDeviceId}</span>
               </>
             )}
+            {task.assignedAgentId && (
+              <>
+                <span>&middot;</span>
+                <span>Agent: {task.assignedAgentId}</span>
+              </>
+            )}
           </div>
         </CardBody>
       </Card>
