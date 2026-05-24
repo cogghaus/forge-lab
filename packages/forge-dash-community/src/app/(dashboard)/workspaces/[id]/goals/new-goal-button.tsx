@@ -15,6 +15,7 @@ import {
 } from '@heroui/react';
 import { useState } from 'react';
 import { createGoalAction } from '@/actions/goals';
+import { resolveSelection } from '@/lib/form-fields';
 import type { HubGoal } from '@/lib/hub';
 
 interface Props {
@@ -26,6 +27,7 @@ export function NewGoalButton({ workspaceId, goals }: Props) {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [parentId, setParentId] = useState('');
 
   async function handleAction(formData: FormData) {
     setError(null);
@@ -43,7 +45,10 @@ export function NewGoalButton({ workspaceId, goals }: Props) {
   }
 
   function handleOpenChange(open: boolean) {
-    if (!open) setError(null);
+    if (!open) {
+      setError(null);
+      setParentId('');
+    }
     onOpenChange();
   }
 
@@ -61,6 +66,7 @@ export function NewGoalButton({ workspaceId, goals }: Props) {
             <form action={handleAction}>
               <ModalHeader>Create Goal</ModalHeader>
               <ModalBody className="flex flex-col gap-4">
+                {parentId && <input type="hidden" name="parentId" value={parentId} />}
                 <Input label="Title" name="title" placeholder="Goal title" isRequired />
                 <Textarea
                   label="Description"
@@ -71,8 +77,8 @@ export function NewGoalButton({ workspaceId, goals }: Props) {
                 {activeGoals.length > 0 && (
                   <Select
                     label="Parent Goal"
-                    name="parentId"
                     placeholder="None (top-level goal)"
+                    onSelectionChange={(keys) => setParentId(resolveSelection(keys, ''))}
                   >
                     {activeGoals.map((g) => (
                       <SelectItem key={g.id} textValue={g.title}>
