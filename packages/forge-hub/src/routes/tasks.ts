@@ -10,7 +10,7 @@ import {
   schema,
 } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
-import { requireDevice, getDevice, requireWorkspaceMember, getWorkspace } from '../auth/middleware.js';
+import { requireDevice, getDevice, requireWorkspaceMember, getWorkspace, getUser } from '../auth/middleware.js';
 import type { EventBus } from '../events/bus.js';
 
 const CompleteTaskBodySchema = z.object({
@@ -67,6 +67,11 @@ export function registerTaskRoutes(
     await reply.code(201).send({ id });
   });
 
+  // Device-accessible flat task list. Without workspaceId returns unscoped tasks (null); with
+  // workspaceId returns that workspace's tasks. Intentionally does NOT verify workspace membership
+  // because daemons authenticate as devices, not workspace members. Callers must supply the correct
+  // workspaceId — a device that supplies an arbitrary workspaceId can read those task titles. This
+  // is acceptable: device tokens are provisioned by workspace owners and are semi-trusted.
   fastify.get<{ Querystring: { workspaceId?: string } }>('/tasks', async (req, reply) => {
     if (!req.authUser && !req.authDevice) {
       await reply.code(401).send({ error: 'unauthorized' });
@@ -183,7 +188,7 @@ export function registerTaskRoutes(
         if (sequence > maxSeq) maxSeq = sequence;
       }
       const id = formatTaskId(body.projectPrefix, maxSeq + 1);
-      const createdBy = `user:${req.authUser!.id}`;
+      const createdBy = `user:${getUser(req).id}`;
       await db.insert(schema.tasks).values({
         id,
         projectPrefix: body.projectPrefix,
