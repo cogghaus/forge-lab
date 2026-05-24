@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from '@heroui/react';
 
@@ -9,15 +8,7 @@ interface Props {
   reset: () => void;
 }
 
-export default function DashboardError({ error, reset }: Props) {
-  useEffect(() => {
-    // errors captured here are unexpected — log digest for triage
-    if (error.digest) {
-      // eslint-disable-next-line no-console
-      console.error('Dashboard error digest:', error.digest);
-    }
-  }, [error]);
-
+export default function DashboardError({ error: _error, reset }: Props) {
   return (
     <div className="flex flex-col items-center justify-center py-24 gap-4 text-center">
       <h2 className="text-2xl font-bold">Something went wrong</h2>
