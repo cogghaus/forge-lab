@@ -181,6 +181,24 @@ ALTER TABLE task_comments ADD COLUMN workspace_id TEXT REFERENCES workspaces(id)
 CREATE INDEX task_comments_workspace_idx ON task_comments(workspace_id);
 `,
   },
+  {
+    name: '0003_invites',
+    sql: `
+CREATE TABLE invites (
+  id TEXT PRIMARY KEY NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  email TEXT,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+  workspace_role TEXT,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  accepted_at INTEGER,
+  accepted_by TEXT REFERENCES users(id)
+);
+CREATE INDEX invites_token_hash_idx ON invites(token_hash);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {

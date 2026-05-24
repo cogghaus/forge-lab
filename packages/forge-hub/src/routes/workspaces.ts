@@ -76,13 +76,14 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
     '/workspaces/:workspaceId',
     { preHandler: requireWorkspaceMember(db) },
     async (req) => {
-      const { id } = getWorkspace(req);
+      const { id, role } = getWorkspace(req);
       const workspace = await db
         .select()
         .from(schema.workspaces)
         .where(eq(schema.workspaces.id, id))
         .get();
-      return workspace;
+      if (!workspace) return null;
+      return { ...workspace, role };
     },
   );
 
