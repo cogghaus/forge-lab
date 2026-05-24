@@ -81,4 +81,8 @@ Rejected variant: a literal circular agent ring (hub at center, agents positione
 
 ## Fate of these files
 
-These are preserved as the canonical design reference for Phase 2+ dashboard work. When `packages/forge-dash-community` gets scaffolded, the first layout implementation should match `forge-community.html`. When `forge-dash-pro/packages/dash` gets built in Phase 3, it layers the pro aesthetic (approximated here) on top of the same structure. These files do not need to stay in sync with the real implementation after that point; they are the starting vision, not the current state.
+These are preserved as the canonical design reference for the visual identity and workshop-floor layout. Color palette, typography, heat states, badge styles, pipeline pillars, activity stream, and agent card patterns are all still authoritative.
+
+**2026-05-24 direction update:** The community/pro product split is retired. One consolidated dashboard ships everything. Visual fidelity (particles, breathing glows, confetti) becomes a reduce-motion toggle, not a product tier. The layout model has also shifted from workshop-floor-as-homepage (full-page, no nav) to a **left-rail navigation shell** inspired by BridgeMind/Paperclip/Linear — the workshop floor content moves into the main content area of that shell. The agent ring moves from a 4x2 grid in the main area to an inline agent list in the left rail with per-agent progress bars and status dots.
+
+See `docs/forge-dash/01-consolidated-dashboard.md` for the current design target.

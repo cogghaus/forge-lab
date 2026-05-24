@@ -1,0 +1,1012 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>forge-lab · dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:        #0D0D0F;
+    --rail:      #111116;
+    --card:      #1A1A1F;
+    --card-hi:   #24242C;
+    --border:    rgba(255,255,255,0.06);
+    --border-hi: rgba(255,255,255,0.12);
+    --text:      #F5F0EB;
+    --text-dim:  rgba(245,240,235,0.6);
+    --text-mute: rgba(245,240,235,0.35);
+    --orange:    #FF6B2B;
+    --gold:      #FFB547;
+    --blue:      #4A9EFF;
+    --green:     #2DD4A0;
+    --red:       #FF4757;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+  }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+  .card { background: var(--card); border: 1px solid var(--border); }
+  .card:hover { border-color: var(--border-hi); }
+
+  /* Badge styles */
+  .badge { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; display: inline-block; }
+  .badge-pending  { background: rgba(255,255,255,0.06); color: var(--text-dim); }
+  .badge-active   { background: rgba(255,107,43,0.15);  color: var(--orange); border: 1px solid rgba(255,107,43,0.3); }
+  .badge-review   { background: rgba(255,181,71,0.15);  color: var(--gold);   border: 1px solid rgba(255,181,71,0.3); }
+  .badge-complete { background: rgba(45,212,160,0.15);  color: var(--green);  border: 1px solid rgba(45,212,160,0.3); }
+  .badge-attention{ background: rgba(255,71,87,0.15);   color: var(--red);    border: 1px solid rgba(255,71,87,0.3); }
+  .badge-idle     { background: rgba(74,158,255,0.1);   color: var(--blue);   border: 1px solid rgba(74,158,255,0.25); }
+  .badge-waiting  { background: rgba(255,181,71,0.1);   color: var(--gold);   border: 1px solid rgba(255,181,71,0.25); }
+
+  /* Status dots */
+  .dot { width: 7px; height: 7px; border-radius: 999px; display: inline-block; flex-shrink: 0; }
+  .dot-active  { background: var(--orange); box-shadow: 0 0 6px rgba(255,107,43,0.5); }
+  .dot-idle    { background: var(--blue); }
+  .dot-waiting { background: var(--gold); }
+  .dot-offline { background: rgba(255,255,255,0.15); }
+
+  /* Progress bars */
+  .bar { background: rgba(255,255,255,0.06); height: 4px; border-radius: 4px; overflow: hidden; }
+  .bar-fill { background: var(--orange); height: 100%; transition: width 400ms ease; }
+  .bar-waiting { background: rgba(255,181,71,0.25); height: 4px; border-radius: 4px; overflow: hidden; }
+  .bar-waiting-fill { background: repeating-linear-gradient(90deg, rgba(255,181,71,0.5) 0px, rgba(255,181,71,0.5) 4px, transparent 4px, transparent 8px); height: 100%; width: 40%; }
+
+  /* Temperature pill */
+  .temp-pill { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 5px 10px; border-radius: 999px; cursor: pointer; transition: all 200ms ease; }
+  .temp-cold { background: rgba(74,158,255,0.1);   color: var(--blue);   border: 1px solid rgba(74,158,255,0.3); }
+  .temp-warm { background: rgba(255,107,43,0.12);  color: var(--orange); border: 1px solid rgba(255,107,43,0.35); }
+  .temp-hot  { background: rgba(255,181,71,0.15);  color: var(--gold);   border: 1px solid rgba(255,181,71,0.45); }
+
+  /* Rail nav items */
+  .rail-item { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 6px; cursor: pointer; transition: background 150ms; font-size: 13px; color: var(--text-dim); user-select: none; }
+  .rail-item:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+  .rail-item.active { background: rgba(255,107,43,0.08); color: var(--text); }
+  .rail-item.active .rail-icon { color: var(--orange); }
+  .rail-section { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(245,240,235,0.28); padding: 16px 12px 4px; }
+
+  /* Workspace sub-items */
+  .ws-sub { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 28px; border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--text-mute); transition: background 150ms; }
+  .ws-sub:hover { background: rgba(255,255,255,0.03); color: var(--text-dim); }
+  .ws-sub.active { color: var(--text-dim); }
+
+  /* Agent rows in rail */
+  .agent-row { padding: 6px 12px; cursor: pointer; border-radius: 6px; transition: background 150ms; }
+  .agent-row:hover { background: rgba(255,255,255,0.04); }
+  .agent-row.active-agent { background: rgba(255,107,43,0.05); }
+
+  /* Pillar cards */
+  .pillar { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; cursor: pointer; transition: border-color 200ms, background 200ms; }
+  .pillar:hover { border-color: var(--border-hi); background: var(--card-hi); }
+  .pillar.pillar-active { border-color: rgba(255,107,43,0.35); }
+
+  /* Activity rows */
+  .activity-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 6px; cursor: pointer; transition: background 150ms; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .activity-row:hover { background: rgba(255,255,255,0.04); }
+
+  /* Title marquee */
+  .title-wrap { overflow: hidden; white-space: nowrap; min-width: 0; }
+  .title-wrap > span { display: inline-block; }
+  .title-wrap.marquee > span { animation: marquee-slide 14s cubic-bezier(.4,0,.6,1) infinite; }
+  @keyframes marquee-slide {
+    0%, 6%    { transform: translateX(0); }
+    40%, 60%  { transform: translateX(var(--marquee-distance, 0px)); }
+    94%, 100% { transform: translateX(0); }
+  }
+  .ticket { color: rgba(245,240,235,0.85); font-weight: 600; flex-shrink: 0; }
+  .sep { color: rgba(245,240,235,0.25); flex-shrink: 0; padding: 0 3px; }
+
+  /* Detail panel */
+  #detail-panel { width: 380px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--rail); overflow-y: auto; display: none; }
+  #detail-panel.open { display: block; }
+
+  /* Modal */
+  #modal { display: none; position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); align-items: flex-start; justify-content: center; padding: 48px 24px; overflow-y: auto; }
+  #modal.open { display: flex; }
+
+  button { cursor: pointer; }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+  [role="button"]:focus-visible, button:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════ TOP BAR -->
+<header style="background: rgba(13,13,15,0.92); border-bottom: 1px solid rgba(255,255,255,0.05); backdrop-filter: blur(12px); flex-shrink: 0; height: 52px; display: flex; align-items: center; position: relative; z-index: 30;">
+  <div style="width: 100%; padding: 0 20px; display: flex; align-items: center; justify-content: space-between;">
+
+    <!-- Left: logo + workspace switcher -->
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:20px; line-height:1;">🔥</span>
+        <span class="mono" style="font-size:15px; font-weight:700; letter-spacing:-0.02em;">forge-lab</span>
+      </div>
+      <span style="color:rgba(255,255,255,0.15); font-size:18px; font-weight:200; line-height:1;">/</span>
+      <button onclick="toggleWsSwitcher()" style="display:flex; align-items:center; gap:6px; padding:4px 8px; border-radius:6px; background:transparent; border:none; font-family:'JetBrains Mono',monospace; font-size:12px; color:rgba(245,240,235,0.55); transition:all 150ms; cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.05)'; this.style.color='var(--text)'" onmouseout="this.style.background='transparent'; this.style.color='rgba(245,240,235,0.55)'">
+        <span id="active-ws-name">Sugar Crash Studios</span>
+        <span style="color:rgba(255,255,255,0.25); font-size:10px;">▾</span>
+      </button>
+    </div>
+
+    <!-- Right controls -->
+    <div style="display:flex; align-items:center; gap:10px;">
+      <button id="temp-btn" class="temp-pill temp-warm" onclick="cycleTemp()" title="System temperature — ambient activity indicator">🌡 warm</button>
+      <div class="mono" style="font-size:11px; color:rgba(255,255,255,0.5);"><span id="active-count">2</span> active</div>
+    </div>
+  </div>
+
+  <!-- Workspace switcher dropdown -->
+  <div id="ws-dropdown" style="display:none; position:absolute; top:52px; left:20px; width:280px; background:var(--card-hi); border:1px solid var(--border-hi); border-radius:10px; padding:8px; box-shadow:0 16px 40px rgba(0,0,0,0.5); z-index:100;">
+    <div style="font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:rgba(245,240,235,0.3); padding:4px 8px 8px;">My Workspaces</div>
+    <div class="ws-option active-ws" onclick="switchWs('sugar-crash', 'Sugar Crash Studios')" style="display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-radius:6px; cursor:pointer; background:rgba(255,107,43,0.08);">
+      <span style="font-size:13px; color:var(--text);">Sugar Crash Studios</span>
+      <span class="badge badge-active">owner</span>
+    </div>
+    <div class="ws-option" onclick="switchWs('my-project', 'my-project')" style="display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-radius:6px; cursor:pointer;" onmouseover="this.style.background='rgba(255,255,255,0.04)'" onmouseout="this.style.background='transparent'">
+      <span style="font-size:13px; color:var(--text-dim);">my-project</span>
+      <span class="badge badge-pending">owner</span>
+    </div>
+    <div style="border-top:1px solid var(--border); margin:6px 0;"></div>
+    <div style="display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:6px; cursor:pointer; font-size:13px; color:var(--text-mute);" onmouseover="this.style.background='rgba(255,255,255,0.04)'; this.style.color='var(--text-dim)'" onmouseout="this.style.background='transparent'; this.style.color='var(--text-mute)'">
+      <span style="font-size:12px;">+</span> New workspace
+    </div>
+  </div>
+</header>
+
+<!-- ═════���═════════════════════════════════════════════════════ BODY ROW -->
+<div style="display:flex; flex:1; overflow:hidden;">
+
+<!-- ═══════════════════════════════════════════════════════════ LEFT RAIL -->
+<nav style="width:220px; flex-shrink:0; background:var(--rail); border-right:1px solid rgba(255,255,255,0.05); overflow-y:auto; display:flex; flex-direction:column; padding:8px 8px 20px;">
+
+  <!-- WORKSPACES -->
+  <div class="rail-section">Workspaces</div>
+
+  <!-- Sugar Crash expanded -->
+  <div id="ws-item-sugar">
+    <div class="rail-item active" onclick="toggleWsExpand('sugar')" id="nav-ws-sugar">
+      <span id="ws-arrow-sugar" style="font-size:11px; color:var(--orange); flex-shrink:0;">▾</span>
+      <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Sugar Crash Studios</span>
+      <span style="font-family:'JetBrains Mono',monospace; font-size:10px; background:rgba(255,107,43,0.15); color:var(--orange); padding:1px 6px; border-radius:999px;">2</span>
+    </div>
+    <div id="ws-subnav-sugar" style="margin-bottom:2px;">
+      <div class="ws-sub active" id="sub-workshop" onclick="navTo('workshop')">Workshop</div>
+      <div class="ws-sub" id="sub-tasks" onclick="navTo('tasks')">Tasks</div>
+      <div class="ws-sub" id="sub-goals" onclick="navTo('goals')">Goals</div>
+      <div class="ws-sub" id="sub-members" onclick="navTo('members')">Members</div>
+      <div class="ws-sub" id="sub-settings" onclick="navTo('ws-settings')">Settings</div>
+    </div>
+  </div>
+
+  <!-- my-project collapsed -->
+  <div id="ws-item-myproject">
+    <div class="rail-item" onclick="toggleWsExpand('myproject')" id="nav-ws-myproject" style="margin-bottom:2px;">
+      <span id="ws-arrow-myproject" style="font-size:11px; color:rgba(255,255,255,0.25); flex-shrink:0;">▸</span>
+      <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px;">my-project</span>
+      <span style="font-family:'JetBrains Mono',monospace; font-size:10px; background:rgba(255,255,255,0.06); color:var(--text-mute); padding:1px 6px; border-radius:999px;">1</span>
+    </div>
+    <div id="ws-subnav-myproject" style="margin-bottom:2px; display:none;">
+      <div class="ws-sub" onclick="navTo('workshop-2')">Workshop</div>
+      <div class="ws-sub" onclick="navTo('tasks')">Tasks</div>
+      <div class="ws-sub" onclick="navTo('goals')">Goals</div>
+      <div class="ws-sub" onclick="navTo('members')">Members</div>
+      <div class="ws-sub" onclick="navTo('ws-settings')">Settings</div>
+    </div>
+  </div>
+
+  <div style="padding:4px 12px 6px;">
+    <button style="font-size:12px; color:var(--text-mute); background:none; border:1px dashed rgba(255,255,255,0.1); border-radius:6px; padding:4px 10px; width:100%; text-align:left; transition:all 150ms;" onmouseover="this.style.borderColor='rgba(255,107,43,0.3)'; this.style.color='var(--orange)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.1)'; this.style.color='var(--text-mute)'">
+      + New workspace
+    </button>
+  </div>
+
+  <div style="border-top:1px solid rgba(255,255,255,0.05); margin:8px 0;"></div>
+
+  <!-- TASKS -->
+  <div class="rail-section">Tasks</div>
+  <div class="rail-item" id="nav-all-tasks" onclick="navTo('tasks')">
+    <span class="rail-icon" style="font-size:13px; width:16px; text-align:center;">☰</span>
+    <span>All tasks</span>
+  </div>
+  <div style="padding:0 8px 4px;">
+    <button style="font-size:12px; color:var(--text-mute); background:none; border:1px dashed rgba(255,255,255,0.1); border-radius:6px; padding:4px 10px; width:100%; text-align:left; transition:all 150ms;" onmouseover="this.style.borderColor='rgba(255,107,43,0.3)'; this.style.color='var(--orange)'" onmouseout="this.style.borderColor='rgba(255,255,255,0.1)'; this.style.color='var(--text-mute)'">
+      + New task
+    </button>
+  </div>
+
+  <div style="border-top:1px solid rgba(255,255,255,0.05); margin:8px 0;"></div>
+
+  <!-- AGENTS -->
+  <div class="rail-section">Agents</div>
+  <div id="agent-rail"></div>
+
+  <div style="flex:1;"></div>
+  <div style="border-top:1px solid rgba(255,255,255,0.05); margin:8px 0;"></div>
+
+  <!-- Bottom nav -->
+  <div class="rail-item" id="nav-skills" onclick="navTo('skills')">
+    <span class="rail-icon" style="font-size:13px; width:16px; text-align:center;">⚡</span>
+    <span>Skills</span>
+  </div>
+  <div class="rail-item" id="nav-org" onclick="navTo('org')">
+    <span class="rail-icon" style="font-size:13px; width:16px; text-align:center;">🏛</span>
+    <span>Org</span>
+  </div>
+  <div class="rail-item" id="nav-costs" onclick="navTo('costs')">
+    <span class="rail-icon" style="font-size:13px; width:16px; text-align:center;">$</span>
+    <span>Costs</span>
+    <span style="margin-left:auto; font-family:'JetBrains Mono',monospace; font-size:10px; color:rgba(255,181,71,0.8);">$4.20</span>
+  </div>
+  <div class="rail-item" id="nav-settings" onclick="navTo('settings')">
+    <span class="rail-icon" style="font-size:13px; width:16px; text-align:center;">⚙</span>
+    <span>Settings</span>
+  </div>
+
+  <!-- Profile -->
+  <div style="border-top:1px solid rgba(255,255,255,0.05); margin:10px 0 0;">
+    <div style="display:flex; align-items:center; gap:9px; padding:8px 8px; border-radius:6px; cursor:pointer; transition:background 150ms;" onmouseover="this.style.background='rgba(255,255,255,0.04)'" onmouseout="this.style.background='transparent'" onclick="navTo('settings')">
+      <div style="width:28px; height:28px; border-radius:50%; background:rgba(255,107,43,0.2); display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; color:var(--orange); flex-shrink:0;">A</div>
+      <div style="flex:1; min-width:0;">
+        <div style="font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Adam Coggrave</div>
+        <div style="font-size:10px; color:var(--text-mute); font-family:'JetBrains Mono',monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">adam@cogg.haus</div>
+      </div>
+    </div>
+  </div>
+
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════ MAIN CONTENT -->
+<main id="main-content" style="flex:1; overflow-y:auto; background-image: radial-gradient(at 20% 0%, rgba(255,107,43,0.035) 0px, transparent 45%), radial-gradient(at 80% 100%, rgba(74,158,255,0.025) 0px, transparent 45%);">
+
+  <!-- ─── Workshop view (default) ─── -->
+  <div id="view-workshop" class="view-panel" style="padding:24px; display:block;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+      <div>
+        <h1 class="mono" style="font-size:18px; font-weight:700;">Sugar Crash Studios</h1>
+        <p style="font-size:12px; color:var(--text-mute); margin-top:2px;">Workshop · live dashboard</p>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="display:flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--orange);">
+          <span style="width:6px; height:6px; border-radius:50%; background:var(--orange); box-shadow:0 0 6px rgba(255,107,43,0.6); display:inline-block; animation: pulse-dot 2s infinite;"></span>
+          2 active
+        </span>
+      </div>
+    </div>
+
+    <!-- Pipeline pillars -->
+    <section style="margin-bottom:24px;">
+      <div style="font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:rgba(245,240,235,0.3); margin-bottom:10px;">Pipeline</div>
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px;" id="pipeline-grid"></div>
+    </section>
+
+    <!-- Activity stream + devices -->
+    <section style="display:grid; grid-template-columns:1fr 260px; gap:16px;">
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+          <span class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:rgba(245,240,235,0.35);">Activity stream</span>
+          <div style="display:flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--orange);">
+            <span style="width:5px; height:5px; border-radius:50%; background:var(--orange); display:inline-block;"></span>
+            live
+          </div>
+        </div>
+        <div id="activity-list"></div>
+      </div>
+
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:rgba(245,240,235,0.35); margin-bottom:12px;">Devices</div>
+        <div id="device-list"></div>
+        <div style="margin-top:16px; padding-top:14px; border-top:1px solid rgba(255,255,255,0.05);">
+          <div class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:rgba(245,240,235,0.35); margin-bottom:8px;">Forge queue</div>
+          <div class="mono" style="font-size:13px; color:var(--text-dim);">0 waiting</div>
+          <div class="mono" style="font-size:11px; color:var(--text-mute); margin-top:4px;">Auto-spawn: <span style="color:var(--text-dim);">off</span></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ─── Tasks view ─── -->
+  <div id="view-tasks" class="view-panel" style="display:none; padding:24px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+      <h1 class="mono" style="font-size:18px; font-weight:700;">Tasks</h1>
+      <button class="badge badge-active" style="padding:6px 14px; border-radius:6px; font-size:11px; border:1px solid rgba(255,107,43,0.3);">+ New task</button>
+    </div>
+    <div style="display:flex; gap:8px; margin-bottom:16px;">
+      <span class="badge badge-active" style="cursor:pointer; padding:4px 12px;">active</span>
+      <span class="badge badge-pending" style="cursor:pointer; padding:4px 12px;">pending</span>
+      <span class="badge badge-review" style="cursor:pointer; padding:4px 12px;">review</span>
+      <span class="badge badge-complete" style="cursor:pointer; padding:4px 12px;">complete</span>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px;" id="tasks-list"></div>
+  </div>
+
+  <!-- ─── Goals view ─── -->
+  <div id="view-goals" class="view-panel" style="display:none; padding:24px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+      <h1 class="mono" style="font-size:18px; font-weight:700;">Goals</h1>
+      <button class="badge badge-active" style="padding:6px 14px; border-radius:6px; font-size:11px; border:1px solid rgba(255,107,43,0.3);">+ New goal</button>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:12px;">
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span>🎯</span>
+            <span style="font-weight:600;">Ship Phase 2 multi-tenancy</span>
+            <span class="badge badge-active">active</span>
+          </div>
+          <span class="mono" style="font-size:11px; color:var(--text-mute);">8 tasks · 6 done</span>
+        </div>
+        <div class="bar" style="height:5px;"><div class="bar-fill" style="width:75%;"></div></div>
+        <div class="mono" style="font-size:10px; color:var(--text-mute); margin-top:4px;">75%</div>
+      </div>
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span>🎯</span>
+            <span style="font-weight:600;">Consolidated dashboard</span>
+            <span class="badge badge-active">active</span>
+          </div>
+          <span class="mono" style="font-size:11px; color:var(--text-mute);">0 tasks</span>
+        </div>
+        <div class="bar" style="height:5px;"><div class="bar-fill" style="width:0%;"></div></div>
+        <div class="mono" style="font-size:10px; color:var(--text-mute); margin-top:4px;">0%</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Members view ─── -->
+  <div id="view-members" class="view-panel" style="display:none; padding:24px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+      <h1 class="mono" style="font-size:18px; font-weight:700;">Members</h1>
+      <button class="badge badge-active" style="padding:6px 14px; border-radius:6px; font-size:11px; border:1px solid rgba(255,107,43,0.3);">+ Invite</button>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div class="card" style="border-radius:8px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
+        <div style="width:32px; height:32px; border-radius:50%; background:rgba(255,107,43,0.2); display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:700; color:var(--orange);">A</div>
+        <div style="flex:1;">
+          <div style="font-weight:600; font-size:14px;">Adam Coggrave</div>
+          <div style="font-size:12px; color:var(--text-mute); margin-top:1px;">adam@cogg.haus · joined Jan 2026</div>
+        </div>
+        <span class="badge badge-active">owner</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Skills view ─── -->
+  <div id="view-skills" class="view-panel" style="display:none; padding:24px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+      <h1 class="mono" style="font-size:18px; font-weight:700;">Skills</h1>
+      <button class="badge badge-active" style="padding:6px 14px; border-radius:6px; font-size:11px; border:1px solid rgba(255,107,43,0.3);">+ Register skill</button>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:4px;" id="skills-list"></div>
+  </div>
+
+  <!-- ─── Org view ─── -->
+  <div id="view-org" class="view-panel" style="display:none; padding:24px;">
+    <h1 class="mono" style="font-size:18px; font-weight:700; margin-bottom:20px;">Org</h1>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-mute); margin-bottom:12px;">Orchestrator</div>
+        <div style="display:flex; flex-direction:column; gap:8px; font-size:13px;">
+          <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-dim);">Heartbeat interval</span><span class="mono">30s</span></div>
+          <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-dim);">Max concurrent agents</span><span class="mono">4</span></div>
+          <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-dim);">Dispatch strategy</span><span class="mono">round-robin</span></div>
+          <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-dim);">Status</span><span class="mono" style="color:var(--green);">running</span></div>
+        </div>
+      </div>
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-mute); margin-bottom:12px;">Agent roster</div>
+        <div id="org-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Costs view ─── -->
+  <div id="view-costs" class="view-panel" style="display:none; padding:24px;">
+    <h1 class="mono" style="font-size:18px; font-weight:700; margin-bottom:4px;">Costs</h1>
+    <p style="font-size:12px; color:var(--text-mute); margin-bottom:20px;">May 2026</p>
+    <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:20px;">
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-mute); margin-bottom:6px;">This month</div>
+        <div class="mono" style="font-size:28px; font-weight:700; color:var(--gold);">$4.20</div>
+      </div>
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-mute); margin-bottom:6px;">Last month</div>
+        <div class="mono" style="font-size:28px; font-weight:700;">$11.84</div>
+      </div>
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-mute); margin-bottom:6px;">All time</div>
+        <div class="mono" style="font-size:28px; font-weight:700;">$38.61</div>
+      </div>
+    </div>
+    <div class="card" style="border-radius:10px; padding:16px;">
+      <div class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-mute); margin-bottom:12px;">By agent · this month</div>
+      <div id="costs-agent-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+    </div>
+  </div>
+
+  <!-- ─── Settings view ─── -->
+  <div id="view-settings" class="view-panel" style="display:none; padding:24px;">
+    <h1 class="mono" style="font-size:18px; font-weight:700; margin-bottom:20px;">Settings</h1>
+    <div style="display:flex; flex-direction:column; gap:16px; max-width:480px;">
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-mute); margin-bottom:12px;">Profile</div>
+        <div style="display:flex; flex-direction:column; gap:10px; font-size:13px; color:var(--text-dim);">
+          <div style="display:flex; justify-content:space-between;"><span>Email</span><span class="mono">adam@cogg.haus</span></div>
+          <div style="display:flex; justify-content:space-between;"><span>Name</span><span class="mono">Adam Coggrave</span></div>
+        </div>
+      </div>
+      <div class="card" style="border-radius:10px; padding:16px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-mute); margin-bottom:12px;">Appearance</div>
+        <div style="display:flex; align-items:center; justify-content:space-between; font-size:13px;">
+          <span style="color:var(--text-dim);">Reduce motion</span>
+          <div style="width:40px; height:22px; border-radius:999px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.1); cursor:pointer; position:relative;" onclick="this.dataset.on=!this.dataset.on; this.style.background=this.dataset.on?'rgba(255,107,43,0.4)':'rgba(255,255,255,0.1)'">
+            <div style="position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:rgba(255,255,255,0.7); transition:left 200ms;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════ DETAIL PANEL -->
+<div id="detail-panel">
+  <div style="padding:16px; border-bottom:1px solid rgba(255,255,255,0.05); display:flex; align-items:center; justify-content:space-between;">
+    <span class="mono" style="font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-mute);" id="panel-label">Agent</span>
+    <button onclick="closePanel()" style="color:rgba(255,255,255,0.35); background:none; border:none; font-size:18px; line-height:1; width:24px; height:24px;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='rgba(255,255,255,0.35)'">×</button>
+  </div>
+  <div id="panel-content" style="padding:16px;"></div>
+</div>
+
+</div><!-- end body row -->
+
+<!-- ═══════════════════════════════════════════════════════════ MODAL -->
+<div id="modal" onclick="if(event.target.id==='modal')closeModal()">
+  <div class="card" style="border-radius:14px; max-width:680px; width:100%; margin-top:20px; margin-bottom:40px; padding:24px; box-shadow:0 24px 60px rgba(0,0,0,0.6);" id="modal-card">
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:16px;">
+      <div id="modal-header"></div>
+      <button onclick="closeModal()" style="color:rgba(255,255,255,0.35); background:none; border:none; font-size:22px; line-height:1; flex-shrink:0; margin-left:16px;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='rgba(255,255,255,0.35)'">×</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<style>
+@keyframes pulse-dot {
+  0%, 100% { opacity:1; box-shadow: 0 0 6px rgba(255,107,43,0.6); }
+  50%       { opacity:0.7; box-shadow: 0 0 12px rgba(255,107,43,0.8); }
+}
+</style>
+
+<script>
+/* ──────────────── DATA ──────────────── */
+const TASKS = {
+  'FL-001':     { title:'Port minimum-viable-council personalities',            agent:'scribe',   icon:'📜' },
+  'FL-001b':    { title:'Deny-list smoke test',                                  agent:'crucible', icon:'🧪' },
+  'FL-002R':    { title:'Composition helper + daemon wiring + smoke test',      agent:'anvil',    icon:'🔨' },
+  'FL-003':     { title:'BOM handling + content gate refactor',                 agent:null,       icon:null },
+  'FL-004':     { title:'forge-dash-community scaffold',                        agent:null,       icon:null },
+  'FL-005':     { title:'Heimdall v1 daemon proxy',                             agent:null,       icon:null },
+  'FL-006':     { title:'Consolidated dashboard — left-rail shell',             agent:null,       icon:null },
+  'FL-REV-001': { title:'Code review of FL-001 delivery',                       agent:'temper',   icon:'⚖️' },
+  'FL-PHASE1':  { title:'Phase 1 vertical slice',                               agent:'anvil',    icon:'🔨' },
+};
+
+const STATE = {
+  temperature: 'warm',
+  pipeline: {
+    pending:  { count:4,  label:'Pending',  ids:['FL-003','FL-004','FL-005','FL-006'] },
+    active:   { count:2,  label:'Active',   ids:['FL-002R','FL-001b'] },
+    review:   { count:1,  label:'Review',   ids:['FL-REV-001'] },
+    complete: { count:27, label:'Complete', ids:['FL-001','FL-PHASE1','...'] },
+  },
+  agents: [
+    { id:'architect', name:'Architect', icon:'🏛️', status:'idle',    task:null,      progress:0,  cost:0.12 },
+    { id:'anvil',     name:'Anvil',     icon:'🔨', status:'active',  task:'FL-002R', progress:62, cost:0.84 },
+    { id:'furnace',   name:'Furnace',   icon:'🔥', status:'offline', task:null,      progress:0,  cost:0.00 },
+    { id:'crucible',  name:'Crucible',  icon:'🧪', status:'active',  task:'FL-001b', progress:12, cost:1.20 },
+    { id:'temper',    name:'Temper',    icon:'⚖️', status:'idle',    task:null,      progress:0,  cost:0.45 },
+    { id:'scribe',    name:'Scribe',    icon:'📜', status:'idle',    task:null,      progress:0,  cost:0.31 },
+    { id:'aegis',     name:'Aegis',     icon:'🛡️', status:'waiting', task:'FL-006',  progress:0,  cost:0.00 },
+    { id:'loki',      name:'Loki',      icon:'🎭', status:'hub',     task:null,      progress:0,  cost:0.28 },
+  ],
+  devices: [
+    { id:'workstation', label:'workstation', kind:'🖥', status:'online',  lastSeen:'live' },
+    { id:'laptop',      label:'laptop',      kind:'💻', status:'online',  lastSeen:'live' },
+    { id:'workbench',   label:'workbench',   kind:'🏢', status:'offline', lastSeen:'2h ago' },
+  ],
+  activity: [
+    { t:'12:04', agent:'🔨', actor:'Anvil',    verb:'claimed',   id:'FL-002R', kind:'active' },
+    { t:'12:03', agent:'⚖️', actor:'Temper',   verb:'approved',  id:'FL-001',  kind:'complete' },
+    { t:'12:01', agent:'🧪', actor:'Crucible', verb:'completed', id:'FL-REV-002', kind:'complete' },
+    { t:'11:58', agent:'📜', actor:'Scribe',   verb:'started',   id:'FL-001',  kind:'active' },
+    { t:'11:45', agent:'⚒️', actor:'Hub',      verb:'approved',  id:'FL-PHASE1', kind:'complete' },
+    { t:'11:30', agent:'🎭', actor:'Loki',     verb:'flagged',   id:'FL-REV-004', kind:'attention' },
+    { t:'11:22', agent:'🔨', actor:'Anvil',    verb:'claimed',   id:'FL-PHASE1', kind:'active' },
+    { t:'11:05', agent:'🛡️', actor:'Aegis',    verb:'cleared',   id:'FL-001',   kind:'complete' },
+  ],
+};
+
+/* ──────────────── RENDER: left rail agents ──────────────── */
+function renderAgentRail() {
+  const root = document.getElementById('agent-rail');
+  root.innerHTML = STATE.agents.map(a => {
+    const isActive  = a.status === 'active';
+    const isWaiting = a.status === 'waiting';
+    const isLoki    = a.status === 'hub';
+    const dotClass  = isActive ? 'dot-active' : isWaiting ? 'dot-waiting' : a.status === 'idle' ? 'dot-idle' : 'dot-offline';
+    const statusLabel = isLoki ? 'hub-side' : a.status;
+
+    let progressHtml = '';
+    if (isActive && a.task) {
+      const taskTitle = TASKS[a.task]?.title ?? '';
+      progressHtml = `
+        <div style="padding:3px 12px 6px 32px;">
+          <div class="bar" style="margin-bottom:4px;"><div class="bar-fill" style="width:${a.progress}%;"></div></div>
+          <div style="display:flex; align-items:center; gap:4px; font-family:'JetBrains Mono',monospace; font-size:10px; color:rgba(245,240,235,0.45);">
+            <span style="color:rgba(245,240,235,0.7); font-weight:600;">${a.task}</span>
+            <span style="color:rgba(245,240,235,0.25);">·</span>
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;">${taskTitle}</span>
+          </div>
+        </div>`;
+    } else if (isWaiting && a.task) {
+      progressHtml = `
+        <div style="padding:3px 12px 6px 32px;">
+          <div class="bar-waiting"><div class="bar-waiting-fill"></div></div>
+          <div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:rgba(245,240,235,0.35); margin-top:3px;">queued · ${a.task}</div>
+        </div>`;
+    }
+
+    return `
+      <div class="agent-row ${isActive ? 'active-agent' : ''}" onclick="showAgentPanel('${a.id}')" style="${isLoki ? 'opacity:0.45;' : ''}">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="dot ${dotClass}" style="margin-top:1px; flex-shrink:0;"></span>
+          <span style="font-size:13px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; ${isActive ? 'color:var(--text);' : 'color:var(--text-dim);'}">${a.name}</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.06em; color:${isActive?'var(--orange)':isWaiting?'var(--gold)':a.status==='idle'?'rgba(74,158,255,0.7)':'rgba(255,255,255,0.2)'}; text-transform:uppercase; flex-shrink:0;">${statusLabel}</span>
+        </div>
+        ${progressHtml}
+      </div>`;
+  }).join('');
+}
+
+/* ──────────────── RENDER: pipeline pillars ──────────────── */
+const PILLAR_KEYS = ['pending','active','review','complete'];
+function renderPipeline() {
+  const root = document.getElementById('pipeline-grid');
+  root.innerHTML = '';
+  for (const key of PILLAR_KEYS) {
+    const p = STATE.pipeline[key];
+    const el = document.createElement('div');
+    el.className = 'pillar' + (key==='active' ? ' pillar-active' : '');
+    el.onclick = () => showPillarModal(key);
+    el.innerHTML = `
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+        <span class="mono" style="font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:rgba(245,240,235,0.45);">${p.label}</span>
+        <span class="badge badge-${key==='complete'?'complete':key==='review'?'review':key==='active'?'active':'pending'}">${key}</span>
+      </div>
+      <div class="mono" style="font-size:36px; font-weight:700; line-height:1; margin-bottom:10px;">${p.count}</div>
+      <div style="display:flex; gap:2px; margin-bottom:10px;">
+        ${Array.from({length:10}).map((_,i)=>{
+          const filled = i < Math.min(10,p.count);
+          const col = key==='active'?'#FF6B2B':key==='review'?'#FFB547':key==='complete'?'#2DD4A0':'rgba(255,255,255,0.18)';
+          return `<div style="flex:1; height:3px; border-radius:2px; background:${filled?col:'rgba(255,255,255,0.07)'};"></div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex; flex-direction:column; gap:3px;">
+        ${p.ids.slice(0,3).map(id=>{
+          if(id==='...') return `<div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:rgba(245,240,235,0.25); padding:2px 0;">+${Math.max(0,p.count-p.ids.length+1)} more</div>`;
+          const meta = TASKS[id];
+          return `<div style="display:flex; align-items:center; gap:4px; font-family:'JetBrains Mono',monospace; font-size:10px;">
+            <span style="width:16px; text-align:center; flex-shrink:0; font-size:12px;">${meta?.icon??''}</span>
+            <span style="color:rgba(245,240,235,0.8); font-weight:600; flex-shrink:0;">${id}</span>
+            <span style="color:rgba(245,240,235,0.25); flex-shrink:0;">·</span>
+            <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:rgba(245,240,235,0.5);">${meta?.title??''}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    `;
+    root.appendChild(el);
+  }
+}
+
+/* ──────────────── RENDER: activity stream ──────────────── */
+function renderActivity() {
+  const root = document.getElementById('activity-list');
+  root.innerHTML = STATE.activity.map(e => `
+    <div class="activity-row" onclick="showTaskModal('${e.id}')">
+      <span style="color:rgba(245,240,235,0.3); width:38px; flex-shrink:0;">${e.t}</span>
+      <span style="font-size:14px; flex-shrink:0;">${e.agent}</span>
+      <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:rgba(245,240,235,0.7);">
+        <span style="color:var(--text); font-weight:600;">${e.actor}</span> ${e.verb} <span style="color:var(--text);">${e.id}</span>
+      </span>
+      <span class="badge badge-${e.kind}" style="flex-shrink:0;">${e.kind}</span>
+    </div>
+  `).join('');
+}
+
+/* ──────────────── RENDER: devices ──────────────── */
+function renderDevices() {
+  const root = document.getElementById('device-list');
+  root.innerHTML = STATE.devices.map(d => `
+    <div style="display:flex; align-items:center; gap:10px; padding:4px 0; font-size:13px;">
+      <span style="font-size:16px;">${d.kind}</span>
+      <div style="flex:1; min-width:0;">
+        <div class="mono" style="font-weight:600; font-size:12px;">${d.label}</div>
+        <div class="mono" style="font-size:10px; color:var(--text-mute);">${d.lastSeen}</div>
+      </div>
+      <span class="dot ${d.status==='online'?'dot-active':'dot-offline'}"></span>
+    </div>
+  `).join('');
+}
+
+/* ──────────────── RENDER: org agent list ──────────────── */
+function renderOrgAgents() {
+  document.getElementById('org-agent-list').innerHTML = STATE.agents.map(a => `
+    <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
+      <span style="font-size:14px;">${a.icon}</span>
+      <span class="mono" style="flex:1;">${a.name}</span>
+      <span class="badge badge-${a.status==='active'?'active':a.status==='idle'?'idle':a.status==='waiting'?'waiting':'pending'}">${a.status}</span>
+    </div>
+  `).join('');
+}
+
+/* ──────────────── RENDER: costs agent list ──────────────── */
+function renderCosts() {
+  document.getElementById('costs-agent-list').innerHTML = STATE.agents.map(a => {
+    const pct = Math.round((a.cost / 4.20) * 100);
+    return `
+      <div style="display:flex; align-items:center; gap:12px; font-size:12px;">
+        <span style="font-size:13px;">${a.icon}</span>
+        <span class="mono" style="width:80px; flex-shrink:0; color:var(--text-dim);">${a.name}</span>
+        <div style="flex:1;">
+          <div class="bar" style="height:5px;"><div class="bar-fill" style="width:${pct}%; background:var(--gold);"></div></div>
+        </div>
+        <span class="mono" style="width:40px; text-align:right; color:var(--gold);">$${a.cost.toFixed(2)}</span>
+      </div>`;
+  }).join('');
+}
+
+/* ──────────────── RENDER: tasks list ──────────────── */
+function renderTasksList() {
+  const all = Object.entries(TASKS);
+  document.getElementById('tasks-list').innerHTML = all.map(([id, meta]) => {
+    const inPipeline = Object.entries(STATE.pipeline).find(([,v]) => v.ids.includes(id));
+    const status = inPipeline ? inPipeline[0] : 'complete';
+    return `
+      <div class="card" style="border-radius:8px; padding:10px 14px; display:flex; align-items:center; gap:10px; cursor:pointer;" onclick="showTaskModal('${id}')">
+        <span style="font-size:16px; flex-shrink:0;">${meta.icon??'○'}</span>
+        <span class="mono" style="font-size:11px; font-weight:600; color:rgba(245,240,235,0.7); flex-shrink:0; min-width:72px;">${id}</span>
+        <span style="flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${meta.title}</span>
+        ${meta.agent ? `<span class="mono" style="font-size:11px; color:var(--text-mute); flex-shrink:0;">${meta.agent}</span>` : ''}
+        <span class="badge badge-${status==='complete'?'complete':status==='review'?'review':status==='active'?'active':'pending'}" style="flex-shrink:0;">${status}</span>
+      </div>`;
+  }).join('');
+}
+
+/* ──────────────── RENDER: skills ──────────────── */
+const SKILLS_DATA = [
+  { name:'bash_exec',       desc:'Execute shell commands in a sandboxed environment', agents:'all',      calls:14 },
+  { name:'file_read',       desc:'Read files from the working directory',              agents:'all',      calls:38 },
+  { name:'file_write',      desc:'Write and edit files in the working directory',      agents:'all',      calls:22 },
+  { name:'web_search',      desc:'Search the web via Brave Search API',                agents:'all',      calls:7  },
+  { name:'code_review',     desc:'Static analysis and diff review tooling',            agents:'sentinel', calls:5  },
+  { name:'test_runner',     desc:'Run vitest / pytest / jest suites',                  agents:'crucible', calls:11 },
+  { name:'deploy_trigger',  desc:'Trigger CI/CD pipeline via webhook',                 agents:'herald',   calls:2  },
+];
+function renderSkills() {
+  const root = document.getElementById('skills-list');
+  if (!root) return;
+  root.innerHTML = SKILLS_DATA.map(s => `
+    <div class="card" style="border-radius:8px; padding:12px 16px; display:flex; align-items:center; gap:16px; cursor:pointer;" onmouseover="this.style.background='var(--card-hi)'" onmouseout="this.style.background='var(--card)'">
+      <span class="mono" style="font-size:12px; color:var(--orange); min-width:130px; flex-shrink:0;">${s.name}</span>
+      <span style="font-size:12px; color:var(--text-dim); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${s.desc}</span>
+      <span class="mono" style="font-size:11px; color:var(--text-mute); flex-shrink:0; min-width:56px; text-align:right;">${s.agents}</span>
+      <span class="mono" style="font-size:11px; color:rgba(74,158,255,0.7); flex-shrink:0; min-width:60px; text-align:right;">${s.calls} calls</span>
+    </div>`).join('');
+}
+
+/* ──────────────── WORKSPACE EXPAND / COLLAPSE ──────────────── */
+const WS_EXPANDED = { sugar: true, myproject: false };
+function toggleWsExpand(wsId) {
+  // Collapse all others
+  Object.keys(WS_EXPANDED).forEach(id => {
+    if (id !== wsId) {
+      WS_EXPANDED[id] = false;
+      const subnav = document.getElementById('ws-subnav-' + id);
+      const arrow  = document.getElementById('ws-arrow-' + id);
+      const row    = document.getElementById('nav-ws-' + id);
+      if (subnav) subnav.style.display = 'none';
+      if (arrow)  { arrow.style.color = 'rgba(255,255,255,0.25)'; arrow.textContent = '▸'; }
+      if (row)    row.classList.remove('active');
+    }
+  });
+  // Toggle target
+  WS_EXPANDED[wsId] = !WS_EXPANDED[wsId];
+  const subnav = document.getElementById('ws-subnav-' + wsId);
+  const arrow  = document.getElementById('ws-arrow-' + wsId);
+  const row    = document.getElementById('nav-ws-' + wsId);
+  if (subnav) subnav.style.display = WS_EXPANDED[wsId] ? 'block' : 'none';
+  if (arrow)  { arrow.style.color = WS_EXPANDED[wsId] ? 'var(--orange)' : 'rgba(255,255,255,0.25)'; arrow.textContent = WS_EXPANDED[wsId] ? '▾' : '▸'; }
+  if (row)    { if (WS_EXPANDED[wsId]) row.classList.add('active'); else row.classList.remove('active'); }
+  // Navigate to that workspace's workshop on expand
+  if (WS_EXPANDED[wsId]) navTo(wsId === 'sugar' ? 'workshop' : 'workshop-2');
+}
+
+/* ──────────────── NAVIGATION ──────────────── */
+const VIEW_MAP = {
+  'workshop':    'view-workshop',
+  'workshop-2':  'view-workshop',
+  'tasks':       'view-tasks',
+  'goals':       'view-goals',
+  'members':     'view-members',
+  'ws-settings': 'view-settings',
+  'skills':      'view-skills',
+  'org':         'view-org',
+  'costs':       'view-costs',
+  'settings':    'view-settings',
+};
+const SUB_MAP = {
+  'workshop':    'sub-workshop',
+  'tasks':       'sub-tasks',
+  'goals':       'sub-goals',
+  'members':     'sub-members',
+  'ws-settings': 'sub-settings',
+};
+const NAV_MAP = {
+  'skills':   'nav-skills',
+  'org':      'nav-org',
+  'costs':    'nav-costs',
+  'settings': 'nav-settings',
+  'tasks':    'nav-all-tasks',
+};
+
+let currentView = 'workshop';
+
+function navTo(view) {
+  closePanel();
+
+  // Hide all panels
+  document.querySelectorAll('.view-panel').forEach(el => el.style.display = 'none');
+
+  // Show target
+  const targetId = VIEW_MAP[view] ?? 'view-workshop';
+  const target = document.getElementById(targetId);
+  if (target) target.style.display = 'block';
+
+  // Clear active states
+  document.querySelectorAll('.ws-sub').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.rail-item').forEach(el => el.classList.remove('active'));
+
+  // Set active sub-item
+  const subId = SUB_MAP[view];
+  if (subId) document.getElementById(subId)?.classList.add('active');
+
+  const navId = NAV_MAP[view];
+  if (navId) document.getElementById(navId)?.classList.add('active');
+
+  currentView = view;
+  applyMarquees();
+}
+
+/* ──────────────── WORKSPACE SWITCHER ──────────────── */
+function toggleWsSwitcher() {
+  const dd = document.getElementById('ws-dropdown');
+  dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+}
+function switchWs(slug, name) {
+  document.getElementById('active-ws-name').textContent = name;
+  document.getElementById('ws-dropdown').style.display = 'none';
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('#ws-dropdown') && !e.target.closest('[onclick="toggleWsSwitcher()"]')) {
+    document.getElementById('ws-dropdown').style.display = 'none';
+  }
+});
+
+/* ──────────────── TEMPERATURE ──────────────── */
+const TEMP_CYCLE = ['cold','warm','hot'];
+function cycleTemp() {
+  const i = TEMP_CYCLE.indexOf(STATE.temperature);
+  STATE.temperature = TEMP_CYCLE[(i+1) % TEMP_CYCLE.length];
+  const btn = document.getElementById('temp-btn');
+  btn.classList.remove('temp-cold','temp-warm','temp-hot');
+  btn.classList.add('temp-' + STATE.temperature);
+  btn.textContent = '🌡 ' + STATE.temperature;
+  const main = document.getElementById('main-content');
+  main.style.backgroundImage = ({
+    cold: 'radial-gradient(at 20% 0%, rgba(74,158,255,0.04) 0px, transparent 45%), radial-gradient(at 80% 100%, rgba(74,158,255,0.03) 0px, transparent 45%)',
+    warm: 'radial-gradient(at 20% 0%, rgba(255,107,43,0.035) 0px, transparent 45%), radial-gradient(at 80% 100%, rgba(74,158,255,0.025) 0px, transparent 45%)',
+    hot:  'radial-gradient(at 20% 0%, rgba(255,107,43,0.07) 0px, transparent 45%), radial-gradient(at 80% 100%, rgba(255,181,71,0.04) 0px, transparent 45%)',
+  })[STATE.temperature];
+}
+
+/* ──────────────── AGENT DETAIL PANEL ──────────────── */
+function showAgentPanel(id) {
+  const a = STATE.agents.find(x => x.id === id);
+  if (!a) return;
+
+  document.getElementById('panel-label').textContent = 'Agent detail';
+  document.getElementById('panel-content').innerHTML = `
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+      <span style="font-size:36px;">${a.icon}</span>
+      <div>
+        <div class="mono" style="font-size:16px; font-weight:700;">${a.name}</div>
+        <div style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-mute); text-transform:uppercase; letter-spacing:0.06em; margin-top:2px;">${a.status}</div>
+      </div>
+    </div>
+
+    ${a.task ? `
+      <div class="card" style="border-radius:8px; padding:12px; margin-bottom:12px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-mute); margin-bottom:8px;">Current task</div>
+        <div class="mono" style="font-size:12px; color:var(--orange); font-weight:600; margin-bottom:4px;">${a.task}</div>
+        <div style="font-size:12px; color:var(--text-dim); line-height:1.4;">${TASKS[a.task]?.title??''}</div>
+        <div class="bar" style="margin-top:8px; margin-bottom:4px;"><div class="bar-fill" style="width:${a.progress}%;"></div></div>
+        <div class="mono" style="font-size:10px; color:var(--text-mute);">${a.progress}% complete</div>
+      </div>
+    ` : `<div style="font-size:13px; color:var(--text-mute); margin-bottom:12px;">No active task.</div>`}
+
+    <div class="card" style="border-radius:8px; padding:12px; margin-bottom:12px;">
+      <div class="mono" style="font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-mute); margin-bottom:8px;">Stats (7d)</div>
+      <div style="display:flex; flex-direction:column; gap:5px; font-size:12px;">
+        <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-dim);">Completed</span><span class="mono">5</span></div>
+        <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-dim);">Avg duration</span><span class="mono">45m</span></div>
+        <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-dim);">First-pass rate</span><span class="mono" style="color:var(--green);">80%</span></div>
+        <div style="display:flex; justify-content:space-between;"><span style="color:var(--text-dim);">Cost this month</span><span class="mono" style="color:var(--gold);">$${a.cost.toFixed(2)}</span></div>
+      </div>
+    </div>
+
+    <div class="card" style="border-radius:8px; padding:12px; margin-bottom:12px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-mute);">Output</div>
+        ${a.status==='active' ? `<span style="display:flex; align-items:center; gap:4px; font-family:'JetBrains Mono',monospace; font-size:9px; color:var(--orange);"><span style="width:5px; height:5px; border-radius:50%; background:var(--orange); display:inline-block;"></span>live</span>` : ''}
+      </div>
+      <div style="font-family:'JetBrains Mono',monospace; font-size:10px; line-height:1.7; color:rgba(245,240,235,0.5); background:rgba(0,0,0,0.35); border-radius:6px; padding:8px 10px; max-height:160px; overflow-y:auto;">
+        ${a.status==='active' ? `
+          <div><span style="color:rgba(245,240,235,0.28);">[12:07]</span> <span style="color:rgba(245,240,235,0.85);">editing</span> <span style="color:var(--orange);">compose-prompt.ts:42</span></div>
+          <div><span style="color:rgba(245,240,235,0.28);">[12:07]</span> &gt; writing composeSystemPrompt function</div>
+          <div><span style="color:rgba(245,240,235,0.28);">[12:06]</span> <span style="color:rgba(245,240,235,0.85);">read</span> <span style="color:var(--blue);">src/compose-prompt.ts</span> (88 lines)</div>
+          <div><span style="color:rgba(245,240,235,0.28);">[12:05]</span> <span style="color:rgba(245,240,235,0.85);">read</span> <span style="color:var(--blue);">.forge/tasks/FL-002R.md</span></div>
+          <div><span style="color:rgba(245,240,235,0.28);">[12:04]</span> task claimed · starting work</div>
+        ` : a.status==='waiting' ? `
+          <div><span style="color:rgba(245,240,235,0.28);">[12:00]</span> waiting in queue · ${a.task}</div>
+          <div><span style="color:rgba(245,240,235,0.28);">[11:59]</span> orchestrator queued task</div>
+        ` : `<div style="color:rgba(245,240,235,0.2);">No recent output.</div>`}
+      </div>
+    </div>
+
+    <div style="display:flex; gap:6px; margin-top:4px;">
+      <button style="flex:1; font-family:'JetBrains Mono',monospace; font-size:11px; padding:7px; border-radius:6px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); color:var(--text-dim); transition:all 150ms;" onmouseover="this.style.background='rgba(255,255,255,0.08)'; this.style.color='var(--text)'" onmouseout="this.style.background='rgba(255,255,255,0.04)'; this.style.color='var(--text-dim)'">New task</button>
+      ${a.status==='active' ? `<button style="flex:1; font-family:'JetBrains Mono',monospace; font-size:11px; padding:7px; border-radius:6px; background:rgba(255,71,87,0.08); border:1px solid rgba(255,71,87,0.25); color:var(--red); transition:all 150ms;" onmouseover="this.style.background='rgba(255,71,87,0.15)'" onmouseout="this.style.background='rgba(255,71,87,0.08)'">Stop</button>` : ''}
+    </div>
+  `;
+
+  const panel = document.getElementById('detail-panel');
+  panel.classList.add('open');
+}
+
+function closePanel() {
+  document.getElementById('detail-panel').classList.remove('open');
+}
+
+/* ──────────────── MODAL: pillar ──────────────── */
+function showPillarModal(key) {
+  const p = STATE.pipeline[key];
+  openModal(`
+    <div>
+      <h2 class="mono" style="font-size:20px; font-weight:700;">${p.label} <span style="color:rgba(245,240,235,0.4);">(${p.count})</span></h2>
+      <div style="font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-mute); margin-top:4px;">pipeline · ${key}</div>
+    </div>
+  `, `
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      ${p.ids.map(id => {
+        if(id==='...') return `<div style="text-align:center; font-family:'JetBrains Mono',monospace; font-size:10px; color:rgba(245,240,235,0.25); padding:8px 0;">+${Math.max(0,p.count-p.ids.length+1)} older tasks</div>`;
+        const meta = TASKS[id];
+        return `
+          <div class="card" style="border-radius:8px; padding:12px 14px; cursor:pointer; display:flex; align-items:center; gap:10px;" onclick="closeModal(); showTaskModal('${id}')" onmouseover="this.style.background='var(--card-hi)'" onmouseout="this.style.background='var(--card)'">
+            <span style="font-size:18px; flex-shrink:0;">${meta?.icon??'○'}</span>
+            <div style="flex:1; min-width:0;">
+              <div style="font-family:'JetBrains Mono',monospace; font-size:12px; display:flex; align-items:center; gap:4px;">
+                <span style="font-weight:700; color:rgba(245,240,235,0.85);">${id}</span>
+                ${meta?.title ? `<span style="color:rgba(245,240,235,0.25);">·</span><span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:rgba(245,240,235,0.6);">${meta.title}</span>` : ''}
+              </div>
+              ${meta?.agent ? `<div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text-mute); margin-top:2px;">${meta.agent}</div>` : ''}
+            </div>
+            <span class="badge badge-${key==='complete'?'complete':key==='review'?'review':key==='active'?'active':'pending'}">${key}</span>
+          </div>`;
+      }).join('')}
+    </div>
+  `);
+}
+
+/* ──────────────── MODAL: task ──────────────── */
+function showTaskModal(id) {
+  const meta = TASKS[id];
+  if (!meta) {
+    openModal(`<h2 class="mono" style="font-size:18px; font-weight:700;">${id}</h2>`, `<div style="font-size:13px; color:var(--text-mute);">No detail available in mockup data.</div>`);
+    return;
+  }
+  const inPipeline = Object.entries(STATE.pipeline).find(([,v]) => v.ids.includes(id));
+  const status = inPipeline ? inPipeline[0] : 'complete';
+
+  openModal(`
+    <div>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <h2 class="mono" style="font-size:18px; font-weight:700;">${id}</h2>
+        <span class="badge badge-${status==='complete'?'complete':status==='review'?'review':status==='active'?'active':'pending'}">${status}</span>
+      </div>
+      <div style="font-size:14px; color:var(--text); line-height:1.4;">${meta.title}</div>
+    </div>
+  `, `
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
+      <div class="card" style="border-radius:8px; padding:12px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-mute); margin-bottom:4px;">Assigned to</div>
+        <div class="mono" style="font-size:13px; font-weight:600;">${meta.agent ?? '—'}</div>
+      </div>
+      <div class="card" style="border-radius:8px; padding:12px;">
+        <div class="mono" style="font-size:9px; letter-spacing:0.1em; text-transform:uppercase; color:var(--text-mute); margin-bottom:4px;">Status</div>
+        <div class="mono" style="font-size:13px; font-weight:600;">${status}</div>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <button style="font-family:'JetBrains Mono',monospace; font-size:11px; padding:7px 14px; border-radius:6px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); color:var(--text-dim);">Reassign</button>
+      <button style="font-family:'JetBrains Mono',monospace; font-size:11px; padding:7px 14px; border-radius:6px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); color:var(--text-dim);">Add instruction</button>
+      <button style="margin-left:auto; font-family:'JetBrains Mono',monospace; font-size:11px; padding:7px 14px; border-radius:6px; background:rgba(255,71,87,0.08); border:1px solid rgba(255,71,87,0.25); color:var(--red);">Cancel</button>
+    </div>
+  `);
+}
+
+/* ──────────────── MODAL helpers ──────────────── */
+function openModal(header, body) {
+  document.getElementById('modal-header').innerHTML = header;
+  document.getElementById('modal-body').innerHTML = body;
+  document.getElementById('modal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+  document.body.style.overflow = '';
+}
+document.addEventListener('keydown', e => { if(e.key==='Escape') { closeModal(); closePanel(); } });
+
+/* ──────────────── MARQUEE ──────────────── */
+function applyMarquees() {
+  document.querySelectorAll('.title-wrap').forEach(w => {
+    const span = w.querySelector('span');
+    if (!span) return;
+    w.classList.remove('marquee');
+    w.style.removeProperty('--marquee-distance');
+    const overflow = span.scrollWidth - w.clientWidth;
+    if (overflow > 4) {
+      w.classList.add('marquee');
+      w.style.setProperty('--marquee-distance', `-${overflow+8}px`);
+    }
+  });
+}
+let mdebounce;
+window.addEventListener('resize', () => { clearTimeout(mdebounce); mdebounce = setTimeout(applyMarquees, 150); });
+
+/* ──────────────── INIT ──────────────── */
+renderAgentRail();
+renderPipeline();
+renderActivity();
+renderDevices();
+renderOrgAgents();
+renderCosts();
+renderTasksList();
+renderSkills();
+requestAnimationFrame(() => requestAnimationFrame(applyMarquees));
+</script>
+</body>
+</html>
