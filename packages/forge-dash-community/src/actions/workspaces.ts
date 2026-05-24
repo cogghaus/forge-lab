@@ -8,6 +8,7 @@ import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 export async function createWorkspaceAction(formData: FormData): Promise<{ error?: string }> {
   const name = (formData.get('name') as string | null)?.trim();
   const slug = (formData.get('slug') as string | null)?.trim();
+  const description = (formData.get('description') as string | null)?.trim() || undefined;
   if (!name || !slug) return { error: 'Name and slug are required.' };
 
   const session = await getSessionCookie();
@@ -15,7 +16,7 @@ export async function createWorkspaceAction(formData: FormData): Promise<{ error
 
   const res = await hubFetch<{ id?: string; error?: string }>('/workspaces', {
     method: 'POST',
-    body: { name, slug },
+    body: { name, slug, description },
     cookie: `${SESSION_COOKIE}=${session}`,
   });
 

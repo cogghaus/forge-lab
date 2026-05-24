@@ -13,6 +13,7 @@ import {
   Textarea,
   useDisclosure,
 } from '@heroui/react';
+import { useState } from 'react';
 import { createGoalAction } from '@/actions/goals';
 import type { HubGoal } from '@/lib/hub';
 
@@ -23,12 +24,21 @@ interface Props {
 
 export function NewGoalButton({ workspaceId, goals }: Props) {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
+  const [error, setError] = useState<string | null>(null);
 
   async function handleAction(formData: FormData) {
+    setError(null);
     const result = await createGoalAction(workspaceId, formData);
-    if (!result?.error) {
+    if (result?.error) {
+      setError(result.error);
+    } else {
       onOpenChange();
     }
+  }
+
+  function handleOpenChange(open: boolean) {
+    if (!open) setError(null);
+    onOpenChange();
   }
 
   const activeGoals = goals.filter((g) => g.status === 'active');
@@ -39,7 +49,7 @@ export function NewGoalButton({ workspaceId, goals }: Props) {
         New Goal
       </Button>
 
-      <Modal isOpen={isOpen} onOpenChange={onOpenChange}>
+      <Modal isOpen={isOpen} onOpenChange={handleOpenChange}>
         <ModalContent>
           {(onClose) => (
             <form action={handleAction}>
@@ -65,6 +75,7 @@ export function NewGoalButton({ workspaceId, goals }: Props) {
                     ))}
                   </Select>
                 )}
+                {error && <p className="text-danger text-sm">{error}</p>}
               </ModalBody>
               <ModalFooter>
                 <Button variant="light" onPress={onClose}>
