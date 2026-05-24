@@ -10,6 +10,10 @@ export default function GoalsLoading() {
         <span className="text-default-400">/</span>
         <Skeleton className="h-7 w-16 rounded-lg" />
       </div>
+      <div className="flex items-center gap-4 border-b border-default-200 pb-px">
+        <Skeleton className="h-4 w-10 rounded mb-2" />
+        <Skeleton className="h-4 w-12 rounded mb-2" />
+      </div>
       <div className="flex items-center justify-between">
         <Skeleton className="h-4 w-16 rounded-lg" />
         <Skeleton className="h-9 w-28 rounded-lg" />
