@@ -62,8 +62,13 @@ export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
   return (
     <div className="flex flex-col gap-2">
       {tasks.map((task) => (
-        <Link key={task.id} href={`/workspaces/${workspaceId}/tasks/${task.id}`}>
-        <Card isPressable className="w-full">
+        <Card
+          key={task.id}
+          as={Link}
+          href={`/workspaces/${workspaceId}/tasks/${task.id}`}
+          isPressable
+          className="w-full"
+        >
           <CardBody className="flex flex-row items-center gap-4 py-3">
             <span className="font-mono text-xs text-default-400 w-16 shrink-0">{task.id}</span>
             <div className="flex-1 min-w-0">
@@ -97,7 +102,6 @@ export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
             </div>
           </CardBody>
         </Card>
-        </Link>
       ))}
     </div>
   );

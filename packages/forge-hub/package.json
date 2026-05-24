@@ -24,7 +24,7 @@
     "lint": "eslint src",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "dev": "tsx watch src/bin/forge-hub.ts"
+    "dev": "tsx watch --env-file .env src/bin/forge-hub.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.1",
