@@ -13,6 +13,7 @@ import {
   Textarea,
   useDisclosure,
 } from '@heroui/react';
+import { useState } from 'react';
 import { createTaskAction } from '@/actions/tasks';
 import { derivePrefix } from '@/lib/task-prefix';
 import type { HubGoal } from '@/lib/hub';
@@ -25,13 +26,22 @@ interface Props {
 
 export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
+  const [error, setError] = useState<string | null>(null);
   const projectPrefix = derivePrefix(workspaceSlug);
 
   async function handleAction(formData: FormData) {
+    setError(null);
     const result = await createTaskAction(workspaceId, formData);
-    if (!result?.error) {
+    if (result?.error) {
+      setError(result.error);
+    } else {
       onOpenChange();
     }
+  }
+
+  function handleOpenChange(open: boolean) {
+    if (!open) setError(null);
+    onOpenChange();
   }
 
   const activeGoals = goals.filter((g) => g.status === 'active');
@@ -42,7 +52,7 @@ export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
         New Task
       </Button>
 
-      <Modal isOpen={isOpen} onOpenChange={onOpenChange}>
+      <Modal isOpen={isOpen} onOpenChange={handleOpenChange}>
         <ModalContent>
           {(onClose) => (
             <form action={handleAction}>
@@ -65,6 +75,7 @@ export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
                     ))}
                   </Select>
                 )}
+                {error && <p className="text-danger text-sm">{error}</p>}
               </ModalBody>
               <ModalFooter>
                 <Button variant="light" onPress={onClose}>
