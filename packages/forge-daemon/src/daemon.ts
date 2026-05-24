@@ -25,6 +25,8 @@ export interface DaemonOptions {
   personalityRegistry?: PersonalityRegistry;
   /** How often the worker loop polls for pending tasks (ms). Default: 5000 */
   pollIntervalMs?: number;
+  /** If set, daemon only processes tasks belonging to this workspace. */
+  workspaceId?: string;
   logger?: DaemonLogger;
 }
 
@@ -120,7 +122,7 @@ export class Daemon {
       }
     }
 
-    const { tasks } = await this.client.listTasks();
+    const { tasks } = await this.client.listTasks(this.opts.workspaceId);
     for (const task of tasks) {
       if (task.status === 'pending_agent') {
         await this.handleIncomingTask({
@@ -143,6 +145,10 @@ export class Daemon {
     try {
       const task = await this.client.getTask(taskId);
       if (task.status !== 'pending_agent' && task.status !== 'assigned') {
+        return;
+      }
+      // Only handle tasks belonging to this daemon's workspace scope.
+      if (task.workspaceId !== (this.opts.workspaceId ?? null)) {
         return;
       }
       await this.client.claimTask(taskId);

@@ -143,6 +143,131 @@ describe('integration: create -> assign -> complete', () => {
   });
 });
 
+describe('integration: workspace-scoped task flow', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let deviceToken: string;
+  let sessionCookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-ws-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-workspace-test-xxxxxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    const regRes = await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    expect(regRes.status).toBe(201);
+
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    expect(loginRes.status).toBe(200);
+    const setCookieHeader = loginRes.headers.get('set-cookie');
+    expect(setCookieHeader).toBeTruthy();
+    sessionCookie = setCookieHeader!.split(';')[0]!;
+
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'Test Workspace', slug: 'test-ws' }),
+    });
+    expect(wsRes.status).toBe(201);
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'ws-device', hostname: 'test-host', platform: 'linux' }),
+    });
+    expect(devRes.status).toBe(201);
+    const devBody = (await devRes.json()) as { token: string };
+    deviceToken = devBody.token;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime({ completionDelayMs: 20 }));
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      workspaceId,
+      logger: {
+        info: (msg, meta) => {
+          process.stdout.write(`[daemon] ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+        error: (msg, meta) => {
+          process.stderr.write(`[daemon] ERR ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+      },
+    });
+    await daemon.start();
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('daemon only picks up workspace tasks, not flat tasks', { timeout: 20000 }, async () => {
+    // Create a flat task — daemon should NOT pick it up (it watches workspace tasks only)
+    const flatRes = await fetch(`${hubUrl}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'fl', title: 'Flat task' }),
+    });
+    expect(flatRes.status).toBe(201);
+    const { id: flatTaskId } = (await flatRes.json()) as { id: string };
+
+    // Create a workspace task — daemon SHOULD pick it up
+    const wsRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'ws', title: 'Workspace task' }),
+    });
+    expect(wsRes.status).toBe(201);
+    const { id: wsTaskId } = (await wsRes.json()) as { id: string };
+
+    // Workspace task should reach completed
+    const completed = await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/tasks/${wsTaskId}`, {
+        headers: { cookie: sessionCookie },
+      });
+      if (!res.ok) return null;
+      const task = (await res.json()) as { status: string };
+      return task.status === 'completed' ? task : null;
+    }, 12000);
+    expect(completed.status).toBe('completed');
+
+    // Flat task should still be pending_agent (daemon ignored it)
+    const flatRes2 = await fetch(`${hubUrl}/tasks/${flatTaskId}`, {
+      headers: { cookie: sessionCookie },
+    });
+    const flatTask = (await flatRes2.json()) as { status: string };
+    expect(flatTask.status).toBe('pending_agent');
+  });
+});
+
 describe('integration: composed personality via registry', () => {
   let hub: Hub;
   let daemon: Daemon;
