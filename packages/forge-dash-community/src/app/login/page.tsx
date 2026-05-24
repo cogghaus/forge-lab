@@ -14,7 +14,9 @@ export default function LoginPage() {
       <Card className="w-full max-w-sm">
         <CardHeader className="flex flex-col gap-1 pb-0">
           <h1 className="text-xl font-bold">Forge Lab</h1>
-          <p className="text-sm text-default-500">Sign in to your account</p>
+          <p className="text-sm text-default-500">
+            Access is by invitation only. Contact your admin for credentials.
+          </p>
         </CardHeader>
         <CardBody>
           <form action={action} className="flex flex-col gap-4">
@@ -23,11 +25,16 @@ export default function LoginPage() {
                 {state.error}
               </p>
             )}
+            {process.env.NODE_ENV === 'development' && (
+              <p className="rounded-lg bg-default-100 px-3 py-2 text-xs text-default-500 font-mono">
+                dev: dev@forge-lab.local / devpassword123
+              </p>
+            )}
             <Input
               label="Email"
               name="email"
               type="email"
-              placeholder="admin@example.com"
+              placeholder="you@example.com"
               isRequired
             />
             <Input
