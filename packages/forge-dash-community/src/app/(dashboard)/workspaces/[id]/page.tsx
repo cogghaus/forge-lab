@@ -52,7 +52,7 @@ export default async function WorkspaceTasksPage({ params }: Props) {
 
       <div className="flex items-center justify-between">
         <p className="text-sm text-default-500">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</p>
-        <NewTaskButton workspaceId={workspaceId} />
+        <NewTaskButton workspaceId={workspaceId} workspaceSlug={workspace.slug} />
       </div>
 
       <TaskList tasks={tasks} workspaceId={workspaceId} />
