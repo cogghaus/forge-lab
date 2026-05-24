@@ -3,7 +3,7 @@
 import { Card, CardBody, Chip } from '@heroui/react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useEffect, useTransition } from 'react';
 import type { HubGoal, HubTask } from '@/lib/hub';
 
 const STATUS_COLOR: Record<string, 'default' | 'primary' | 'warning' | 'success' | 'danger'> = {
@@ -37,6 +37,7 @@ interface Props {
 
 export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
   const router = useRouter();
+  const [, startTransition] = useTransition();
 
   const goalMap = new Map(goals.map((g) => [g.id, g.title]));
 
@@ -45,7 +46,7 @@ export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
       (t) => t.status === 'pending_agent' || t.status === 'assigned' || t.status === 'in_progress',
     );
     if (!hasActive) return;
-    const id = setInterval(() => router.refresh(), 4000);
+    const id = setInterval(() => startTransition(() => router.refresh()), 5000);
     return () => clearInterval(id);
   }, [tasks, router]);
 
