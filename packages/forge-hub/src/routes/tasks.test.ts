@@ -584,3 +584,124 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId', () => {
     expect(cancelEvents).toHaveLength(1);
   });
 });
+
+describe('task goalId linking', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  async function createGoal(title: string): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/goals`,
+      headers: { cookie },
+      payload: { title },
+    });
+    return (res.json() as { id: string }).id;
+  }
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    ({ cookie } = await setupAdmin(hub));
+    const wsRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'Goal WS', slug: 'gwws' },
+    });
+    workspaceId = (wsRes.json() as { id: string }).id;
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('task created with goalId persists the link', async () => {
+    const goalId = await createGoal('Ship v1');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'gw', title: 'Linked task', goalId },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+    const task = await hub.db
+      .select({ goalId: schema.tasks.goalId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.goalId).toBe(goalId);
+  });
+
+  it('task created without goalId has null goalId', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'gw', title: 'Unlinked task' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+    const task = await hub.db
+      .select({ goalId: schema.tasks.goalId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.goalId).toBeNull();
+  });
+
+  it('CX-01: empty string goalId is normalized to null, not stored as ""', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'gw', title: 'Empty goal string', goalId: '' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+    const task = await hub.db
+      .select({ goalId: schema.tasks.goalId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.goalId).toBeNull();
+  });
+
+  it('returns 404 when goalId does not exist in workspace', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'gw', title: 'Bad goal', goalId: 'nonexistent-goal-id' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: string }).error).toBe('goal_not_found');
+  });
+
+  it('returns 404 when goalId belongs to a different workspace', async () => {
+    const ws2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'Other WS', slug: 'owws' },
+    });
+    const ws2Id = (ws2Res.json() as { id: string }).id;
+    const goalInWs2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${ws2Id}/goals`,
+      headers: { cookie },
+      payload: { title: 'Goal in WS2' },
+    });
+    const foreignGoalId = (goalInWs2Res.json() as { id: string }).id;
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'gw', title: 'Cross-ws goal', goalId: foreignGoalId },
+    });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: string }).error).toBe('goal_not_found');
+  });
+});

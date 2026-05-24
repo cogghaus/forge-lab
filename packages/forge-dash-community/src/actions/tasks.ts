@@ -12,6 +12,7 @@ export async function createTaskAction(
   const title = (formData.get('title') as string | null)?.trim();
   const projectPrefix = (formData.get('projectPrefix') as string | null)?.trim();
   const description = (formData.get('description') as string | null)?.trim() || null;
+  const goalId = (formData.get('goalId') as string | null)?.trim() || null;
   if (!title || !projectPrefix) return { error: 'Title and project prefix are required.' };
 
   const session = await getSessionCookie();
@@ -21,7 +22,7 @@ export async function createTaskAction(
     `/workspaces/${workspaceId}/tasks`,
     {
       method: 'POST',
-      body: { title, projectPrefix, description },
+      body: { title, projectPrefix, description, goalId },
       cookie: `${SESSION_COOKIE}=${session}`,
     },
   );
