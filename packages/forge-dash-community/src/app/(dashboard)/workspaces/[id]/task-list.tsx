@@ -54,7 +54,7 @@ export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
     return (
       <Card>
         <CardBody className="py-12 text-center text-default-500">
-          No tasks yet. Create one to get started.
+          No tasks in this workspace yet. Use the New Task button above to create your first.
         </CardBody>
       </Card>
     );
