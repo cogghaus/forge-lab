@@ -194,7 +194,7 @@ CREATE TABLE invites (
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
   accepted_at INTEGER,
-  accepted_by TEXT REFERENCES users(id)
+  accepted_by TEXT REFERENCES users(id) ON DELETE SET NULL
 );
 CREATE INDEX invites_token_hash_idx ON invites(token_hash);
 `,

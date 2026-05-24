@@ -1,7 +1,7 @@
 'use strict';
 
 import type { FastifyInstance } from 'fastify';
-import { eq, and, gt } from 'drizzle-orm';
+import { eq, and, gt, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
@@ -136,8 +136,9 @@ export function registerInviteRoutes(
       }
 
       const body = AcceptInviteSchema.parse(req.body);
+      const email = body.email.toLowerCase();
 
-      if (invite.email && invite.email.toLowerCase() !== body.email.toLowerCase()) {
+      if (invite.email && invite.email.toLowerCase() !== email) {
         await reply.code(403).send({ error: 'email_mismatch' });
         return;
       }
@@ -145,10 +146,22 @@ export function registerInviteRoutes(
       const existing = await db
         .select({ id: schema.users.id })
         .from(schema.users)
-        .where(eq(schema.users.email, body.email))
+        .where(eq(schema.users.email, email))
         .get();
       if (existing) {
         await reply.code(409).send({ error: 'email_taken' });
+        return;
+      }
+
+      // Atomically claim the invite before creating the user.
+      // The WHERE acceptedAt IS NULL ensures exactly one concurrent request succeeds.
+      const claimed = await db
+        .update(schema.invites)
+        .set({ acceptedAt: new Date() })
+        .where(and(eq(schema.invites.id, invite.id), isNull(schema.invites.acceptedAt)));
+
+      if (claimed.rowsAffected === 0) {
+        await reply.code(410).send({ error: 'invite_already_accepted' });
         return;
       }
 
@@ -156,7 +169,7 @@ export function registerInviteRoutes(
       const passwordHash = await hashPassword(body.password, config.bcryptCost);
       await db.insert(schema.users).values({
         id: userId,
-        email: body.email,
+        email,
         passwordHash,
         role: 'user',
       });
@@ -165,14 +178,11 @@ export function registerInviteRoutes(
         await db.insert(schema.workspaceMembers).values({
           workspaceId: invite.workspaceId,
           userId,
-          role: invite.workspaceRole,
+          role: invite.workspaceRole as 'owner' | 'admin' | 'collaborator' | 'viewer',
         });
       }
 
-      await db
-        .update(schema.invites)
-        .set({ acceptedAt: new Date(), acceptedBy: userId })
-        .where(eq(schema.invites.id, invite.id));
+      await db.update(schema.invites).set({ acceptedBy: userId }).where(eq(schema.invites.id, invite.id));
 
       const session = await createSession(db, userId, config.sessionTtlHours);
       await reply
@@ -184,7 +194,7 @@ export function registerInviteRoutes(
           expires: session.expiresAt,
         })
         .code(201)
-        .send({ id: userId, email: body.email, role: 'user' });
+        .send({ id: userId, email, role: 'user' });
     },
   );
 }

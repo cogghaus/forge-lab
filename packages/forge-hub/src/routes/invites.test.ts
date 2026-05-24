@@ -269,6 +269,32 @@ describe('POST /invites/:token/accept', () => {
     expect(res.statusCode).toBe(409);
   });
 
+  it('concurrent double-accept with different emails: only one succeeds', async () => {
+    const inviteRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/admin/invites',
+      headers: { cookie: adminCookie },
+      payload: {},
+    });
+    const { token } = inviteRes.json() as { token: string };
+
+    const [res1, res2] = await Promise.all([
+      hub.fastify.inject({
+        method: 'POST',
+        url: `/invites/${token}/accept`,
+        payload: { email: 'racer1@example.com', password: 'password123' },
+      }),
+      hub.fastify.inject({
+        method: 'POST',
+        url: `/invites/${token}/accept`,
+        payload: { email: 'racer2@example.com', password: 'password123' },
+      }),
+    ]);
+
+    const statuses = [res1.statusCode, res2.statusCode].sort();
+    expect(statuses).toEqual([201, 410]);
+  });
+
   it('adds accepted user to workspace when invite includes workspaceId', async () => {
     const workspaceId = await createWorkspace(hub, adminCookie);
     const inviteRes = await hub.fastify.inject({
