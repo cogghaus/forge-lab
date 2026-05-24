@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Card, CardBody, Chip } from '@heroui/react';
-import { hubFetch, type HubGoal, type HubWorkspace } from '@/lib/hub';
+import { hubFetch, type HubGoal, type HubTask, type HubWorkspace } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { NewGoalButton } from './new-goal-button';
 import { GoalStatusButton } from './goal-status-button';
@@ -27,18 +27,30 @@ function buildTree(goals: HubGoal[]): Map<string | null, HubGoal[]> {
   return map;
 }
 
+function buildTaskCounts(tasks: HubTask[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const task of tasks) {
+    if (task.goalId) {
+      counts.set(task.goalId, (counts.get(task.goalId) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
 function GoalTree({
   tree,
   parentId,
   workspaceId,
   depth,
   visited,
+  taskCounts,
 }: {
   tree: Map<string | null, HubGoal[]>;
   parentId: string | null;
   workspaceId: string;
   depth: number;
   visited: Set<string>;
+  taskCounts: Map<string, number>;
 }) {
   const goals = tree.get(parentId) ?? [];
   if (goals.length === 0) return null;
@@ -49,6 +61,7 @@ function GoalTree({
         if (visited.has(goal.id)) return null;
         const nextVisited = new Set(visited);
         nextVisited.add(goal.id);
+        const taskCount = taskCounts.get(goal.id) ?? 0;
         return (
           <div key={goal.id} className="flex flex-col gap-1 mb-3">
             <Card>
@@ -62,6 +75,11 @@ function GoalTree({
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  {taskCount > 0 && (
+                    <Link href={`/workspaces/${workspaceId}`} className="text-xs text-default-400 hover:text-foreground">
+                      {taskCount} task{taskCount !== 1 ? 's' : ''}
+                    </Link>
+                  )}
                   <Chip size="sm" variant="flat" color={STATUS_COLOR[goal.status] ?? 'default'}>
                     {goal.status}
                   </Chip>
@@ -79,6 +97,7 @@ function GoalTree({
               workspaceId={workspaceId}
               depth={depth + 1}
               visited={nextVisited}
+              taskCounts={taskCounts}
             />
           </div>
         );
@@ -94,16 +113,19 @@ export default async function WorkspaceGoalsPage({ params }: Props) {
 
   const cookieHeader = `${SESSION_COOKIE}=${session}`;
 
-  const [wsRes, goalsRes] = await Promise.all([
+  const [wsRes, goalsRes, tasksRes] = await Promise.all([
     hubFetch<HubWorkspace>(`/workspaces/${workspaceId}`, { cookie: cookieHeader }),
     hubFetch<{ goals: HubGoal[] }>(`/workspaces/${workspaceId}/goals`, { cookie: cookieHeader }),
+    hubFetch<{ tasks: HubTask[] }>(`/workspaces/${workspaceId}/tasks`, { cookie: cookieHeader }),
   ]);
 
   if (!wsRes.ok) redirect('/workspaces');
 
   const workspace = wsRes.data;
   const goals = goalsRes.ok ? goalsRes.data.goals : [];
+  const tasks = tasksRes.ok ? tasksRes.data.tasks : [];
   const tree = buildTree(goals);
+  const taskCounts = buildTaskCounts(tasks);
 
   return (
     <div className="flex flex-col gap-6">
@@ -136,7 +158,14 @@ export default async function WorkspaceGoalsPage({ params }: Props) {
           </CardBody>
         </Card>
       ) : (
-        <GoalTree tree={tree} parentId={null} workspaceId={workspaceId} depth={0} visited={new Set()} />
+        <GoalTree
+          tree={tree}
+          parentId={null}
+          workspaceId={workspaceId}
+          depth={0}
+          visited={new Set()}
+          taskCounts={taskCounts}
+        />
       )}
     </div>
   );
