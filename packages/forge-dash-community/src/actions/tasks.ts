@@ -31,3 +31,32 @@ export async function createTaskAction(
   revalidatePath(`/workspaces/${workspaceId}`);
   redirect(`/workspaces/${workspaceId}`);
 }
+
+export async function updateTaskStatusAction(
+  workspaceId: string,
+  taskId: string,
+  status: 'cancelled' | 'pending_agent',
+): Promise<{ error?: string }> {
+  const session = await getSessionCookie();
+  if (!session) redirect('/login');
+
+  const res = await hubFetch<{ ok?: boolean; error?: string }>(
+    `/workspaces/${workspaceId}/tasks/${taskId}`,
+    {
+      method: 'PATCH',
+      body: { status },
+      cookie: `${SESSION_COOKIE}=${session}`,
+    },
+  );
+
+  if (!res.ok) {
+    const errMsg = (res.data as { error?: string } | null)?.error;
+    if (errMsg === 'invalid_transition') return { error: 'That status change is not allowed.' };
+    if (errMsg === 'status_changed') return { error: 'Task status changed — refresh and try again.' };
+    return { error: 'Failed to update task.' };
+  }
+
+  revalidatePath(`/workspaces/${workspaceId}/tasks/${taskId}`);
+  revalidatePath(`/workspaces/${workspaceId}`);
+  return {};
+}

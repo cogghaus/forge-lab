@@ -17,6 +17,20 @@ const CompleteTaskBodySchema = z.object({
   result: z.string().optional(),
 });
 
+const PatchTaskBodySchema = z.object({
+  status: z.enum(['cancelled', 'pending_agent']),
+});
+
+const USER_ALLOWED_TRANSITIONS: Record<string, string[]> = {
+  pending_agent: ['cancelled'],
+  pending_design: ['cancelled'],
+  design_review: ['cancelled'],
+  assigned: ['cancelled'],
+  in_progress: ['cancelled'],
+  failed: ['pending_agent'],
+  cancelled: ['pending_agent'],
+};
+
 function maybeRunId(req: FastifyRequest): Record<string, string> {
   return req.runId ? { runId: req.runId } : {};
 }
@@ -273,6 +287,70 @@ export function registerTaskRoutes(
         source: `device:${device.id}`,
         payload: { taskId: id },
       });
+      await reply.send({ ok: true });
+    },
+  );
+
+  fastify.patch<{ Params: { workspaceId: string; taskId: string } }>(
+    '/workspaces/:workspaceId/tasks/:taskId',
+    { preHandler: requireWorkspaceMember(db, 'collaborator') },
+    async (req, reply) => {
+      const { id: workspaceId } = getWorkspace(req);
+      const user = getUser(req);
+      const taskId = TaskIdSchema.parse(req.params.taskId);
+      const body = PatchTaskBodySchema.parse(req.body);
+
+      const task = await db
+        .select({ id: schema.tasks.id, status: schema.tasks.status })
+        .from(schema.tasks)
+        .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)))
+        .get();
+      if (!task) {
+        await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+
+      const allowed = USER_ALLOWED_TRANSITIONS[task.status] ?? [];
+      if (!allowed.includes(body.status)) {
+        await reply.code(422).send({ error: 'invalid_transition', from: task.status, to: body.status });
+        return;
+      }
+
+      const source = `user:${user.id}`;
+      const updated = await db
+        .update(schema.tasks)
+        .set({ status: body.status, updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.tasks.id, taskId),
+            eq(schema.tasks.workspaceId, workspaceId),
+            eq(schema.tasks.status, task.status),
+          ),
+        )
+        .returning({ id: schema.tasks.id });
+
+      if (updated.length === 0) {
+        await reply.code(409).send({ error: 'status_changed' });
+        return;
+      }
+
+      const eventName = body.status === 'cancelled' ? 'task.cancelled' : 'task.requeued';
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId,
+        eventName,
+        source,
+        payload: { previousStatus: task.status },
+        workspaceId,
+      });
+      bus.emit({
+        id: nanoid(),
+        name: eventName,
+        occurredAt: new Date(),
+        source,
+        payload: { taskId, workspaceId },
+      });
+
       await reply.send({ ok: true });
     },
   );
