@@ -31,6 +31,10 @@ export function TopBar({ workspaces }: { workspaces: HubWorkspace[] }) {
     if (next) setTemp(next);
   }
 
+  function closeDropdown() {
+    setDropdownOpen(false);
+  }
+
   return (
     <header
       className="flex-shrink-0 flex items-center z-30 relative"
@@ -60,6 +64,9 @@ export function TopBar({ workspaces }: { workspaces: HubWorkspace[] }) {
             onClick={() => setDropdownOpen(o => !o)}
             className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors hover:bg-white/[0.05] font-mono text-[12px]"
             style={{ color: 'rgba(245,240,235,0.55)' }}
+            aria-haspopup="listbox"
+            aria-expanded={dropdownOpen}
+            aria-label={activeWs?.name ?? 'Select workspace'}
           >
             <span>{activeWs?.name ?? 'Select workspace'}</span>
             <span className="text-[10px] text-white/25">▾</span>
@@ -67,9 +74,16 @@ export function TopBar({ workspaces }: { workspaces: HubWorkspace[] }) {
 
           {dropdownOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setDropdownOpen(false)} />
+              <div
+                className="fixed inset-0 z-40"
+                onClick={closeDropdown}
+                onKeyDown={e => { if (e.key === 'Escape') closeDropdown(); }}
+              />
               <div
                 className="absolute top-full left-0 z-50 rounded-[10px] p-2"
+                role="listbox"
+                aria-label="Workspaces"
+                onKeyDown={e => { if (e.key === 'Escape') closeDropdown(); }}
                 style={{
                   width: 280,
                   background: '#24242C',
@@ -87,7 +101,9 @@ export function TopBar({ workspaces }: { workspaces: HubWorkspace[] }) {
                 {workspaces.map(ws => (
                   <button
                     key={ws.id}
-                    onClick={() => { router.push(`/workspaces/${ws.id}`); setDropdownOpen(false); }}
+                    role="option"
+                    aria-selected={ws.id === activeWsId}
+                    onClick={() => { router.push(`/workspaces/${ws.id}`); closeDropdown(); }}
                     className={`w-full flex items-center justify-between px-2.5 py-2 rounded-md transition-colors text-[13px] ${
                       ws.id === activeWsId
                         ? 'bg-[rgba(255,107,43,0.08)]'
@@ -110,6 +126,7 @@ export function TopBar({ workspaces }: { workspaces: HubWorkspace[] }) {
                 ))}
                 <div className="border-t my-1.5" style={{ borderColor: 'rgba(255,255,255,0.06)' }} />
                 <button
+                  aria-disabled="true"
                   className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-[13px] transition-colors text-[rgba(245,240,235,0.35)] hover:bg-[rgba(255,255,255,0.04)] hover:text-[rgba(245,240,235,0.6)]"
                 >
                   <span>+</span> New workspace
@@ -124,7 +141,7 @@ export function TopBar({ workspaces }: { workspaces: HubWorkspace[] }) {
           onClick={cycleTemp}
           className="font-mono text-[11px] tracking-[0.1em] uppercase px-2.5 py-1 rounded-full transition-all"
           style={{ background: ts.bg, border: `1px solid ${ts.border}`, color: ts.color }}
-          title="Ambient system temperature — derived from active task count"
+          aria-label={`System temperature: ${temp}. Click to cycle.`}
         >
           🌡 {temp}
         </button>

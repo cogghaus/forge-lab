@@ -6,8 +6,19 @@ import { useState, useEffect } from 'react';
 import type { HubWorkspace } from '@/lib/hub';
 import { logoutAction } from '@/actions/auth';
 
+type AgentStatus = 'active' | 'idle' | 'waiting' | 'offline' | 'hub';
+
+interface MockAgent {
+  id: string;
+  name: string;
+  icon: string;
+  status: AgentStatus;
+  task: string | null;
+  progress: number;
+}
+
 // Phase A: static mock agents — Phase C wires to hub agent endpoints
-const MOCK_AGENTS = [
+const MOCK_AGENTS: MockAgent[] = [
   { id: 'anvil',     name: 'Anvil',     icon: '🔨', status: 'active',  task: 'FL-002R', progress: 62 },
   { id: 'crucible',  name: 'Crucible',  icon: '🧪', status: 'active',  task: 'FL-001b', progress: 12 },
   { id: 'architect', name: 'Architect', icon: '🏛️', status: 'idle',    task: null,      progress: 0  },
@@ -16,9 +27,7 @@ const MOCK_AGENTS = [
   { id: 'aegis',     name: 'Aegis',     icon: '🛡️', status: 'waiting', task: 'FL-006',  progress: 0  },
   { id: 'furnace',   name: 'Furnace',   icon: '🔥', status: 'offline', task: null,      progress: 0  },
   { id: 'loki',      name: 'Loki',      icon: '🎭', status: 'hub',     task: null,      progress: 0  },
-] as const;
-
-type AgentStatus = 'active' | 'idle' | 'waiting' | 'offline' | 'hub';
+];
 
 const DOT_COLOR: Record<AgentStatus, string> = {
   active:  'bg-[#FF6B2B] shadow-[0_0_6px_rgba(255,107,43,0.5)]',
@@ -53,14 +62,19 @@ function subItem(active: boolean, disabled = false) {
   return (
     'flex items-center gap-2 pl-7 pr-3 py-[4px] rounded-md text-[12px] transition-colors ' +
     (disabled
-      ? 'text-[rgba(245,240,235,0.2)] cursor-not-allowed'
+      ? 'text-[rgba(245,240,235,0.2)]'
       : active
         ? 'text-[rgba(245,240,235,0.7)]'
         : 'text-[rgba(245,240,235,0.35)] hover:bg-white/[0.03] hover:text-[rgba(245,240,235,0.6)] cursor-pointer')
   );
 }
 
-export function LeftRail({ workspaces }: { workspaces: HubWorkspace[] }) {
+export interface LeftRailUser {
+  name: string;
+  email: string;
+}
+
+export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; user?: LeftRailUser }) {
   const pathname = usePathname();
 
   const wsMatch = pathname.match(/^\/workspaces\/([^/]+)/);
@@ -84,6 +98,8 @@ export function LeftRail({ workspaces }: { workspaces: HubWorkspace[] }) {
     return pathname === path || pathname.startsWith(path + '/');
   }
 
+  const initials = user?.name.charAt(0).toUpperCase() ?? '?';
+
   return (
     <nav
       className="flex-shrink-0 flex flex-col overflow-y-auto py-2"
@@ -96,6 +112,7 @@ export function LeftRail({ workspaces }: { workspaces: HubWorkspace[] }) {
         const isExp = expandedWsId === ws.id;
         const isAct = activeWsId === ws.id;
         const base = `/workspaces/${ws.id}`;
+        const subNavId = `ws-nav-${ws.id}`;
 
         return (
           <div key={ws.id}>
@@ -103,6 +120,7 @@ export function LeftRail({ workspaces }: { workspaces: HubWorkspace[] }) {
               onClick={() => setExpandedWsId(isExp ? null : ws.id)}
               className={railItem(isAct)}
               aria-expanded={isExp}
+              aria-controls={subNavId}
             >
               <span className={`text-[11px] flex-shrink-0 ${isExp ? 'text-[#FF6B2B]' : 'text-white/25'}`}>
                 {isExp ? '▾' : '▸'}
@@ -111,11 +129,25 @@ export function LeftRail({ workspaces }: { workspaces: HubWorkspace[] }) {
             </button>
 
             {isExp && (
-              <div className="mb-1">
-                <Link href={base}              className={subItem(isWorkshopActive(base))}>Workshop</Link>
-                <Link href={`${base}/goals`}   className={subItem(isGoalsActive(base))}>Goals</Link>
-                <span                          className={subItem(false, true)}>Members</span>
-                <span                          className={subItem(false, true)}>Settings</span>
+              <div id={subNavId} className="mb-1">
+                <Link href={base}            className={subItem(isWorkshopActive(base))}>Workshop</Link>
+                <Link href={`${base}/goals`} className={subItem(isGoalsActive(base))}>Goals</Link>
+                <span
+                  className={subItem(false, true)}
+                  role="menuitem"
+                  aria-disabled="true"
+                  tabIndex={-1}
+                >
+                  Members
+                </span>
+                <span
+                  className={subItem(false, true)}
+                  role="menuitem"
+                  aria-disabled="true"
+                  tabIndex={-1}
+                >
+                  Settings
+                </span>
               </div>
             )}
           </div>
@@ -125,6 +157,7 @@ export function LeftRail({ workspaces }: { workspaces: HubWorkspace[] }) {
       <div className="px-3 py-1.5">
         <button
           className="text-[12px] w-full text-left border border-dashed rounded-md px-2.5 py-1 transition-all border-[rgba(255,255,255,0.1)] text-[rgba(245,240,235,0.35)] hover:border-[rgba(255,107,43,0.3)] hover:text-[#FF6B2B]"
+          aria-disabled="true"
         >
           + New workspace
         </button>
@@ -144,10 +177,14 @@ export function LeftRail({ workspaces }: { workspaces: HubWorkspace[] }) {
       {/* ── AGENTS ── */}
       <div className={sectionLabel()}>Agents</div>
       {MOCK_AGENTS.map(agent => {
-        const status = agent.status;
+        const { status } = agent;
         return (
           <div
             key={agent.id}
+            role="button"
+            tabIndex={0}
+            aria-label={`${agent.name} — ${status === 'hub' ? 'hub-side' : status}`}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click(); }}
             className={`px-3 py-1.5 rounded-md cursor-pointer transition-colors hover:bg-white/[0.04] ${status === 'hub' ? 'opacity-40' : ''}`}
           >
             <div className="flex items-center gap-2">
@@ -160,7 +197,7 @@ export function LeftRail({ workspaces }: { workspaces: HubWorkspace[] }) {
               </span>
             </div>
 
-            {status === 'active' && agent.task && (
+            {status === 'active' && agent.task !== null && (
               <div className="pl-[15px] mt-1 mb-0.5">
                 <div className="h-1 rounded-full overflow-hidden mb-1 bg-white/[0.06]">
                   <div className="h-full bg-[#FF6B2B] rounded-full" style={{ width: `${agent.progress}%` }} />
@@ -171,7 +208,7 @@ export function LeftRail({ workspaces }: { workspaces: HubWorkspace[] }) {
               </div>
             )}
 
-            {status === 'waiting' && agent.task && (
+            {status === 'waiting' && agent.task !== null && (
               <div className="pl-[15px] mt-1 mb-0.5">
                 <div className="h-1 rounded-full overflow-hidden mb-1" style={{ background: 'rgba(255,181,71,0.25)' }}>
                   <div
@@ -217,17 +254,24 @@ export function LeftRail({ workspaces }: { workspaces: HubWorkspace[] }) {
         <form action={logoutAction}>
           <button
             type="submit"
+            aria-label="Sign out"
             className="w-full flex items-center gap-2.5 px-2 py-2 rounded-md transition-colors hover:bg-white/[0.04]"
           >
             <div
               className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 font-mono text-[11px] font-bold text-[#FF6B2B]"
               style={{ background: 'rgba(255,107,43,0.2)' }}
             >
-              A
+              {initials}
             </div>
             <div className="flex-1 min-w-0 text-left">
-              <div className="text-[12px] font-semibold truncate text-[#F5F0EB]">Adam Coggrave</div>
-              <div className="font-mono text-[10px] truncate text-[rgba(245,240,235,0.35)]">adam@cogg.haus</div>
+              <div className="text-[12px] font-semibold truncate text-[#F5F0EB]">
+                {user?.name ?? 'Account'}
+              </div>
+              {user?.email && (
+                <div className="font-mono text-[10px] truncate text-[rgba(245,240,235,0.35)]">
+                  {user.email}
+                </div>
+              )}
             </div>
           </button>
         </form>
