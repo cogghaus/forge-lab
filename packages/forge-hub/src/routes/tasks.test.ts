@@ -160,6 +160,23 @@ describe('/workspaces/:workspaceId/tasks', () => {
     expect(ids).not.toContain('ws-001');
   });
 
+  it('workspace task sequence continues from flat task with same prefix', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Flat first' },
+    });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'WS second' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect((res.json() as { id: string }).id).toBe('fl-002');
+  });
+
   it('GET /tasks?workspaceId= returns only that workspace tasks', async () => {
     await hub.fastify.inject({
       method: 'POST',
