@@ -6,7 +6,7 @@ import type {
   AgentRuntimeSpawnConfig,
   RuntimeInstance,
 } from '@forge-lab/core';
-import { doneFilePath, instructionFilePath, taskFilePath, writeInstructionFile } from '../sync/task-file.js';
+import { doneFilePath, taskFilePath, writeInstructionFile } from '../sync/task-file.js';
 
 /**
  * Injection point for tests. Real callers use {@link defaultSpawner} which

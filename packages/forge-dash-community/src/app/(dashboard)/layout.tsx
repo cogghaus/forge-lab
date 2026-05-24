@@ -1,29 +1,27 @@
-import Link from 'next/link';
-import { logoutAction } from '@/actions/auth';
+import { redirect } from 'next/navigation';
+import { hubFetch, type HubWorkspace } from '@/lib/hub';
+import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
+import { LeftRail } from './_components/left-rail';
+import { TopBar } from './_components/top-bar';
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const session = await getSessionCookie();
+  if (!session) redirect('/login');
+
+  const res = await hubFetch<{ workspaces: HubWorkspace[] }>('/workspaces', {
+    cookie: `${SESSION_COOKIE}=${session}`,
+  });
+  const workspaces = res.ok ? res.data.workspaces : [];
+
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-30 border-b border-white/5 bg-background/90 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
-          <Link href="/workspaces" className="flex items-center gap-3 hover:opacity-90 transition-opacity">
-            <span className="text-2xl leading-none select-none">🔥</span>
-            <span className="font-mono text-lg font-bold tracking-tight text-foreground">forge-lab</span>
-            <span className="rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider bg-white/[0.06] text-white/50">
-              community
-            </span>
-          </Link>
-          <form action={logoutAction}>
-            <button
-              type="submit"
-              className="font-mono text-xs uppercase tracking-wider text-white/40 hover:text-white/70 transition-colors px-3 py-1.5 rounded hover:bg-white/5"
-            >
-              Sign out
-            </button>
-          </form>
-        </div>
-      </header>
-      <main className="mx-auto w-full max-w-7xl flex-1 p-6">{children}</main>
+    <div className="h-screen flex flex-col overflow-hidden">
+      <TopBar workspaces={workspaces} />
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        <LeftRail workspaces={workspaces} />
+        <main className="flex-1 overflow-y-auto min-w-0 p-6">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

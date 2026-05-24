@@ -1,0 +1,281 @@
+'use client';
+
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import type { HubWorkspace } from '@/lib/hub';
+import { logoutAction } from '@/actions/auth';
+
+type AgentStatus = 'active' | 'idle' | 'waiting' | 'offline' | 'hub';
+
+interface MockAgent {
+  id: string;
+  name: string;
+  icon: string;
+  status: AgentStatus;
+  task: string | null;
+  progress: number;
+}
+
+// Phase A: static mock agents — Phase C wires to hub agent endpoints
+const MOCK_AGENTS: MockAgent[] = [
+  { id: 'anvil',     name: 'Anvil',     icon: '🔨', status: 'active',  task: 'FL-002R', progress: 62 },
+  { id: 'crucible',  name: 'Crucible',  icon: '🧪', status: 'active',  task: 'FL-001b', progress: 12 },
+  { id: 'architect', name: 'Architect', icon: '🏛️', status: 'idle',    task: null,      progress: 0  },
+  { id: 'scribe',    name: 'Scribe',    icon: '📜', status: 'idle',    task: null,      progress: 0  },
+  { id: 'temper',    name: 'Temper',    icon: '⚖️', status: 'idle',    task: null,      progress: 0  },
+  { id: 'aegis',     name: 'Aegis',     icon: '🛡️', status: 'waiting', task: 'FL-006',  progress: 0  },
+  { id: 'furnace',   name: 'Furnace',   icon: '🔥', status: 'offline', task: null,      progress: 0  },
+  { id: 'loki',      name: 'Loki',      icon: '🎭', status: 'hub',     task: null,      progress: 0  },
+];
+
+const DOT_COLOR: Record<AgentStatus, string> = {
+  active:  'bg-[#FF6B2B] shadow-[0_0_6px_rgba(255,107,43,0.5)]',
+  idle:    'bg-[#4A9EFF]',
+  waiting: 'bg-[#FFB547]',
+  offline: 'bg-white/15',
+  hub:     'bg-white/15',
+};
+
+const STATUS_LABEL_COLOR: Record<AgentStatus, string> = {
+  active:  'text-[#FF6B2B]',
+  idle:    'text-[rgba(74,158,255,0.7)]',
+  waiting: 'text-[#FFB547]',
+  offline: 'text-white/20',
+  hub:     'text-white/20',
+};
+
+function sectionLabel(className = '') {
+  return `font-mono text-[9px] tracking-[0.12em] uppercase px-3 pt-4 pb-1 text-[rgba(245,240,235,0.28)] ${className}`;
+}
+
+function railItem(active: boolean) {
+  return (
+    'flex items-center gap-2 px-3 py-[5px] rounded-md text-[13px] transition-colors select-none cursor-pointer w-full text-left ' +
+    (active
+      ? 'bg-[#FF6B2B]/[0.08] text-[#F5F0EB]'
+      : 'text-[rgba(245,240,235,0.6)] hover:bg-white/[0.04] hover:text-[#F5F0EB]')
+  );
+}
+
+function subItem(active: boolean, disabled = false) {
+  return (
+    'flex items-center gap-2 pl-7 pr-3 py-[4px] rounded-md text-[12px] transition-colors ' +
+    (disabled
+      ? 'text-[rgba(245,240,235,0.2)]'
+      : active
+        ? 'text-[rgba(245,240,235,0.7)]'
+        : 'text-[rgba(245,240,235,0.35)] hover:bg-white/[0.03] hover:text-[rgba(245,240,235,0.6)] cursor-pointer')
+  );
+}
+
+export interface LeftRailUser {
+  name: string;
+  email: string;
+}
+
+export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; user?: LeftRailUser }) {
+  const pathname = usePathname();
+
+  const wsMatch = pathname.match(/^\/workspaces\/([^/]+)/);
+  const activeWsId = wsMatch?.[1] ?? null;
+
+  const [expandedWsId, setExpandedWsId] = useState<string | null>(activeWsId);
+
+  useEffect(() => {
+    if (activeWsId) setExpandedWsId(activeWsId);
+  }, [activeWsId]);
+
+  function isWorkshopActive(base: string) {
+    return pathname === base || (pathname.startsWith(base + '/') && !pathname.startsWith(base + '/goals'));
+  }
+
+  function isGoalsActive(base: string) {
+    return pathname.startsWith(base + '/goals');
+  }
+
+  function isNavActive(path: string) {
+    return pathname === path || pathname.startsWith(path + '/');
+  }
+
+  const initials = user?.name.charAt(0).toUpperCase() ?? '?';
+
+  return (
+    <nav
+      className="flex-shrink-0 flex flex-col overflow-y-auto py-2"
+      style={{ width: 220, background: '#111116', borderRight: '1px solid rgba(255,255,255,0.05)' }}
+    >
+      {/* ── WORKSPACES ── */}
+      <div className={sectionLabel()}>Workspaces</div>
+
+      {workspaces.map(ws => {
+        const isExp = expandedWsId === ws.id;
+        const isAct = activeWsId === ws.id;
+        const base = `/workspaces/${ws.id}`;
+        const subNavId = `ws-nav-${ws.id}`;
+
+        return (
+          <div key={ws.id}>
+            <button
+              onClick={() => setExpandedWsId(isExp ? null : ws.id)}
+              className={railItem(isAct)}
+              aria-expanded={isExp}
+              aria-controls={subNavId}
+            >
+              <span className={`text-[11px] flex-shrink-0 ${isExp ? 'text-[#FF6B2B]' : 'text-white/25'}`}>
+                {isExp ? '▾' : '▸'}
+              </span>
+              <span className="flex-1 min-w-0 truncate">{ws.name}</span>
+            </button>
+
+            {isExp && (
+              <div id={subNavId} className="mb-1">
+                <Link href={base}            className={subItem(isWorkshopActive(base))}>Workshop</Link>
+                <Link href={`${base}/goals`} className={subItem(isGoalsActive(base))}>Goals</Link>
+                <span
+                  className={subItem(false, true)}
+                  role="menuitem"
+                  aria-disabled="true"
+                  tabIndex={-1}
+                >
+                  Members
+                </span>
+                <span
+                  className={subItem(false, true)}
+                  role="menuitem"
+                  aria-disabled="true"
+                  tabIndex={-1}
+                >
+                  Settings
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div className="px-3 py-1.5">
+        <button
+          className="text-[12px] w-full text-left border border-dashed rounded-md px-2.5 py-1 transition-all border-[rgba(255,255,255,0.1)] text-[rgba(245,240,235,0.35)] hover:border-[rgba(255,107,43,0.3)] hover:text-[#FF6B2B]"
+          aria-disabled="true"
+        >
+          + New workspace
+        </button>
+      </div>
+
+      <div className="border-t border-white/[0.05] mx-2 my-1" />
+
+      {/* ── TASKS ── */}
+      <div className={sectionLabel()}>Tasks</div>
+      <Link href="/workspaces" className={railItem(isNavActive('/workspaces') && !activeWsId)}>
+        <span className="w-4 text-center text-[13px] flex-shrink-0">☰</span>
+        <span>All tasks</span>
+      </Link>
+
+      <div className="border-t border-white/[0.05] mx-2 my-1" />
+
+      {/* ── AGENTS ── */}
+      <div className={sectionLabel()}>Agents</div>
+      {MOCK_AGENTS.map(agent => {
+        const { status } = agent;
+        return (
+          <div
+            key={agent.id}
+            role="button"
+            tabIndex={0}
+            aria-label={`${agent.name} — ${status === 'hub' ? 'hub-side' : status}`}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click(); }}
+            className={`px-3 py-1.5 rounded-md cursor-pointer transition-colors hover:bg-white/[0.04] ${status === 'hub' ? 'opacity-40' : ''}`}
+          >
+            <div className="flex items-center gap-2">
+              <span className={`w-[7px] h-[7px] rounded-full flex-shrink-0 mt-px ${DOT_COLOR[status]}`} />
+              <span className={`text-[13px] flex-1 truncate ${status === 'active' ? 'text-[#F5F0EB]' : 'text-[rgba(245,240,235,0.6)]'}`}>
+                {agent.name}
+              </span>
+              <span className={`font-mono text-[9px] uppercase tracking-[0.06em] flex-shrink-0 ${STATUS_LABEL_COLOR[status]}`}>
+                {status === 'hub' ? 'hub-side' : status}
+              </span>
+            </div>
+
+            {status === 'active' && agent.task !== null && (
+              <div className="pl-[15px] mt-1 mb-0.5">
+                <div className="h-1 rounded-full overflow-hidden mb-1 bg-white/[0.06]">
+                  <div className="h-full bg-[#FF6B2B] rounded-full" style={{ width: `${agent.progress}%` }} />
+                </div>
+                <div className="font-mono text-[10px] text-[rgba(245,240,235,0.45)] truncate">
+                  <span className="text-[rgba(245,240,235,0.7)] font-semibold">{agent.task}</span>
+                </div>
+              </div>
+            )}
+
+            {status === 'waiting' && agent.task !== null && (
+              <div className="pl-[15px] mt-1 mb-0.5">
+                <div className="h-1 rounded-full overflow-hidden mb-1" style={{ background: 'rgba(255,181,71,0.25)' }}>
+                  <div
+                    className="h-full w-[40%]"
+                    style={{ background: 'repeating-linear-gradient(90deg,rgba(255,181,71,0.5) 0,rgba(255,181,71,0.5) 4px,transparent 4px,transparent 8px)' }}
+                  />
+                </div>
+                <div className="font-mono text-[10px] text-[rgba(245,240,235,0.35)]">queued · {agent.task}</div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div className="flex-1" />
+      <div className="border-t border-white/[0.05] mx-2 my-1" />
+
+      {/* ── Bottom nav ── */}
+      <Link href="/skills"    className={railItem(isNavActive('/skills'))}>
+        <span className="w-4 text-center text-[13px] flex-shrink-0">⚡</span>
+        <span>Skills</span>
+      </Link>
+      <Link href="/org"       className={railItem(isNavActive('/org'))}>
+        <span className="w-4 text-center text-[13px] flex-shrink-0">🏛</span>
+        <span>Org</span>
+      </Link>
+      <Link href="/analytics" className={railItem(isNavActive('/analytics'))}>
+        <span className="w-4 text-center text-[13px] flex-shrink-0">📈</span>
+        <span>Analytics</span>
+      </Link>
+      <Link href="/costs"     className={railItem(isNavActive('/costs'))}>
+        <span className="w-4 text-center text-[13px] flex-shrink-0">$</span>
+        <span>Costs</span>
+        <span className="ml-auto font-mono text-[10px] text-[#FFB547]/80">$4.20</span>
+      </Link>
+      <Link href="/settings"  className={railItem(isNavActive('/settings'))}>
+        <span className="w-4 text-center text-[13px] flex-shrink-0">⚙</span>
+        <span>Settings</span>
+      </Link>
+
+      {/* ── Profile ── */}
+      <div className="border-t border-white/[0.05] mt-2 pt-1 px-1">
+        <form action={logoutAction}>
+          <button
+            type="submit"
+            aria-label="Sign out"
+            className="w-full flex items-center gap-2.5 px-2 py-2 rounded-md transition-colors hover:bg-white/[0.04]"
+          >
+            <div
+              className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 font-mono text-[11px] font-bold text-[#FF6B2B]"
+              style={{ background: 'rgba(255,107,43,0.2)' }}
+            >
+              {initials}
+            </div>
+            <div className="flex-1 min-w-0 text-left">
+              <div className="text-[12px] font-semibold truncate text-[#F5F0EB]">
+                {user?.name ?? 'Account'}
+              </div>
+              {user?.email && (
+                <div className="font-mono text-[10px] truncate text-[rgba(245,240,235,0.35)]">
+                  {user.email}
+                </div>
+              )}
+            </div>
+          </button>
+        </form>
+      </div>
+    </nav>
+  );
+}
