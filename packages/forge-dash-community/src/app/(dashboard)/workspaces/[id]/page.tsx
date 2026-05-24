@@ -55,7 +55,7 @@ export default async function WorkspaceTasksPage({ params }: Props) {
         <NewTaskButton workspaceId={workspaceId} workspaceSlug={workspace.slug} goals={goals} />
       </div>
 
-      <TaskList tasks={tasks} workspaceId={workspaceId} />
+      <TaskList tasks={tasks} workspaceId={workspaceId} goals={goals} />
     </div>
   );
 }
