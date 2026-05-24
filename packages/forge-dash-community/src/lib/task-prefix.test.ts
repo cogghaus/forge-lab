@@ -28,4 +28,12 @@ describe('derivePrefix', () => {
   it('empty slug falls back to ws', () => {
     expect(derivePrefix('')).toBe('ws');
   });
+
+  it('always produces a string matching TaskIdSchema pattern [a-z]{2,6}', () => {
+    const pattern = /^[a-z]{2,6}$/;
+    const slugs = ['forge-lab', 'community', 'a-b-c-d-e-f-g', 'a', '', '123-456', 'a-', 'hello-world-foo', 'x'];
+    for (const slug of slugs) {
+      expect(derivePrefix(slug)).toMatch(pattern);
+    }
+  });
 });
