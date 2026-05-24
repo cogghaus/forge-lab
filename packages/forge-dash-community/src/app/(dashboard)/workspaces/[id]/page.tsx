@@ -38,6 +38,18 @@ export default async function WorkspaceTasksPage({ params }: Props) {
         <h1 className="text-2xl font-bold">{workspace.name}</h1>
       </div>
 
+      <div className="flex items-center gap-4 border-b border-default-200">
+        <span className="pb-2 border-b-2 border-primary text-primary text-sm font-medium">
+          Tasks
+        </span>
+        <Link
+          href={`/workspaces/${workspaceId}/goals`}
+          className="pb-2 text-default-500 hover:text-foreground text-sm"
+        >
+          Goals
+        </Link>
+      </div>
+
       <div className="flex items-center justify-between">
         <p className="text-sm text-default-500">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</p>
         <NewTaskButton workspaceId={workspaceId} />

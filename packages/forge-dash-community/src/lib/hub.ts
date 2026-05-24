@@ -60,3 +60,24 @@ export interface HubTask {
   createdAt: number;
   completedAt: number | null;
 }
+
+export interface HubGoal {
+  id: string;
+  workspaceId: string;
+  parentId: string | null;
+  title: string;
+  description: string | null;
+  status: 'active' | 'completed' | 'cancelled';
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface HubTaskHistory {
+  id: string;
+  taskId: string;
+  eventName: string;
+  source: string;
+  payload: unknown;
+  createdAt: number;
+}
