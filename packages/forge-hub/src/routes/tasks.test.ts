@@ -541,4 +541,46 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId', () => {
     });
     expect(res.statusCode).toBe(401);
   });
+
+  it('CX-01 regression: concurrent cancel requests produce at most one history event', async () => {
+    // The PATCH UPDATE WHERE now includes eq(status, readStatus) so a second concurrent
+    // cancel sees 0 rows (status already changed to cancelled) and returns 409 instead of
+    // silently writing a duplicate task.cancelled history event.
+    const taskId = await createWsTask();
+
+    const [res1, res2] = await Promise.all([
+      hub.fastify.inject({
+        method: 'PATCH',
+        url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+        headers: { cookie },
+        payload: { status: 'cancelled' },
+      }),
+      hub.fastify.inject({
+        method: 'PATCH',
+        url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+        headers: { cookie },
+        payload: { status: 'cancelled' },
+      }),
+    ]);
+
+    // Exactly one request must succeed; the other gets 409 (race detected) or 422 (serial execution
+    // where second request read the already-cancelled status).
+    const codes = [res1.statusCode, res2.statusCode].sort((a, b) => a - b);
+    expect(codes[0]).toBe(200);
+    expect(codes[1]).toBeGreaterThanOrEqual(409);
+
+    // Final status must be cancelled regardless.
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('cancelled');
+
+    // No duplicate task.cancelled history events (the core invariant the fix protects).
+    const histRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks/${taskId}/history`,
+      headers: { cookie },
+    });
+    const { history } = histRes.json() as { history: { eventName: string }[] };
+    const cancelEvents = history.filter((h) => h.eventName === 'task.cancelled');
+    expect(cancelEvents).toHaveLength(1);
+  });
 });

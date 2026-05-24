@@ -317,10 +317,22 @@ export function registerTaskRoutes(
       }
 
       const source = `user:${user.id}`;
-      await db
+      const updated = await db
         .update(schema.tasks)
         .set({ status: body.status, updatedAt: new Date() })
-        .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)));
+        .where(
+          and(
+            eq(schema.tasks.id, taskId),
+            eq(schema.tasks.workspaceId, workspaceId),
+            eq(schema.tasks.status, task.status),
+          ),
+        )
+        .returning({ id: schema.tasks.id });
+
+      if (updated.length === 0) {
+        await reply.code(409).send({ error: 'status_changed' });
+        return;
+      }
 
       const eventName = body.status === 'cancelled' ? 'task.cancelled' : 'task.requeued';
       await db.insert(schema.taskHistory).values({
