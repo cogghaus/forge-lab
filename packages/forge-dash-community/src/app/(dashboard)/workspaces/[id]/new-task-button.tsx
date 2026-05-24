@@ -18,6 +18,7 @@ import { createTaskAction } from '@/actions/tasks';
 import { derivePrefix } from '@/lib/task-prefix';
 import { resolveSelection } from '@/lib/form-fields';
 import type { HubGoal } from '@/lib/hub';
+import { toast } from 'sonner';
 
 interface Props {
   workspaceId: string;
@@ -40,7 +41,9 @@ export function NewTaskButton({ workspaceId, workspaceSlug, goals }: Props) {
       const result = await createTaskAction(workspaceId, formData);
       if (result?.error) {
         setError(result.error);
+        toast.error(result.error);
       } else {
+        toast.success('Task created');
         onOpenChange();
       }
     } finally {

@@ -13,6 +13,7 @@ import {
 } from '@heroui/react';
 import { useState } from 'react';
 import { createWorkspaceAction } from '@/actions/workspaces';
+import { toast } from 'sonner';
 
 export function NewWorkspaceButton() {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
@@ -26,7 +27,9 @@ export function NewWorkspaceButton() {
       const result = await createWorkspaceAction(formData);
       if (result?.error) {
         setError(result.error);
+        toast.error(result.error);
       } else {
+        toast.success('Workspace created');
         onOpenChange();
       }
     } finally {
