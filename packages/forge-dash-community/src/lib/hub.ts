@@ -27,7 +27,12 @@ export async function hubFetch<T>(
   });
 
   const text = await res.text();
-  const data = (text ? (JSON.parse(text) as T) : null) as T;
+  let data: T;
+  try {
+    data = (text ? (JSON.parse(text) as T) : null) as T;
+  } catch {
+    data = null as T;
+  }
   const setCookie = res.headers.get('set-cookie') ?? undefined;
   return { data, status: res.status, ok: res.ok, setCookie };
 }

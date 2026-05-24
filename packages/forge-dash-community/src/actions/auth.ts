@@ -21,15 +21,16 @@ export async function loginAction(_prevState: LoginState, formData: FormData): P
   }
 
   if (res.setCookie) {
-    const parts = res.setCookie.split(';');
-    const [nameVal] = parts;
-    const [, val] = (nameVal ?? '').split('=');
+    const nameVal = res.setCookie.split(';')[0] ?? '';
+    const eqIdx = nameVal.indexOf('=');
+    const val = eqIdx >= 0 ? nameVal.slice(eqIdx + 1) : '';
     if (val) {
       const cookieStore = await cookies();
       cookieStore.set(SESSION_COOKIE, val, {
         httpOnly: true,
         path: '/',
         sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
       });
     }
   }

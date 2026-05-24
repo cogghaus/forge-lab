@@ -5,7 +5,7 @@ const PUBLIC_PATHS = ['/login'];
 
 export function middleware(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
-  const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+  const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   const hasSession = req.cookies.has(SESSION_COOKIE);
 
   if (!isPublic && !hasSession) {
