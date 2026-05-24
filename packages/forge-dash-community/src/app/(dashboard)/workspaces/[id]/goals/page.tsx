@@ -165,8 +165,14 @@ export default async function WorkspaceGoalsPage({ params }: Props) {
 
       {goals.length === 0 ? (
         <Card>
-          <CardBody className="py-12 text-center text-default-500">
-            No goals yet. Create one to get started.
+          <CardBody className="py-12 flex flex-col items-center gap-4">
+            <p className="text-default-500 text-center">
+              No goals defined for <span className="text-foreground font-medium">{workspace.name}</span> yet.
+            </p>
+            <p className="text-sm text-default-400 text-center">
+              Goals let you group tasks into milestones and track progress toward outcomes.
+            </p>
+            <NewGoalButton workspaceId={workspaceId} goals={[]} />
           </CardBody>
         </Card>
       ) : (

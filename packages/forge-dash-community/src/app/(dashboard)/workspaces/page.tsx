@@ -27,8 +27,9 @@ export default async function WorkspacesPage() {
 
       {workspaces.length === 0 ? (
         <Card>
-          <CardBody className="py-12 text-center text-default-500">
-            No workspaces yet. Create one to get started.
+          <CardBody className="py-12 flex flex-col items-center gap-4">
+            <p className="text-default-500 text-center">No workspaces yet.</p>
+            <NewWorkspaceButton />
           </CardBody>
         </Card>
       ) : (
