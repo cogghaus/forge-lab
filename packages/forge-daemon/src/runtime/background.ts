@@ -113,9 +113,9 @@ interface LiveInstance {
  * writing this file when the task is complete.
  *
  * **Liveness:** `isAlive()` combines file-based checks (task file present,
- * done file absent) with a PID signal-0 probe. On Windows, signal-0 may
- * not be reliable for processes spawned via `wt.exe`; background spawns
- * bypass Windows Terminal so signal-0 works correctly here.
+ * done file absent) with a PID signal-0 probe on POSIX platforms only.
+ * Windows does not reliably throw ESRCH for terminated processes, so the
+ * PID probe is skipped there and liveness falls back to file checks alone.
  *
  * **sendInstruction:** Not supported. BackgroundRuntime is one-shot — one
  * task per spawn. Calling `sendInstruction()` throws immediately.
@@ -142,16 +142,30 @@ export class BackgroundRuntime implements AgentRuntime {
     config: AgentRuntimeSpawnConfig,
     initialPrompt: string,
   ): Promise<RuntimeInstance> {
+    // C5: null taskId means no completion tracking — fail fast rather than
+    // silently generating an ephemeral ID that the daemon can never match.
+    if (!config.taskId) {
+      throw new Error('BackgroundRuntime requires a non-null taskId for completion tracking.');
+    }
+    const taskId = config.taskId;
+
     const logDir = path.join(config.workdir, 'context', 'agent-logs');
     await fs.mkdir(logDir, { recursive: true });
 
-    const taskId = config.taskId ?? nanoid();
     const logPath = path.join(logDir, `${taskId}.log`);
     const logStream = createWriteStream(logPath, { flags: 'a' });
     // Ensure the file is created before we return (createWriteStream opens lazily).
     await new Promise<void>((resolve, reject) => {
       logStream.once('open', () => resolve());
       logStream.once('error', reject);
+    });
+    // C6: attach persistent error handler so disk-full / permissions errors
+    // after pipe is established don't propagate as an unhandled 'error' event
+    // and crash the daemon process.
+    logStream.on('error', (err) => {
+      process.stderr.write(
+        `[BackgroundRuntime] log stream error for task ${taskId}: ${err.message}\n`,
+      );
     });
 
     const claudeArgs: string[] = ['--system-prompt', config.personality];
@@ -162,10 +176,17 @@ export class BackgroundRuntime implements AgentRuntime {
 
     const env: NodeJS.ProcessEnv = { ...process.env, ...this.extraEnv };
 
-    const proc = this.spawner.spawn(this.claudePath, claudeArgs, {
-      cwd: config.workdir,
-      env,
-    });
+    // C1: if spawn throws, close the log stream to avoid an fd leak.
+    let proc: BackgroundProcess;
+    try {
+      proc = this.spawner.spawn(this.claudePath, claudeArgs, {
+        cwd: config.workdir,
+        env,
+      });
+    } catch (err) {
+      logStream.destroy();
+      throw err;
+    }
 
     proc.stdout?.pipe(logStream);
     proc.stderr?.pipe(logStream);
@@ -239,17 +260,19 @@ export class BackgroundRuntime implements AgentRuntime {
 
     if (!hasTask || hasDone) return false;
 
-    // PID signal-0 probe: ESRCH means the process definitely doesn't exist.
-    // Other errors (EPERM, unsupported on this platform) are non-fatal —
-    // fall through and trust the file-based check.
-    if (live.proc.pid !== undefined) {
+    // C4: PID signal-0 probe is POSIX-only. On Windows, process.kill(pid, 0)
+    // does not reliably throw ESRCH for terminated processes, so skipping the
+    // check there avoids false negatives. On POSIX, ESRCH means the process
+    // is definitely gone; other errors (EPERM) mean it exists but we can't
+    // probe it — fall through and trust the file-based check.
+    if (live.proc.pid !== undefined && process.platform !== 'win32') {
       try {
         process.kill(live.proc.pid, 0);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ESRCH') {
           return false;
         }
-        // EPERM or unknown: process exists but we can't probe it; trust files.
+        // EPERM: process exists, we lack permission to probe; trust files.
       }
     }
 

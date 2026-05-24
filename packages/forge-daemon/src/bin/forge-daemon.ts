@@ -20,7 +20,11 @@ async function main(): Promise<void> {
   const runtimes = new RuntimeRegistry();
   runtimes.register(new MockRuntime());
   runtimes.register(new ClaudeCodeRuntime());
-  runtimes.register(new BackgroundRuntime({ dangerouslySkipPermissions: true }));
+  // C3: dangerouslySkipPermissions driven by config (FORGE_DAEMON_SKIP_PERMISSIONS env).
+  runtimes.register(new BackgroundRuntime({ dangerouslySkipPermissions: config.skipPermissions }));
+
+  // C7: log the active runtime so operators notice if the default changed.
+  consoleLogger.info('active default runtime', { runtimeId: config.defaultRuntimeId, skipPermissions: config.skipPermissions });
 
   const daemon = new Daemon({
     hubUrl: config.hubUrl,

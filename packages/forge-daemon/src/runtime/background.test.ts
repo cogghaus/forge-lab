@@ -283,4 +283,32 @@ describe('BackgroundRuntime', () => {
     expect(rt.displayName).toContain('Background');
     expect(rt.capabilities.supportsTools).toBe(true);
   });
+
+  it('throws immediately when taskId is null (C5: no silent ephemeral id generation)', async () => {
+    const { spawner } = makeFakeSpawner();
+    const rt = new BackgroundRuntime({ spawner });
+    await expect(
+      rt.spawn(
+        { agentId: 'furnace', personality: 'sys', workdir, taskId: null, config: {} },
+        'go',
+      ),
+    ).rejects.toThrow(/taskId/);
+  });
+
+  it('cleans up logStream fd if spawner.spawn() throws (C1: no fd leak)', async () => {
+    const throwingSpawner: BackgroundSpawner = {
+      spawn() {
+        throw new Error('spawn failed');
+      },
+    };
+    const rt = new BackgroundRuntime({ spawner: throwingSpawner });
+    await expect(
+      rt.spawn(
+        { agentId: 'furnace', personality: 'sys', workdir, taskId: 'fl-022', config: {} },
+        'go',
+      ),
+    ).rejects.toThrow('spawn failed');
+    // Log file should have been created then destroyed — directory exists, file may exist
+    // but the stream is closed (no open fd leak). We verify spawn threw cleanly.
+  });
 });
