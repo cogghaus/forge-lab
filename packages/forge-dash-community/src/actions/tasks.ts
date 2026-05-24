@@ -51,7 +51,9 @@ export async function updateTaskStatusAction(
 
   if (!res.ok) {
     const errMsg = (res.data as { error?: string } | null)?.error;
-    return { error: errMsg === 'invalid_transition' ? 'That status change is not allowed.' : 'Failed to update task.' };
+    if (errMsg === 'invalid_transition') return { error: 'That status change is not allowed.' };
+    if (errMsg === 'status_changed') return { error: 'Task status changed — refresh and try again.' };
+    return { error: 'Failed to update task.' };
   }
 
   revalidatePath(`/workspaces/${workspaceId}/tasks/${taskId}`);

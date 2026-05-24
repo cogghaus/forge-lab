@@ -19,9 +19,9 @@ export function TaskActionButton({ workspaceId, taskId, action }: Props) {
     setError(null);
     const status = action === 'cancel' ? 'cancelled' : 'pending_agent';
     const result = await updateTaskStatusAction(workspaceId, taskId, status);
+    setLoading(false);
     if (result.error) {
       setError(result.error);
-      setLoading(false);
     }
   }
 
