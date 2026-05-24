@@ -39,6 +39,7 @@ export const CreateTaskInputSchema = z.object({
   title: z.string().min(1).max(500),
   description: z.string().nullable().optional(),
   priority: TaskPrioritySchema.optional(),
+  goalId: z.string().nullable().optional(),
 });
 export type CreateTaskInput = z.infer<typeof CreateTaskInputSchema>;
 

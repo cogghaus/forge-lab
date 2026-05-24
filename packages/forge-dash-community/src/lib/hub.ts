@@ -56,6 +56,7 @@ export interface HubTask {
   status: string;
   priority: string;
   assignedDeviceId: string | null;
+  goalId: string | null;
   createdBy: string;
   createdAt: number;
   completedAt: number | null;
