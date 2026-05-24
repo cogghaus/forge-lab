@@ -4,6 +4,7 @@ import { Card, CardBody, Chip } from '@heroui/react';
 import { hubFetch, type HubTask, type HubTaskHistory, type HubWorkspace } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { TaskDetailRefresh } from './task-detail-refresh';
+import { TaskActionButton } from './task-action-button';
 
 interface Props {
   params: Promise<{ id: string; taskId: string }>;
@@ -91,6 +92,15 @@ export default async function TaskDetailPage({ params }: Props) {
     task.status === 'assigned' ||
     task.status === 'in_progress';
 
+  const canCancel =
+    task.status === 'pending_agent' ||
+    task.status === 'pending_design' ||
+    task.status === 'design_review' ||
+    task.status === 'assigned' ||
+    task.status === 'in_progress';
+
+  const canRetry = task.status === 'failed' || task.status === 'cancelled';
+
   return (
     <div className="flex flex-col gap-6">
       {isActive && <TaskDetailRefresh />}
@@ -123,6 +133,12 @@ export default async function TaskDetailPage({ params }: Props) {
               <Chip size="sm" variant="flat" color={STATUS_COLOR[task.status] ?? 'default'}>
                 {statusLabel(task.status)}
               </Chip>
+              {canCancel && (
+                <TaskActionButton workspaceId={workspaceId} taskId={task.id} action="cancel" />
+              )}
+              {canRetry && (
+                <TaskActionButton workspaceId={workspaceId} taskId={task.id} action="retry" />
+              )}
             </div>
           </div>
 

@@ -401,3 +401,144 @@ describe('X-Forge-Run-Id header', () => {
     expect(payload?.['runId']).toBe('run-claim-99');
   });
 });
+
+describe('PATCH /workspaces/:workspaceId/tasks/:taskId', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: testConfig });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function createWsTask(title = 'My task'): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ws', title },
+    });
+    return (res.json() as { id: string }).id;
+  }
+
+  it('cancels a pending_agent task', async () => {
+    const taskId = await createWsTask();
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+      headers: { cookie },
+      payload: { status: 'cancelled' },
+    });
+    expect(res.statusCode).toBe(200);
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('cancelled');
+  });
+
+  it('records task.cancelled history event', async () => {
+    const taskId = await createWsTask();
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+      headers: { cookie },
+      payload: { status: 'cancelled' },
+    });
+    const histRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks/${taskId}/history`,
+      headers: { cookie },
+    });
+    const { history } = histRes.json() as { history: { eventName: string }[] };
+    expect(history.some((h) => h.eventName === 'task.cancelled')).toBe(true);
+  });
+
+  it('requeues a cancelled task to pending_agent', async () => {
+    const taskId = await createWsTask();
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+      headers: { cookie },
+      payload: { status: 'cancelled' },
+    });
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+      headers: { cookie },
+      payload: { status: 'pending_agent' },
+    });
+    expect(res.statusCode).toBe(200);
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('pending_agent');
+  });
+
+  it('requeues a failed task to pending_agent', async () => {
+    const taskId = await createWsTask();
+    await hub.db.update(schema.tasks).set({ status: 'failed' }).where(eq(schema.tasks.id, taskId));
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+      headers: { cookie },
+      payload: { status: 'pending_agent' },
+    });
+    expect(res.statusCode).toBe(200);
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('pending_agent');
+  });
+
+  it('returns 422 for invalid transition (pending_agent -> pending_agent)', async () => {
+    const taskId = await createWsTask();
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+      headers: { cookie },
+      payload: { status: 'pending_agent' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error).toBe('invalid_transition');
+  });
+
+  it('returns 422 for invalid transition (completed -> cancelled)', async () => {
+    const taskId = await createWsTask();
+    await hub.db.update(schema.tasks).set({ status: 'completed' }).where(eq(schema.tasks.id, taskId));
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+      headers: { cookie },
+      payload: { status: 'cancelled' },
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
+  it('returns 404 for task in a different workspace', async () => {
+    const ws2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'WS2', slug: 'ws2-patch' },
+    });
+    const ws2Id = (ws2Res.json() as { id: string }).id;
+    const taskId = await createWsTask();
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${ws2Id}/tasks/${taskId}`,
+      headers: { cookie },
+      payload: { status: 'cancelled' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 401 without auth', async () => {
+    const taskId = await createWsTask();
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+      payload: { status: 'cancelled' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});

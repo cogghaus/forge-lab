@@ -1,12 +1,19 @@
 'use strict';
 
 import type { FastifyInstance } from 'fastify';
-import { and, eq, desc, sql } from 'drizzle-orm';
+import { and, eq, desc, sql, type SQL } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { requireWorkspaceMember, getUser, getWorkspace } from '../auth/middleware.js';
+
+interface DbLike {
+  all<T>(query: SQL): Promise<T[]>;
+  select: Db['select'];
+  update: Db['update'];
+  insert: Db['insert'];
+}
 
 const CreateGoalSchema = z.object({
   title: z.string().min(1).max(200),
@@ -21,7 +28,7 @@ const UpdateGoalSchema = z.object({
   parentId: z.string().nullable().optional(),
 });
 
-async function getAncestors(db: Db, goalId: string, workspaceId: string): Promise<{ id: string; title: string; parentId: string | null }[]> {
+async function getAncestors(db: DbLike, goalId: string, workspaceId: string): Promise<{ id: string; title: string; parentId: string | null }[]> {
   const rows = await db.all<{ id: string; title: string; parent_id: string | null }>(sql`
     WITH RECURSIVE ancestors(id, title, parent_id) AS (
       SELECT id, title, parent_id FROM goals WHERE id = ${goalId} AND workspace_id = ${workspaceId}
@@ -40,7 +47,7 @@ async function getAncestors(db: Db, goalId: string, workspaceId: string): Promis
   }));
 }
 
-async function wouldCreateCycle(db: Db, goalId: string, newParentId: string, workspaceId: string): Promise<boolean> {
+async function wouldCreateCycle(db: DbLike, goalId: string, newParentId: string, workspaceId: string): Promise<boolean> {
   const ancestors = await getAncestors(db, newParentId, workspaceId);
   return ancestors.some((a) => a.id === goalId);
 }
@@ -206,7 +213,7 @@ export function registerGoalRoutes(fastify: FastifyInstance, db: Db): void {
         }
       });
 
-      if (errorCode !== null) {
+      if (errorCode !== null && errorBody !== null) {
         await reply.code(errorCode).send(errorBody);
         return;
       }
