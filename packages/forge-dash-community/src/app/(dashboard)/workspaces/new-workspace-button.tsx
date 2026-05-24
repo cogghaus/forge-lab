@@ -8,20 +8,29 @@ import {
   ModalContent,
   ModalFooter,
   ModalHeader,
+  Textarea,
   useDisclosure,
 } from '@heroui/react';
-import { useRef } from 'react';
+import { useState } from 'react';
 import { createWorkspaceAction } from '@/actions/workspaces';
 
 export function NewWorkspaceButton() {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
-  const formRef = useRef<HTMLFormElement>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleAction(formData: FormData) {
+    setError(null);
     const result = await createWorkspaceAction(formData);
-    if (!result?.error) {
+    if (result?.error) {
+      setError(result.error);
+    } else {
       onOpenChange();
     }
+  }
+
+  function handleOpenChange(open: boolean) {
+    if (!open) setError(null);
+    onOpenChange();
   }
 
   return (
@@ -30,10 +39,10 @@ export function NewWorkspaceButton() {
         New Workspace
       </Button>
 
-      <Modal isOpen={isOpen} onOpenChange={onOpenChange}>
+      <Modal isOpen={isOpen} onOpenChange={handleOpenChange}>
         <ModalContent>
           {(onClose) => (
-            <form action={handleAction} ref={formRef}>
+            <form action={handleAction}>
               <ModalHeader>Create Workspace</ModalHeader>
               <ModalBody className="flex flex-col gap-4">
                 <Input label="Name" name="name" placeholder="My Project" isRequired />
@@ -44,6 +53,13 @@ export function NewWorkspaceButton() {
                   description="Lowercase letters, numbers, hyphens"
                   isRequired
                 />
+                <Textarea
+                  label="Description"
+                  name="description"
+                  placeholder="Optional description"
+                  minRows={2}
+                />
+                {error && <p className="text-danger text-sm">{error}</p>}
               </ModalBody>
               <ModalFooter>
                 <Button variant="light" onPress={onClose}>
