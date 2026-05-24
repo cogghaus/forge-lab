@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { createHub, type Hub } from '../app.js';
+import { schema } from '@forge-lab/core';
 import type { HubConfig } from '../config.js';
 
 const testConfig: HubConfig = {
@@ -181,6 +183,33 @@ describe('/workspaces/:workspaceId/goals', () => {
     expect(ids).toContain(grandparentId);
     expect(ids).toContain(parentId);
   });
+
+  it('ancestors CTE does not leak cross-workspace goals (CX-01 regression)', async () => {
+    const ws2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'WS2', slug: 'ws2' },
+    });
+    const ws2Id = (ws2Res.json() as { id: string }).id;
+    const foreignGoalId = await createGoal(hub, cookie, ws2Id, { title: 'Foreign goal' });
+
+    const childId = await createGoal(hub, cookie, workspaceId, { title: 'Child' });
+
+    // Simulate a cross-workspace parent link (future import edge case)
+    await hub.db.update(schema.goals)
+      .set({ parentId: foreignGoalId })
+      .where(eq(schema.goals.id, childId));
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/goals/${childId}/ancestors`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const { ancestors } = res.json() as { ancestors: { id: string }[] };
+    expect(ancestors.map((a) => a.id)).not.toContain(foreignGoalId);
+  });
 });
 
 describe('PATCH /workspaces/:workspaceId/goals/:goalId', () => {
@@ -296,5 +325,17 @@ describe('PATCH /workspaces/:workspaceId/goals/:goalId', () => {
       payload: { title: 'Whatever' },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('clears description when set to null (CX-04 coverage)', async () => {
+    const goalId = await createGoal(hub, cookie, workspaceId, { title: 'With desc', description: 'initial' });
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/goals/${goalId}`,
+      headers: { cookie },
+      payload: { description: null },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { ok: boolean }).ok).toBe(true);
   });
 });

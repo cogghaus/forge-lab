@@ -21,14 +21,15 @@ const UpdateGoalSchema = z.object({
   parentId: z.string().nullable().optional(),
 });
 
-async function getAncestors(db: Db, goalId: string): Promise<{ id: string; title: string; parentId: string | null }[]> {
+async function getAncestors(db: Db, goalId: string, workspaceId: string): Promise<{ id: string; title: string; parentId: string | null }[]> {
   const rows = await db.all<{ id: string; title: string; parent_id: string | null }>(sql`
     WITH RECURSIVE ancestors(id, title, parent_id) AS (
-      SELECT id, title, parent_id FROM goals WHERE id = ${goalId}
+      SELECT id, title, parent_id FROM goals WHERE id = ${goalId} AND workspace_id = ${workspaceId}
       UNION ALL
       SELECT g.id, g.title, g.parent_id
       FROM goals g
       INNER JOIN ancestors a ON g.id = a.parent_id
+      WHERE g.workspace_id = ${workspaceId}
     )
     SELECT id, title, parent_id FROM ancestors
   `);
@@ -39,9 +40,8 @@ async function getAncestors(db: Db, goalId: string): Promise<{ id: string; title
   }));
 }
 
-async function wouldCreateCycle(db: Db, goalId: string, newParentId: string): Promise<boolean> {
-  // Check if goalId is an ancestor of newParentId (would create cycle)
-  const ancestors = await getAncestors(db, newParentId);
+async function wouldCreateCycle(db: Db, goalId: string, newParentId: string, workspaceId: string): Promise<boolean> {
+  const ancestors = await getAncestors(db, newParentId, workspaceId);
   return ancestors.some((a) => a.id === goalId);
 }
 
@@ -112,7 +112,7 @@ export function registerGoalRoutes(fastify: FastifyInstance, db: Db): void {
         return;
       }
 
-      const ancestors = await getAncestors(db, goalId);
+      const ancestors = await getAncestors(db, goalId, workspaceId);
       return { ...goal, ancestors };
     },
   );
@@ -135,7 +135,7 @@ export function registerGoalRoutes(fastify: FastifyInstance, db: Db): void {
         return;
       }
 
-      const ancestors = await getAncestors(db, goalId);
+      const ancestors = await getAncestors(db, goalId, workspaceId);
       return { ancestors };
     },
   );
@@ -164,29 +164,44 @@ export function registerGoalRoutes(fastify: FastifyInstance, db: Db): void {
           await reply.code(422).send({ error: 'self_parent' });
           return;
         }
-        const parentInWs = await db
-          .select({ id: schema.goals.id })
-          .from(schema.goals)
-          .where(and(eq(schema.goals.id, body.parentId), eq(schema.goals.workspaceId, workspaceId)))
-          .get();
-        if (!parentInWs) {
-          await reply.code(404).send({ error: 'parent_not_found' });
-          return;
-        }
-        const cycle = await wouldCreateCycle(db, goalId, body.parentId);
-        if (cycle) {
-          await reply.code(422).send({ error: 'cycle_detected' });
-          return;
-        }
       }
 
-      const updates: Record<string, unknown> = { updatedAt: new Date() };
-      if (body.title !== undefined) updates['title'] = body.title;
-      if (body.description !== undefined) updates['description'] = body.description;
-      if (body.status !== undefined) updates['status'] = body.status;
-      if (body.parentId !== undefined) updates['parentId'] = body.parentId;
+      let errorCode: number | null = null;
+      let errorBody: { error: string } | null = null;
 
-      await db.update(schema.goals).set(updates).where(eq(schema.goals.id, goalId));
+      await db.transaction(async (tx) => {
+        if (body.parentId !== undefined && body.parentId !== null) {
+          const parentInWs = await tx
+            .select({ id: schema.goals.id })
+            .from(schema.goals)
+            .where(and(eq(schema.goals.id, body.parentId), eq(schema.goals.workspaceId, workspaceId)))
+            .get();
+          if (!parentInWs) {
+            errorCode = 404;
+            errorBody = { error: 'parent_not_found' };
+            return;
+          }
+          const cycle = await wouldCreateCycle(tx, goalId, body.parentId, workspaceId);
+          if (cycle) {
+            errorCode = 422;
+            errorBody = { error: 'cycle_detected' };
+            return;
+          }
+        }
+
+        const updates: Record<string, unknown> = { updatedAt: new Date() };
+        if (body.title !== undefined) updates['title'] = body.title;
+        if (body.description !== undefined) updates['description'] = body.description;
+        if (body.status !== undefined) updates['status'] = body.status;
+        if (body.parentId !== undefined) updates['parentId'] = body.parentId;
+
+        await tx.update(schema.goals).set(updates).where(eq(schema.goals.id, goalId));
+      });
+
+      if (errorCode !== null) {
+        await reply.code(errorCode).send(errorBody);
+        return;
+      }
       return { ok: true };
     },
   );
