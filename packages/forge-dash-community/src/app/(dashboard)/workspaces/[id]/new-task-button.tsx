@@ -12,9 +12,11 @@ import {
   useDisclosure,
 } from '@heroui/react';
 import { createTaskAction } from '@/actions/tasks';
+import { derivePrefix } from '@/lib/task-prefix';
 
-export function NewTaskButton({ workspaceId }: { workspaceId: string }) {
+export function NewTaskButton({ workspaceId, workspaceSlug }: { workspaceId: string; workspaceSlug: string }) {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
+  const projectPrefix = derivePrefix(workspaceSlug);
 
   async function handleAction(formData: FormData) {
     const result = await createTaskAction(workspaceId, formData);
@@ -35,14 +37,8 @@ export function NewTaskButton({ workspaceId }: { workspaceId: string }) {
             <form action={handleAction}>
               <ModalHeader>Create Task</ModalHeader>
               <ModalBody className="flex flex-col gap-4">
+                <input type="hidden" name="projectPrefix" value={projectPrefix} />
                 <Input label="Title" name="title" placeholder="Task title" isRequired />
-                <Input
-                  label="Project Prefix"
-                  name="projectPrefix"
-                  placeholder="fl"
-                  description="2-6 lowercase letters"
-                  isRequired
-                />
                 <Textarea
                   label="Description"
                   name="description"
