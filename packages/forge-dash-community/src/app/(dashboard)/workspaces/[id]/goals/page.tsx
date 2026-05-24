@@ -32,49 +32,57 @@ function GoalTree({
   parentId,
   workspaceId,
   depth,
+  visited,
 }: {
   tree: Map<string | null, HubGoal[]>;
   parentId: string | null;
   workspaceId: string;
   depth: number;
+  visited: Set<string>;
 }) {
   const goals = tree.get(parentId) ?? [];
   if (goals.length === 0) return null;
 
   return (
     <div className={depth > 0 ? 'ml-6 border-l border-default-200 pl-4' : ''}>
-      {goals.map((goal) => (
-        <div key={goal.id} className="flex flex-col gap-1 mb-3">
-          <Card>
-            <CardBody className="flex flex-row items-center gap-3 py-3">
-              <div className="flex-1 min-w-0">
-                <p className={`font-medium ${goal.status !== 'active' ? 'line-through text-default-400' : ''}`}>
-                  {goal.title}
-                </p>
-                {goal.description && (
-                  <p className="text-xs text-default-500 truncate mt-0.5">{goal.description}</p>
-                )}
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <Chip size="sm" variant="flat" color={STATUS_COLOR[goal.status] ?? 'default'}>
-                  {goal.status}
-                </Chip>
-                <GoalStatusButton
-                  workspaceId={workspaceId}
-                  goalId={goal.id}
-                  currentStatus={goal.status}
-                />
-              </div>
-            </CardBody>
-          </Card>
-          <GoalTree
-            tree={tree}
-            parentId={goal.id}
-            workspaceId={workspaceId}
-            depth={depth + 1}
-          />
-        </div>
-      ))}
+      {goals.map((goal) => {
+        if (visited.has(goal.id)) return null;
+        const nextVisited = new Set(visited);
+        nextVisited.add(goal.id);
+        return (
+          <div key={goal.id} className="flex flex-col gap-1 mb-3">
+            <Card>
+              <CardBody className="flex flex-row items-center gap-3 py-3">
+                <div className="flex-1 min-w-0">
+                  <p className={`font-medium ${goal.status !== 'active' ? 'line-through text-default-400' : ''}`}>
+                    {goal.title}
+                  </p>
+                  {goal.description && (
+                    <p className="text-xs text-default-500 truncate mt-0.5">{goal.description}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Chip size="sm" variant="flat" color={STATUS_COLOR[goal.status] ?? 'default'}>
+                    {goal.status}
+                  </Chip>
+                  <GoalStatusButton
+                    workspaceId={workspaceId}
+                    goalId={goal.id}
+                    currentStatus={goal.status}
+                  />
+                </div>
+              </CardBody>
+            </Card>
+            <GoalTree
+              tree={tree}
+              parentId={goal.id}
+              workspaceId={workspaceId}
+              depth={depth + 1}
+              visited={nextVisited}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -128,7 +136,7 @@ export default async function WorkspaceGoalsPage({ params }: Props) {
           </CardBody>
         </Card>
       ) : (
-        <GoalTree tree={tree} parentId={null} workspaceId={workspaceId} depth={0} />
+        <GoalTree tree={tree} parentId={null} workspaceId={workspaceId} depth={0} visited={new Set()} />
       )}
     </div>
   );
