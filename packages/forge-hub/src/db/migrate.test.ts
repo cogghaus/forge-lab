@@ -143,6 +143,20 @@ describe('runMigrations', () => {
     client.close();
   });
 
+  it('devices.agent_id is nullable — inserting NULL succeeds', async () => {
+    const client = await freshDb();
+    await client.execute(
+      `INSERT INTO users (id, email, password_hash, role) VALUES ('u1', 'a@b.com', 'hash', 'admin')`,
+    );
+    await expect(
+      client.execute(
+        `INSERT INTO devices (id, user_id, name, token_hash, agent_id)
+         VALUES ('d1', 'u1', 'test', 'hash1', NULL)`,
+      ),
+    ).resolves.not.toThrow();
+    client.close();
+  });
+
   it('devices table has device_type column defaulting to worker', async () => {
     const client = await freshDb();
     const res = await client.execute('PRAGMA table_info(devices)');
@@ -173,6 +187,23 @@ describe('runMigrations', () => {
     const res = await client.execute('PRAGMA table_info(tasks)');
     const cols = res.rows.map((r) => r['name'] as string);
     expect(cols).toContain('assigned_at');
+    client.close();
+  });
+
+  it('tasks.assigned_at is nullable — inserting NULL succeeds', async () => {
+    const client = await freshDb();
+    await client.execute(
+      `INSERT INTO users (id, email, password_hash, role) VALUES ('u1', 'a@b.com', 'hash', 'admin')`,
+    );
+    await client.execute(
+      `INSERT INTO workspaces (id, name, slug, owner_user_id) VALUES ('w1', 'Test', 'test', 'u1')`,
+    );
+    await expect(
+      client.execute(
+        `INSERT INTO tasks (id, project_prefix, title, status, priority, created_by, workspace_id, assigned_at)
+         VALUES ('fl-001', 'fl', 'Test', 'pending_agent', 'normal', 'u1', 'w1', NULL)`,
+      ),
+    ).resolves.not.toThrow();
     client.close();
   });
 

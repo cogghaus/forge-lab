@@ -28,7 +28,9 @@ export const TaskSchema = z.object({
   assignedDeviceId: z.string().nullable(),
   assignedAgentId: z.string().nullable(),
   /** When FM wrote assignedAgentId. Used to detect and clear stale assignments. */
-  assignedAt: z.date().nullable().optional(),
+  assignedAt: z.date().nullable(),
+  parentId: z.string().nullable(),
+  goalId: z.string().nullable(),
   createdBy: z.string(),
   createdAt: z.date(),
   updatedAt: z.date(),
