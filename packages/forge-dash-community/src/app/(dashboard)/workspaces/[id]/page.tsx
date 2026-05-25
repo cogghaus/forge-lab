@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { hubFetch, type HubGoal, type HubTask, type HubWorkspace } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { NewTaskButton } from './new-task-button';
-import { TaskList } from './task-list';
+import { GoalKanban } from './_components/goal-kanban';
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -30,32 +30,37 @@ export default async function WorkspaceTasksPage({ params }: Props) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-3">
-        <Link href="/workspaces" className="text-default-500 hover:text-foreground text-sm">
-          Workspaces
-        </Link>
-        <span className="text-default-400">/</span>
-        <h1 className="text-2xl font-bold">{workspace.name}</h1>
-      </div>
-
-      <div className="flex items-center gap-4 border-b border-default-200">
-        <span className="pb-2 border-b-2 border-primary text-primary text-sm font-medium">
-          Tasks
-        </span>
-        <Link
-          href={`/workspaces/${workspaceId}/goals`}
-          className="pb-2 text-default-500 hover:text-foreground text-sm"
-        >
-          Goals
-        </Link>
-      </div>
-
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <p className="text-sm text-default-500">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</p>
+        <div className="flex items-center gap-3">
+          <Link href="/workspaces" className="text-default-500 hover:text-foreground text-sm">
+            Workspaces
+          </Link>
+          <span className="text-default-400">/</span>
+          <h1 className="text-2xl font-bold">{workspace.name}</h1>
+        </div>
         <NewTaskButton workspaceId={workspaceId} workspaceSlug={workspace.slug} goals={goals} />
       </div>
 
-      <TaskList tasks={tasks} workspaceId={workspaceId} goals={goals} />
+      {/* Goal kanban */}
+      <GoalKanban tasks={tasks} goals={goals} workspaceId={workspaceId} />
+
+      {/* Quick links */}
+      <div className="flex items-center gap-4 text-sm">
+        <Link
+          href={`/workspaces/${workspaceId}/tasks`}
+          className="text-default-500 hover:text-foreground"
+        >
+          View all tasks
+        </Link>
+        <span className="text-default-300">·</span>
+        <Link
+          href={`/workspaces/${workspaceId}/goals`}
+          className="text-default-500 hover:text-foreground"
+        >
+          View goal tree
+        </Link>
+      </div>
     </div>
   );
 }
