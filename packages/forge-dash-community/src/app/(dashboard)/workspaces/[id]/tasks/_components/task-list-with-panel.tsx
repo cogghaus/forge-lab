@@ -23,28 +23,41 @@ interface Props {
 /**
  * Wraps `TaskList` with an `AgentOutputPanel` sidepanel.
  *
- * For tasks with an assigned agent (`assignedAgentId !== null`), clicking the
- * card opens the panel and streams the agent log via SSE. For tasks without
- * an assigned agent, clicking navigates to the task detail page — there is no
- * log file to stream and opening an SSE connection would poll the filesystem
- * indefinitely with no output.
+ * A log file exists when the daemon has claimed the task (status becomes
+ * `in_progress` and `assignedDeviceId` is set). BackgroundRuntime creates the
+ * log file at spawn time before any output arrives. Clicking such a task opens
+ * the panel and streams the log via SSE.
  *
- * Clicking another assigned task replaces the stream. The panel close button
+ * For tasks that have never been claimed (pending, no device assigned), there
+ * is no log file; clicking navigates to the task detail page instead to avoid
+ * infinite SSE polling against a non-existent file.
+ *
+ * Clicking another claimable task replaces the stream. The panel close button
  * (×) disconnects the stream and collapses the panel.
  *
  * This component is client-side so it can manage the selected-task state.
  * Data fetching is handled upstream by the (server-side) tasks/page.tsx.
  */
+
+/** Returns true when a log file should exist for this task. */
+function hasAgentLog(task: HubTask): boolean {
+  // Daemon claimTask sets assignedDeviceId + status=in_progress.
+  // assignedAgentId is set by a different path (direct agent assignment),
+  // but BackgroundRuntime creates the log at spawn regardless of which
+  // field triggered the claim. Use either signal as the gate.
+  return task.status === 'in_progress' || task.assignedDeviceId !== null || task.assignedAgentId !== null;
+}
+
 export function TaskListWithPanel({ tasks, workspaceId, goals = [] }: Props) {
   const router = useRouter();
   const [selectedTask, setSelectedTask] = useState<HubTask | null>(null);
 
   function handleTaskClick(task: HubTask): void {
-    if (task.assignedAgentId !== null) {
-      // Agent is (or was) assigned — open panel to stream the log file.
+    if (hasAgentLog(task)) {
+      // Daemon has claimed / is running — log file exists; open panel.
       setSelectedTask(task);
     } else {
-      // No agent assigned — no log file exists; navigate to detail page instead.
+      // Never claimed — no log file; navigate to detail page instead.
       router.push(`/workspaces/${workspaceId}/tasks/${task.id}`);
     }
   }

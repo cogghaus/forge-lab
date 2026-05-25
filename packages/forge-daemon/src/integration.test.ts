@@ -268,6 +268,132 @@ describe('integration: workspace-scoped task flow', () => {
   });
 });
 
+describe('integration: description truncation + empty personality fallback', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let deviceToken: string;
+  let sessionCookie: string;
+
+  // Captures the last spawned initialPrompt + personality so tests can assert on them.
+  let lastSpawnPrompt = '';
+  let lastSpawnPersonality = '';
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-trunc-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-trunc-test-xxxxxxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    const regRes = await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    expect(regRes.status).toBe(201);
+
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    expect(loginRes.status).toBe(200);
+    const setCookieHeader = loginRes.headers.get('set-cookie');
+    expect(setCookieHeader).toBeTruthy();
+    sessionCookie = setCookieHeader!.split(';')[0]!;
+
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'test-device', hostname: 'test-host', platform: 'linux' }),
+    });
+    expect(devRes.status).toBe(201);
+    const devBody = (await devRes.json()) as { token: string };
+    deviceToken = devBody.token;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(
+      new MockRuntime({
+        completionDelayMs: 20,
+        resultFactory: ({ prompt, personality }) => {
+          lastSpawnPrompt = prompt;
+          lastSpawnPersonality = personality;
+          return `ok`;
+        },
+      }),
+    );
+
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      // Empty string — should fall back to 'default' not pass blank --system-prompt
+      defaultPersonality: '',
+    });
+    await daemon.start();
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('truncates oversized description to 8000 chars in initialPrompt', { timeout: 20000 }, async () => {
+    const longDesc = 'x'.repeat(10_000); // 10 000 chars — over the 8 000 limit
+    const createRes = await fetch(`${hubUrl}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'tr', title: 'Trunc task', description: longDesc }),
+    });
+    expect(createRes.status).toBe(201);
+    const { id: taskId } = (await createRes.json()) as { id: string };
+
+    await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+      if (!res.ok) return null;
+      const task = (await res.json()) as { status: string };
+      return task.status === 'completed' ? task : null;
+    }, 12000);
+
+    // prompt is "Trunc task\n\n" + truncated description (8000 chars)
+    expect(lastSpawnPrompt.length).toBeLessThanOrEqual('Trunc task\n\n'.length + 8_000);
+    expect(lastSpawnPrompt).toContain('Trunc task');
+  });
+
+  it('empty defaultPersonality falls back to non-empty string (not blank --system-prompt)', { timeout: 20000 }, async () => {
+    const createRes = await fetch(`${hubUrl}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'tr', title: 'Personality fallback task' }),
+    });
+    expect(createRes.status).toBe(201);
+    const { id: taskId } = (await createRes.json()) as { id: string };
+
+    await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+      if (!res.ok) return null;
+      const task = (await res.json()) as { status: string };
+      return task.status === 'completed' ? task : null;
+    }, 12000);
+
+    expect(lastSpawnPersonality.trim().length).toBeGreaterThan(0);
+  });
+});
+
 describe('integration: composed personality via registry', () => {
   let hub: Hub;
   let daemon: Daemon;
