@@ -464,4 +464,77 @@ describe('/workspaces routes', () => {
     });
     expect(res.statusCode).toBe(200);
   });
+
+  // ---------------------------------------------------------------------------
+  // Activity feed
+  // ---------------------------------------------------------------------------
+
+  it('GET /workspaces/:workspaceId/activity requires auth', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/workspaces/fake-id/activity',
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('GET /workspaces/:workspaceId/activity - 403 for non-member', async () => {
+    const { cookie } = await setupOwner(hub);
+    const wsId = await createWorkspace(hub, cookie, 'act-priv');
+    const { cookie: cookieB } = await setupSecondUser(hub);
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${wsId}/activity`,
+      headers: { cookie: cookieB },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('GET /workspaces/:workspaceId/activity returns task history with task title', async () => {
+    const { cookie } = await setupOwner(hub);
+    const wsId = await createWorkspace(hub, cookie, 'act-ws');
+
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${wsId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ACT', title: 'Activity task' },
+    });
+    expect(taskRes.statusCode).toBe(201);
+
+    const actRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${wsId}/activity`,
+      headers: { cookie },
+    });
+    expect(actRes.statusCode).toBe(200);
+    const { activity } = actRes.json() as {
+      activity: { eventName: string; taskTitle: string; taskId: string }[];
+    };
+    expect(activity.length).toBeGreaterThan(0);
+    expect(activity[0]!.eventName).toBe('task.created');
+    expect(activity[0]!.taskTitle).toBe('Activity task');
+    expect(activity[0]!.taskId).toBe('act-001');
+  });
+
+  it('GET /workspaces/:workspaceId/activity excludes tasks from other workspaces', async () => {
+    const { cookie } = await setupOwner(hub);
+    const wsId = await createWorkspace(hub, cookie, 'act-ws-a');
+    const wsIdB = await createWorkspace(hub, cookie, 'act-ws-b');
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${wsIdB}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'OTH', title: 'Other workspace task' },
+    });
+
+    const actRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${wsId}/activity`,
+      headers: { cookie },
+    });
+    expect(actRes.statusCode).toBe(200);
+    const { activity } = actRes.json() as { activity: unknown[] };
+    expect(activity).toHaveLength(0);
+  });
 });

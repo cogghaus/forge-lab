@@ -71,10 +71,18 @@ export class Daemon {
     if (this.running) return;
     this.running = true;
     await this.client.connect();
+    // task.created / task.assigned / task.requeued all funnel through
+    // handleIncomingTask. The hub's claim endpoint is an atomic SQL UPDATE
+    // guarded by status IN ('pending_agent', 'assigned'), so concurrent
+    // daemon instances racing on the same event will produce at most one
+    // successful claim — the loser gets a 409 and logs a non-fatal error.
     this.client.on('task.created', (env: EventEnvelope) => {
       void this.handleIncomingTask(env);
     });
     this.client.on('task.assigned', (env: EventEnvelope) => {
+      void this.handleIncomingTask(env);
+    });
+    this.client.on('task.requeued', (env: EventEnvelope) => {
       void this.handleIncomingTask(env);
     });
     const doneListener: DoneListener = (taskId, result) => this.handleTaskDone(taskId, result);
@@ -147,8 +155,12 @@ export class Daemon {
       if (task.status !== 'pending_agent' && task.status !== 'assigned') {
         return;
       }
-      // Only handle tasks belonging to this daemon's workspace scope.
-      if (task.workspaceId !== (this.opts.workspaceId ?? null)) {
+      // Scope guard: when workspaceId is configured this daemon only claims
+      // tasks belonging to that workspace. When undefined (no scope), the
+      // daemon acts as a global worker and claims tasks from all workspaces —
+      // this is intentional for single-machine setups. Production deployments
+      // with multiple workspaces should configure FORGE_DAEMON_WORKSPACE_ID.
+      if (this.opts.workspaceId !== undefined && task.workspaceId !== this.opts.workspaceId) {
         return;
       }
       await this.client.claimTask(taskId);
@@ -168,7 +180,7 @@ export class Daemon {
       const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
       const agentId = this.opts.defaultAgentId ?? 'default';
 
-      let personalityStr = this.opts.defaultPersonality ?? 'default';
+      let personalityStr = this.opts.defaultPersonality || 'default';
       const registry = this.opts.personalityRegistry;
       if (registry) {
         const personality = registry.get(agentId);
@@ -187,6 +199,13 @@ export class Daemon {
         }
       }
 
+      const MAX_DESC_CHARS = 8_000;
+      const desc = claimed.description != null
+        ? claimed.description.slice(0, MAX_DESC_CHARS)
+        : null;
+      const initialPrompt = desc != null
+        ? `${claimed.title}\n\n${desc}`
+        : claimed.title;
       const instance = await runtime.spawn(
         {
           agentId,
@@ -195,7 +214,7 @@ export class Daemon {
           taskId: claimed.id,
           config: {},
         },
-        claimed.title,
+        initialPrompt,
       );
       this.activeInstances.set(claimed.id, { instance, runtimeId: this.opts.defaultRuntimeId });
       this.logger.info('task spawned', { taskId: claimed.id, runtime: this.opts.defaultRuntimeId });
