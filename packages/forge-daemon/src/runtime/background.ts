@@ -46,13 +46,15 @@ export interface BackgroundSpawner {
  */
 export const defaultBackgroundSpawner: BackgroundSpawner = {
   spawn(command, args, options) {
+    // Note: detached+unref() causes stdout socket to be unref'd on Windows,
+    // which stops data delivery to the piped log stream. Keep the process
+    // attached so pipes work correctly. Agents are tied to daemon lifetime;
+    // a daemon restart will kill in-flight agents (acceptable for now).
     const child = nodeSpawn(command, args, {
       cwd: options.cwd,
       env: options.env,
-      detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    child.unref();
     // ChildProcess satisfies BackgroundProcess structurally.
     return child as unknown as BackgroundProcess;
   },
@@ -168,7 +170,8 @@ export class BackgroundRuntime implements AgentRuntime {
       );
     });
 
-    const claudeArgs: string[] = ['--system-prompt', config.personality];
+    const personality = config.personality || 'You are a helpful software engineering assistant.';
+    const claudeArgs: string[] = ['--print', '--system-prompt', personality];
     if (this.dangerouslySkipPermissions) {
       claudeArgs.push('--dangerously-skip-permissions');
     }

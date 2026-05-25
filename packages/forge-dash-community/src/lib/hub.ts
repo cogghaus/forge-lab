@@ -4,6 +4,9 @@ export type HubResponse<T> =
   | { ok: true;  data: T;       status: number; setCookie?: string }
   | { ok: false; data: unknown; status: number; setCookie?: string };
 
+/** Network timeout for hub requests (ms). Prevents SSR from hanging if hub is slow. */
+const HUB_FETCH_TIMEOUT_MS = 5_000;
+
 export async function hubFetch<T>(
   path: string,
   options: {
@@ -17,12 +20,20 @@ export async function hubFetch<T>(
   if (options.cookie) headers['cookie'] = options.cookie.replace(/[\r\n\0;]/g, '');
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(`${HUB_URL}${path}`, {
-    method: options.method ?? 'GET',
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-    cache: 'no-store',
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${HUB_URL}${path}`, {
+      method: options.method ?? 'GET',
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      cache: 'no-store',
+      signal: AbortSignal.timeout(HUB_FETCH_TIMEOUT_MS),
+    });
+  } catch {
+    // Network error or timeout — return a synthetic error response so callers
+    // can degrade gracefully instead of crashing the SSR render.
+    return { ok: false, data: null, status: 0 };
+  }
 
   const text = await res.text();
   let parsed: unknown = null;
@@ -44,7 +55,7 @@ export interface HubWorkspace {
   slug: string;
   description: string | null;
   status: string;
-  createdAt: number;
+  createdAt: string;
   role: string;
 }
 
@@ -60,8 +71,8 @@ export interface HubTask {
   assignedAgentId: string | null;
   goalId: string | null;
   createdBy: string;
-  createdAt: number;
-  completedAt: number | null;
+  createdAt: string;
+  completedAt: string | null;
 }
 
 export interface HubGoal {
@@ -72,8 +83,8 @@ export interface HubGoal {
   description: string | null;
   status: 'active' | 'completed' | 'cancelled';
   createdBy: string;
-  createdAt: number;
-  updatedAt: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface HubTaskHistory {
@@ -82,5 +93,24 @@ export interface HubTaskHistory {
   eventName: string;
   source: string;
   payload: unknown;
-  createdAt: number;
+  createdAt: string;
+}
+
+export interface HubActivityEvent {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  eventName: string;
+  source: string;
+  payload: unknown;
+  createdAt: string;
+}
+
+export interface HubDevice {
+  id: string;
+  name: string;
+  hostname: string | null;
+  platform: string | null;
+  lastSeen: string | null;
+  createdAt: string;
 }

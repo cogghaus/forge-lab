@@ -33,7 +33,7 @@ function statusLabel(s: string) {
   return s.replace(/_/g, ' ');
 }
 
-function formatTs(ts: number): string {
+function formatTs(ts: string): string {
   return new Date(ts).toLocaleString();
 }
 
