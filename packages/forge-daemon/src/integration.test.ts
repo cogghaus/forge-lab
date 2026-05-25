@@ -369,9 +369,35 @@ describe('integration: description truncation + empty personality fallback', () 
       return task.status === 'completed' ? task : null;
     }, 12000);
 
-    // prompt is "Trunc task\n\n" + truncated description (8000 chars)
-    expect(lastSpawnPrompt.length).toBeLessThanOrEqual('Trunc task\n\n'.length + 8_000);
+    // prompt is "Trunc task\n\n" + truncated description (8000 chars) + done-file instruction
+    // Use 9000 as generous upper bound — truncation at 8000 is the critical invariant.
+    expect(lastSpawnPrompt.length).toBeLessThanOrEqual(9_000);
     expect(lastSpawnPrompt).toContain('Trunc task');
+    // Done-file instruction still present even with truncated description
+    expect(lastSpawnPrompt).toContain('.forge/tasks/');
+  });
+
+  it('initialPrompt includes done-file write instruction with taskId', { timeout: 20000 }, async () => {
+    const createRes = await fetch(`${hubUrl}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'tr', title: 'Done file instruction test' }),
+    });
+    expect(createRes.status).toBe(201);
+    const { id: taskId } = (await createRes.json()) as { id: string };
+
+    await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+      if (!res.ok) return null;
+      const task = (await res.json()) as { status: string };
+      return task.status === 'completed' ? task : null;
+    }, 12000);
+
+    // Initial prompt must include explicit done-file write instruction so agents
+    // actually write the file (not just describe writing it in text output).
+    expect(lastSpawnPrompt).toContain('.forge/tasks/');
+    expect(lastSpawnPrompt).toContain(taskId);
+    expect(lastSpawnPrompt).toContain('.done');
   });
 
   it('empty defaultPersonality falls back to non-empty string (not blank --system-prompt)', { timeout: 20000 }, async () => {

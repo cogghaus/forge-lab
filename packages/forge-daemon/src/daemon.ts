@@ -203,9 +203,17 @@ export class Daemon {
       const desc = claimed.description != null
         ? claimed.description.slice(0, MAX_DESC_CHARS)
         : null;
+      // Append mandatory done-file write instruction so agents actually write the
+      // marker file rather than just describing it in text output. The instruction
+      // names the exact path so agents don't have to infer it from the protocol docs.
+      const doneInstruction =
+        `\n\n---\nWhen you have completed the task above, you MUST write the done file using ` +
+        `a tool (Bash, Write, or shell command). Create \`.forge/tasks/${claimed.id}.done\` with:\n` +
+        `{"result":"<one sentence summary of what you did>","completedAt":"<current ISO 8601 timestamp>"}\n` +
+        `Do not just describe writing the file — actually write it with a tool call.`;
       const initialPrompt = desc != null
-        ? `${claimed.title}\n\n${desc}`
-        : claimed.title;
+        ? `${claimed.title}\n\n${desc}${doneInstruction}`
+        : `${claimed.title}${doneInstruction}`;
       const instance = await runtime.spawn(
         {
           agentId,
