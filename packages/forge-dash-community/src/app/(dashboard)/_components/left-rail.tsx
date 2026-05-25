@@ -62,13 +62,14 @@ function useAgentStatus(workspaceId: string | null): AgentStatusState {
         let activeTasks: HubTask[] = [];
 
         if (devRes.ok) {
-          const d = (await devRes.json()) as { devices: HubDevice[] };
-          devices = d.devices ?? [];
+          // Optional chaining guards against hub returning 200 with null/non-object body.
+          const d = (await devRes.json()) as { devices?: HubDevice[] } | null;
+          devices = d?.devices ?? [];
         }
 
         if (taskRes?.ok) {
-          const d = (await taskRes.json()) as { tasks: HubTask[] };
-          activeTasks = (d.tasks ?? []).filter(t => t.status === 'in_progress');
+          const d = (await taskRes.json()) as { tasks?: HubTask[] } | null;
+          activeTasks = (d?.tasks ?? []).filter(t => t.status === 'in_progress');
         }
 
         setState({ devices, activeTasks, loading: false });
