@@ -31,6 +31,8 @@ export async function writeTaskFile(workdir: string, task: Task): Promise<void> 
 
 export interface DoneResult {
   result?: string;
+  /** ISO 8601 timestamp written by the agent. Informational; not used by the daemon. */
+  completedAt?: string;
 }
 
 export async function readDoneFile(

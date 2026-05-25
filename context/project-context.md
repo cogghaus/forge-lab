@@ -1,8 +1,39 @@
 # Project Context
 
-**This file is the single source of truth for all Vibe Forge agents working on forge-lab.**
+**This file is the single source of truth for all forge-lab agents working on forge-lab.**
 
 Every agent loads this file at session start. Update this when architecture or conventions change. The authoritative architectural decisions live in the `notez` MCP under the folder named `forge-lab` — when this file and notez disagree, notez wins.
+
+---
+
+## Task Completion Protocol (MANDATORY)
+
+You are running as a background agent spawned by the forge-lab daemon. The daemon tracks your progress via files on disk. **You MUST signal completion by writing a done file** — without it the daemon will never mark the task complete in the hub and the task stays stuck.
+
+### When your task is done:
+
+1. Write the following JSON to `.forge/tasks/<taskId>.done` (replace `<taskId>` with the actual task ID from the Current Task section below):
+
+```json
+{"result":"<one-sentence summary of what you did>","completedAt":"<ISO 8601 timestamp>"}
+```
+
+Example:
+```json
+{"result":"Added ActivityStreamPanel and DevicesPanel components; wired into workspace page.tsx","completedAt":"2026-05-25T14:30:00.000Z"}
+```
+
+2. Use `new Date().toISOString()` in your head to produce the timestamp, or just use the current date/time.
+
+3. The task file at `.forge/tasks/<taskId>.md` was written by the daemon — read it for context but do not delete it.
+
+### What counts as done:
+
+- Code written, TypeScript compiles (`pnpm -F <package> build` passes)
+- Tests written for any new functionality or bug fixes (`pnpm -F <package> test` passes)
+- No regressions in existing tests
+
+If you cannot complete the task (blocked, ambiguous, out of scope), write the done file anyway with `"result":"BLOCKED: <reason>"` so the daemon can close the task and Adam can requeue it.
 
 ---
 
