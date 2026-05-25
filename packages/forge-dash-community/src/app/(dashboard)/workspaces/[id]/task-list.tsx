@@ -33,9 +33,15 @@ interface Props {
   tasks: HubTask[];
   workspaceId: string;
   goals?: HubGoal[];
+  /**
+   * When provided, clicking a task card calls this handler instead of
+   * navigating to the task detail page. Used by TaskListWithPanel to open
+   * the agent output sidepanel.
+   */
+  onTaskClick?: (task: HubTask) => void;
 }
 
-export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
+export function TaskList({ tasks, workspaceId, goals = [], onTaskClick }: Props) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [isLive, setIsLive] = useState(false);
@@ -73,14 +79,8 @@ export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
           live
         </div>
       )}
-      {tasks.map((task) => (
-        <Card
-          key={task.id}
-          as={Link}
-          href={`/workspaces/${workspaceId}/tasks/${task.id}`}
-          isPressable
-          className="w-full"
-        >
+      {tasks.map((task) => {
+        const cardBody = (
           <CardBody className="flex flex-row items-center gap-4 py-3">
             <span className="font-mono text-xs text-default-400 w-16 shrink-0">{task.id}</span>
             <div className="flex-1 min-w-0">
@@ -113,8 +113,31 @@ export function TaskList({ tasks, workspaceId, goals = [] }: Props) {
               </Chip>
             </div>
           </CardBody>
-        </Card>
-      ))}
+        );
+
+        // When onTaskClick is provided, use press handler (panel mode).
+        // Otherwise, navigate to the task detail page (default link mode).
+        return onTaskClick ? (
+          <Card
+            key={task.id}
+            isPressable
+            onPress={() => onTaskClick(task)}
+            className="w-full"
+          >
+            {cardBody}
+          </Card>
+        ) : (
+          <Card
+            key={task.id}
+            as={Link}
+            href={`/workspaces/${workspaceId}/tasks/${task.id}`}
+            isPressable
+            className="w-full"
+          >
+            {cardBody}
+          </Card>
+        );
+      })}
     </div>
   );
 }
