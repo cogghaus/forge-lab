@@ -119,6 +119,19 @@ describe('BackgroundRuntime', () => {
     expect(call.options.cwd).toBe(workdir);
   });
 
+  it('includes --print flag for non-interactive mode', async () => {
+    const { spawner, calls } = makeFakeSpawner();
+    const rt = new BackgroundRuntime({ claudePath: 'claude', spawner });
+
+    await rt.spawn(
+      { agentId: 'a', personality: 'sys', workdir, taskId: 'task-1', config: {} },
+      'do the thing',
+    );
+
+    const call = calls[0]!;
+    expect(call.args[0]).toBe('--print');
+  });
+
   it('includes --dangerously-skip-permissions when option is set', async () => {
     const { spawner, calls } = makeFakeSpawner();
     const rt = new BackgroundRuntime({ spawner, dangerouslySkipPermissions: true });
