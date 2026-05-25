@@ -197,7 +197,7 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
         })
         .from(schema.taskHistory)
         .innerJoin(schema.tasks, eq(schema.taskHistory.taskId, schema.tasks.id))
-        .where(eq(schema.tasks.workspaceId, id))
+        .where(eq(schema.taskHistory.workspaceId, id))
         .orderBy(desc(schema.taskHistory.createdAt))
         .limit(ACTIVITY_LIMIT);
       return { activity };

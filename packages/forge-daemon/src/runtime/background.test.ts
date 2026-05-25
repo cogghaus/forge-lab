@@ -324,4 +324,20 @@ describe('BackgroundRuntime', () => {
     // Log file should have been created then destroyed — directory exists, file may exist
     // but the stream is closed (no open fd leak). We verify spawn threw cleanly.
   });
+
+  it('empty personality falls back to non-empty default (guard against blank --system-prompt)', async () => {
+    const { spawner, calls } = makeFakeSpawner();
+    const rt = new BackgroundRuntime({ claudePath: 'claude', spawner });
+
+    await rt.spawn(
+      { agentId: 'a', personality: '', workdir, taskId: 'fl-023', config: {} },
+      'do the thing',
+    );
+
+    const call = calls[0]!;
+    const sysIdx = call.args.indexOf('--system-prompt');
+    expect(sysIdx).toBeGreaterThanOrEqual(0);
+    const personalityArg = call.args[sysIdx + 1]!;
+    expect(personalityArg.trim().length).toBeGreaterThan(0);
+  });
 });

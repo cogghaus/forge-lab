@@ -172,7 +172,7 @@ export class Daemon {
       const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
       const agentId = this.opts.defaultAgentId ?? 'default';
 
-      let personalityStr = this.opts.defaultPersonality ?? 'default';
+      let personalityStr = this.opts.defaultPersonality || 'default';
       const registry = this.opts.personalityRegistry;
       if (registry) {
         const personality = registry.get(agentId);
@@ -191,6 +191,13 @@ export class Daemon {
         }
       }
 
+      const MAX_DESC_CHARS = 8_000;
+      const desc = claimed.description != null
+        ? claimed.description.slice(0, MAX_DESC_CHARS)
+        : null;
+      const initialPrompt = desc != null
+        ? `${claimed.title}\n\n${desc}`
+        : claimed.title;
       const instance = await runtime.spawn(
         {
           agentId,
@@ -199,9 +206,7 @@ export class Daemon {
           taskId: claimed.id,
           config: {},
         },
-        claimed.description != null
-          ? `${claimed.title}\n\n${claimed.description}`
-          : claimed.title,
+        initialPrompt,
       );
       this.activeInstances.set(claimed.id, { instance, runtimeId: this.opts.defaultRuntimeId });
       this.logger.info('task spawned', { taskId: claimed.id, runtime: this.opts.defaultRuntimeId });

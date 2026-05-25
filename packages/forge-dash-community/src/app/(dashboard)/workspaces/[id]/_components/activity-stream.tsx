@@ -20,7 +20,9 @@ function eventMeta(name: string): { label: string; color: string } {
 
 /** Formats an ISO timestamp string as relative time (e.g. "3m ago"). */
 function relativeTime(ts: string): string {
-  const diffS = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  const ms = Date.now() - new Date(ts).getTime();
+  if (isNaN(ms)) return 'unknown';
+  const diffS = Math.max(0, Math.floor(ms / 1000));
   if (diffS < 60)  return `${diffS}s ago`;
   if (diffS < 3600) return `${Math.floor(diffS / 60)}m ago`;
   if (diffS < 86400) return `${Math.floor(diffS / 3600)}h ago`;

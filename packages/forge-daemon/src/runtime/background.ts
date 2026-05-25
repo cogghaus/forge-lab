@@ -170,7 +170,8 @@ export class BackgroundRuntime implements AgentRuntime {
       );
     });
 
-    const claudeArgs: string[] = ['--print', '--system-prompt', config.personality];
+    const personality = config.personality || 'You are a helpful software engineering assistant.';
+    const claudeArgs: string[] = ['--print', '--system-prompt', personality];
     if (this.dangerouslySkipPermissions) {
       claudeArgs.push('--dangerously-skip-permissions');
     }
