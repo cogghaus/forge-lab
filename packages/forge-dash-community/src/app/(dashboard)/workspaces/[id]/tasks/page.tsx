@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { hubFetch, type HubGoal, type HubTask, type HubWorkspace } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { NewTaskButton } from '../new-task-button';
-import { TaskList } from '../task-list';
+import { TaskListWithPanel } from './_components/task-list-with-panel';
 
 interface Props {
   params: Promise<{ id: string }>;
@@ -52,7 +52,7 @@ export default async function WorkspaceTaskListPage({ params }: Props) {
         <NewTaskButton workspaceId={workspaceId} workspaceSlug={workspace.slug} goals={goals} />
       </div>
 
-      <TaskList tasks={tasks} workspaceId={workspaceId} goals={goals} />
+      <TaskListWithPanel tasks={tasks} workspaceId={workspaceId} goals={goals} />
     </div>
   );
 }
