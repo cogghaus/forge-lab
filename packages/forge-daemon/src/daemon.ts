@@ -147,8 +147,9 @@ export class Daemon {
       if (task.status !== 'pending_agent' && task.status !== 'assigned') {
         return;
       }
-      // Only handle tasks belonging to this daemon's workspace scope.
-      if (task.workspaceId !== (this.opts.workspaceId ?? null)) {
+      // Only filter by workspace when a scope is explicitly configured.
+      // Unscoped daemon processes tasks across all workspaces.
+      if (this.opts.workspaceId !== undefined && task.workspaceId !== this.opts.workspaceId) {
         return;
       }
       await this.client.claimTask(taskId);

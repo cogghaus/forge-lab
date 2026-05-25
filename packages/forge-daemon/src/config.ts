@@ -12,6 +12,9 @@ const ConfigSchema = z.object({
   // Defaults to true since background agents run unattended with no human
   // to approve tool calls. Set FORGE_DAEMON_SKIP_PERMISSIONS=false to disable.
   skipPermissions: z.coerce.boolean().default(true),
+  // Optional workspace scope. When set, daemon only processes tasks in this
+  // workspace. When unset, daemon processes tasks across all workspaces.
+  workspaceId: z.string().optional(),
 });
 
 export type DaemonConfig = z.infer<typeof ConfigSchema>;
@@ -23,5 +26,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     workdir: env['FORGE_DAEMON_WORKDIR'] ?? process.cwd(),
     defaultRuntimeId: env['FORGE_DAEMON_DEFAULT_RUNTIME'],
     skipPermissions: env['FORGE_DAEMON_SKIP_PERMISSIONS'],
+    workspaceId: env['FORGE_DAEMON_WORKSPACE_ID'],
   });
 }

@@ -56,6 +56,7 @@ async function main(): Promise<void> {
     workdir: config.workdir,
     runtimes,
     defaultRuntimeId: config.defaultRuntimeId,
+    ...(config.workspaceId !== undefined && { workspaceId: config.workspaceId }),
     logger,
   });
 
