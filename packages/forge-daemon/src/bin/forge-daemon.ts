@@ -8,6 +8,7 @@ import { ClaudeCodeRuntime } from '../runtime/claude-code.js';
 import { BackgroundRuntime } from '../runtime/background.js';
 import { RuntimeRegistry } from '../runtime/registry.js';
 import { loadConfig } from '../config.js';
+import { loadBuiltinRegistry } from '@forge-lab/agents';
 
 async function buildLogger(workdir: string) {
   // Write daemon operational logs to context/daemon.log alongside agent logs.
@@ -41,14 +42,15 @@ async function buildLogger(workdir: string) {
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = await buildLogger(config.workdir);
+  const personalityRegistry = await loadBuiltinRegistry();
   const runtimes = new RuntimeRegistry();
   runtimes.register(new MockRuntime());
   runtimes.register(new ClaudeCodeRuntime());
   // C3: dangerouslySkipPermissions driven by config (FORGE_DAEMON_SKIP_PERMISSIONS env).
   runtimes.register(new BackgroundRuntime({ dangerouslySkipPermissions: config.skipPermissions }));
 
-  // C7: log the active runtime so operators notice if the default changed.
-  logger.info('active default runtime', { runtimeId: config.defaultRuntimeId, skipPermissions: config.skipPermissions });
+  // C7: log the active runtime and agent so operators notice if the defaults changed.
+  logger.info('active default runtime', { runtimeId: config.defaultRuntimeId, agentId: config.defaultAgentId, skipPermissions: config.skipPermissions });
 
   const daemon = new Daemon({
     hubUrl: config.hubUrl,
@@ -56,6 +58,8 @@ async function main(): Promise<void> {
     workdir: config.workdir,
     runtimes,
     defaultRuntimeId: config.defaultRuntimeId,
+    defaultAgentId: config.defaultAgentId,
+    personalityRegistry,
     ...(config.workspaceId !== undefined && { workspaceId: config.workspaceId }),
     logger,
   });

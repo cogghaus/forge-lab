@@ -11,10 +11,24 @@ const ConfigSchema = z.object({
   // C3: allow operators to disable --dangerously-skip-permissions via env.
   // Defaults to true since background agents run unattended with no human
   // to approve tool calls. Set FORGE_DAEMON_SKIP_PERMISSIONS=false to disable.
-  skipPermissions: z.coerce.boolean().default(true),
+  // z.coerce.boolean() is NOT used here: Boolean('false') === true (non-empty
+  // string is truthy). Instead we preprocess so 'false'/'0' → false and
+  // undefined → true (the safe default for unattended daemon use).
+  skipPermissions: z.preprocess(
+    (val) => {
+      if (val === undefined) return true;
+      if (val === 'false' || val === '0') return false;
+      return Boolean(val);
+    },
+    z.boolean(),
+  ),
   // Optional workspace scope. When set, daemon only processes tasks in this
   // workspace. When unset, daemon processes tasks across all workspaces.
   workspaceId: z.string().optional(),
+  // Agent personality to use for spawned tasks. Must match an id in the
+  // PersonalityRegistry (see @forge-lab/agents built-in personalities).
+  // Defaults to 'architect' — the most general built-in personality.
+  defaultAgentId: z.string().default('architect'),
 });
 
 export type DaemonConfig = z.infer<typeof ConfigSchema>;
@@ -27,5 +41,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     defaultRuntimeId: env['FORGE_DAEMON_DEFAULT_RUNTIME'],
     skipPermissions: env['FORGE_DAEMON_SKIP_PERMISSIONS'],
     workspaceId: env['FORGE_DAEMON_WORKSPACE_ID'],
+    defaultAgentId: env['FORGE_DAEMON_AGENT_ID'],
   });
 }
