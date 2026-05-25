@@ -18,9 +18,9 @@ function eventMeta(name: string): { label: string; color: string } {
   return EVENT_META[name] ?? { label: name, color: 'rgba(245,240,235,0.35)' };
 }
 
-/** Formats a millisecond epoch timestamp as relative time (e.g. "3m ago"). */
-function relativeTime(ms: number): string {
-  const diffS = Math.floor((Date.now() - ms) / 1000);
+/** Formats an ISO timestamp string as relative time (e.g. "3m ago"). */
+function relativeTime(ts: string): string {
+  const diffS = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
   if (diffS < 60)  return `${diffS}s ago`;
   if (diffS < 3600) return `${Math.floor(diffS / 60)}m ago`;
   if (diffS < 86400) return `${Math.floor(diffS / 3600)}h ago`;

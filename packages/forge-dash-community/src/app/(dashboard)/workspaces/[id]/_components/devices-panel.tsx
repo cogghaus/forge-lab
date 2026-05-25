@@ -11,9 +11,9 @@ const ONLINE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 // Helpers
 // ---------------------------------------------------------------------------
 
-function isOnline(lastSeen: number | null): boolean {
+function isOnline(lastSeen: string | null): boolean {
   if (lastSeen === null) return false;
-  return Date.now() - lastSeen < ONLINE_THRESHOLD_MS;
+  return Date.now() - new Date(lastSeen).getTime() < ONLINE_THRESHOLD_MS;
 }
 
 function platformLabel(platform: string | null): string {

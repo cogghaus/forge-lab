@@ -44,7 +44,7 @@ export interface HubWorkspace {
   slug: string;
   description: string | null;
   status: string;
-  createdAt: number;
+  createdAt: string;
   role: string;
 }
 
@@ -60,8 +60,8 @@ export interface HubTask {
   assignedAgentId: string | null;
   goalId: string | null;
   createdBy: string;
-  createdAt: number;
-  completedAt: number | null;
+  createdAt: string;
+  completedAt: string | null;
 }
 
 export interface HubGoal {
@@ -72,8 +72,8 @@ export interface HubGoal {
   description: string | null;
   status: 'active' | 'completed' | 'cancelled';
   createdBy: string;
-  createdAt: number;
-  updatedAt: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface HubTaskHistory {
@@ -82,5 +82,24 @@ export interface HubTaskHistory {
   eventName: string;
   source: string;
   payload: unknown;
-  createdAt: number;
+  createdAt: string;
+}
+
+export interface HubActivityEvent {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  eventName: string;
+  source: string;
+  payload: unknown;
+  createdAt: string;
+}
+
+export interface HubDevice {
+  id: string;
+  name: string;
+  hostname: string | null;
+  platform: string | null;
+  lastSeen: string | null;
+  createdAt: string;
 }
