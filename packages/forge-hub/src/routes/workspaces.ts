@@ -6,6 +6,8 @@ import { CreateWorkspaceInputSchema, schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { requireUser, requireWorkspaceMember, getUser, getWorkspace } from '../auth/middleware.js';
 
+const ACTIVITY_LIMIT = 50;
+
 const UpdateWorkspaceInputSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).nullable().optional(),
@@ -171,6 +173,34 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
         role: body.role,
       });
       await reply.code(201).send({ ok: true });
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Activity feed — last 50 task-history events scoped to this workspace
+  // ---------------------------------------------------------------------------
+
+  fastify.get<{ Params: { workspaceId: string } }>(
+    '/workspaces/:workspaceId/activity',
+    { preHandler: requireWorkspaceMember(db) },
+    async (req) => {
+      const { id } = getWorkspace(req);
+      const activity = await db
+        .select({
+          id: schema.taskHistory.id,
+          taskId: schema.taskHistory.taskId,
+          taskTitle: schema.tasks.title,
+          eventName: schema.taskHistory.eventName,
+          source: schema.taskHistory.source,
+          payload: schema.taskHistory.payload,
+          createdAt: schema.taskHistory.createdAt,
+        })
+        .from(schema.taskHistory)
+        .innerJoin(schema.tasks, eq(schema.taskHistory.taskId, schema.tasks.id))
+        .where(eq(schema.tasks.workspaceId, id))
+        .orderBy(desc(schema.taskHistory.createdAt))
+        .limit(ACTIVITY_LIMIT);
+      return { activity };
     },
   );
 
