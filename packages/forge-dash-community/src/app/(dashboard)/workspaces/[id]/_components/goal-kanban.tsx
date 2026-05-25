@@ -104,8 +104,11 @@ function GoalRow({ goal, tasks, workspaceId }: GoalRowProps) {
       </span>
 
       {/* Segmented progress bar */}
+      {/* Use segments.length === 0 (not count === 0) so tasks with statuses not
+          covered by BUCKETS still render a visible placeholder bar instead of
+          an invisible empty container. */}
       <div className="flex gap-[3px] h-2 flex-1 min-w-0 rounded overflow-hidden">
-        {count === 0 ? (
+        {segments.length === 0 ? (
           <div className="flex-1 rounded" style={{ background: 'rgba(255,255,255,0.06)' }} />
         ) : (
           segments.map((seg) => (
@@ -202,7 +205,9 @@ export function GoalKanban({ goals, tasks, workspaceId }: GoalKanbanProps) {
 
       {/* Goal rows */}
       <div className="flex flex-col py-1">
-        {visibleGoals.length === 0 && ungroupedTasks.length === 0 && (
+        {/* Show empty state only when there are truly no goals at all — not
+            when completed goals are just hidden by the toggle. */}
+        {goals.length === 0 && ungroupedTasks.length === 0 && (
           <p className="px-3 py-6 text-sm text-center" style={{ color: 'rgba(245,240,235,0.35)' }}>
             No goals yet. Create a goal to start tracking progress.
           </p>
