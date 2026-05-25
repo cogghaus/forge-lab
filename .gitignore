@@ -9,6 +9,13 @@ coverage/
 .env.*
 !.env.example
 
+# Runtime / dev artifacts
+dev.db
+.forge/
+_temp/
+redirect.png
+.claude/scheduled_tasks.lock
+
 # Vibe Forge
 # Temporary tooling used during forge-lab development. All contents stay
 # out of git; task bookkeeping lives on disk only. Once the personality
