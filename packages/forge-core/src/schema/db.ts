@@ -316,7 +316,11 @@ export const workspaceDocs = sqliteTable(
     })
       .notNull()
       .default('active'),
-    /** id of the workspace_docs row that replaces this one (null if not superseded) */
+    /**
+     * id of the workspace_docs row that replaces this one (null if not superseded).
+     * FK is intentionally not declared in Drizzle — self-referential FKs are defined
+     * in migrate.ts SQL only, following the goals.parentId pattern.
+     */
     supersededById: text('superseded_by_id'),
     /** Required when status = 'superseded'. Explains what changed and why. */
     supersededReason: text('superseded_reason'),
