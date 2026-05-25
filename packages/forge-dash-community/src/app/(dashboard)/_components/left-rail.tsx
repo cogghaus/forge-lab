@@ -3,47 +3,112 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
-import type { HubWorkspace } from '@/lib/hub';
+import type { HubWorkspace, HubDevice, HubTask } from '@/lib/hub';
 import { logoutAction } from '@/actions/auth';
 
-type AgentStatus = 'active' | 'idle' | 'waiting' | 'offline' | 'hub';
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-interface MockAgent {
-  id: string;
-  name: string;
-  icon: string;
-  status: AgentStatus;
-  task: string | null;
-  progress: number;
+type AgentStatus = 'active' | 'idle' | 'offline';
+
+/** How long since lastSeen before a device is considered offline (ms). */
+const ONLINE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
+// ---------------------------------------------------------------------------
+// useAgentStatus — polls hub proxy routes for live device + task data
+// ---------------------------------------------------------------------------
+
+function isDeviceOnline(lastSeen: string | null): boolean {
+  if (!lastSeen) return false;
+  const ms = new Date(lastSeen).getTime();
+  return !isNaN(ms) && Date.now() - ms < ONLINE_THRESHOLD_MS;
 }
 
-// Phase A: static mock agents — Phase C wires to hub agent endpoints
-const MOCK_AGENTS: MockAgent[] = [
-  { id: 'anvil',     name: 'Anvil',     icon: '🔨', status: 'active',  task: 'FL-002R', progress: 62 },
-  { id: 'crucible',  name: 'Crucible',  icon: '🧪', status: 'active',  task: 'FL-001b', progress: 12 },
-  { id: 'architect', name: 'Architect', icon: '🏛️', status: 'idle',    task: null,      progress: 0  },
-  { id: 'scribe',    name: 'Scribe',    icon: '📜', status: 'idle',    task: null,      progress: 0  },
-  { id: 'temper',    name: 'Temper',    icon: '⚖️', status: 'idle',    task: null,      progress: 0  },
-  { id: 'aegis',     name: 'Aegis',     icon: '🛡️', status: 'waiting', task: 'FL-006',  progress: 0  },
-  { id: 'furnace',   name: 'Furnace',   icon: '🔥', status: 'offline', task: null,      progress: 0  },
-  { id: 'loki',      name: 'Loki',      icon: '🎭', status: 'hub',     task: null,      progress: 0  },
-];
+function deviceStatus(device: HubDevice, activeTasks: HubTask[]): AgentStatus {
+  if (activeTasks.some(t => t.assignedDeviceId === device.id)) return 'active';
+  return isDeviceOnline(device.lastSeen) ? 'idle' : 'offline';
+}
+
+interface AgentStatusState {
+  devices: HubDevice[];
+  activeTasks: HubTask[];
+  /** true while the first fetch is in flight */
+  loading: boolean;
+}
+
+function useAgentStatus(workspaceId: string | null): AgentStatusState {
+  const [state, setState] = useState<AgentStatusState>({
+    devices: [],
+    activeTasks: [],
+    loading: true,
+  });
+
+  useEffect(() => {
+    let alive = true;
+
+    async function poll(): Promise<void> {
+      try {
+        const [devRes, taskRes] = await Promise.all([
+          fetch('/api/hub/devices'),
+          workspaceId
+            ? fetch(`/api/hub/tasks?workspaceId=${encodeURIComponent(workspaceId)}`)
+            : Promise.resolve(null),
+        ]);
+
+        if (!alive) return;
+
+        let devices: HubDevice[] = [];
+        let activeTasks: HubTask[] = [];
+
+        if (devRes.ok) {
+          // Optional chaining guards against hub returning 200 with null/non-object body.
+          const d = (await devRes.json()) as { devices?: HubDevice[] } | null;
+          devices = d?.devices ?? [];
+        }
+
+        if (taskRes?.ok) {
+          const d = (await taskRes.json()) as { tasks?: HubTask[] } | null;
+          activeTasks = (d?.tasks ?? []).filter(t => t.status === 'in_progress');
+        }
+
+        setState({ devices, activeTasks, loading: false });
+      } catch {
+        // Network error — keep previous state, mark loaded
+        if (alive) setState(prev => ({ ...prev, loading: false }));
+      }
+    }
+
+    void poll();
+    const timer = setInterval(() => void poll(), 5_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [workspaceId]);
+
+  return state;
+}
+
+// ---------------------------------------------------------------------------
+// Status style maps
+// ---------------------------------------------------------------------------
 
 const DOT_COLOR: Record<AgentStatus, string> = {
   active:  'bg-[#FF6B2B] shadow-[0_0_6px_rgba(255,107,43,0.5)]',
   idle:    'bg-[#4A9EFF]',
-  waiting: 'bg-[#FFB547]',
   offline: 'bg-white/15',
-  hub:     'bg-white/15',
 };
 
 const STATUS_LABEL_COLOR: Record<AgentStatus, string> = {
   active:  'text-[#FF6B2B]',
   idle:    'text-[rgba(74,158,255,0.7)]',
-  waiting: 'text-[#FFB547]',
   offline: 'text-white/20',
-  hub:     'text-white/20',
 };
+
+// ---------------------------------------------------------------------------
+// Style helpers
+// ---------------------------------------------------------------------------
 
 function sectionLabel(className = '') {
   return `font-mono text-[9px] tracking-[0.12em] uppercase px-3 pt-4 pb-1 text-[rgba(245,240,235,0.28)] ${className}`;
@@ -69,10 +134,18 @@ function subItem(active: boolean, disabled = false) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
 export interface LeftRailUser {
   name: string;
   email: string;
 }
+
+// ---------------------------------------------------------------------------
+// LeftRail component
+// ---------------------------------------------------------------------------
 
 export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; user?: LeftRailUser }) {
   const pathname = usePathname();
@@ -85,6 +158,8 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
   useEffect(() => {
     if (activeWsId) setExpandedWsId(activeWsId);
   }, [activeWsId]);
+
+  const { devices, activeTasks, loading } = useAgentStatus(activeWsId);
 
   function isWorkshopActive(base: string) {
     return pathname === base || (pathname.startsWith(base + '/') && !pathname.startsWith(base + '/goals'));
@@ -176,47 +251,63 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
 
       {/* ── AGENTS ── */}
       <div className={sectionLabel()}>Agents</div>
-      {MOCK_AGENTS.map(agent => {
-        const { status } = agent;
+
+      {loading && (
+        <div className="px-3 py-2">
+          <span className="font-mono text-[10px] text-white/20">connecting...</span>
+        </div>
+      )}
+
+      {!loading && devices.length === 0 && (
+        <div className="px-3 py-2">
+          <span className="font-mono text-[10px] text-white/20">no devices registered</span>
+        </div>
+      )}
+
+      {devices.map(device => {
+        const status = deviceStatus(device, activeTasks);
+        const deviceTasks = activeTasks.filter(t => t.assignedDeviceId === device.id);
+        const firstTask = deviceTasks[0] ?? null;
+
         return (
           <div
-            key={agent.id}
-            role="button"
-            tabIndex={0}
-            aria-label={`${agent.name} — ${status === 'hub' ? 'hub-side' : status}`}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click(); }}
-            className={`px-3 py-1.5 rounded-md cursor-pointer transition-colors hover:bg-white/[0.04] ${status === 'hub' ? 'opacity-40' : ''}`}
+            key={device.id}
+            role="listitem"
+            aria-label={`${device.name} — ${status}`}
+            className="px-3 py-1.5 rounded-md transition-colors hover:bg-white/[0.04]"
           >
             <div className="flex items-center gap-2">
-              <span className={`w-[7px] h-[7px] rounded-full flex-shrink-0 mt-px ${DOT_COLOR[status]}`} />
-              <span className={`text-[13px] flex-1 truncate ${status === 'active' ? 'text-[#F5F0EB]' : 'text-[rgba(245,240,235,0.6)]'}`}>
-                {agent.name}
+              <span
+                className={`w-[7px] h-[7px] rounded-full flex-shrink-0 mt-px ${DOT_COLOR[status]}`}
+                aria-hidden="true"
+              />
+              <span
+                className={`text-[13px] flex-1 truncate ${status === 'active' ? 'text-[#F5F0EB]' : 'text-[rgba(245,240,235,0.6)]'}`}
+                title={device.hostname ?? device.name}
+              >
+                {device.name}
               </span>
               <span className={`font-mono text-[9px] uppercase tracking-[0.06em] flex-shrink-0 ${STATUS_LABEL_COLOR[status]}`}>
-                {status === 'hub' ? 'hub-side' : status}
+                {status}
               </span>
             </div>
 
-            {status === 'active' && agent.task !== null && (
+            {/* Active task progress indicator */}
+            {status === 'active' && firstTask !== null && (
               <div className="pl-[15px] mt-1 mb-0.5">
+                {/* Indeterminate pulsing bar — no real progress% available */}
                 <div className="h-1 rounded-full overflow-hidden mb-1 bg-white/[0.06]">
-                  <div className="h-full bg-[#FF6B2B] rounded-full" style={{ width: `${agent.progress}%` }} />
-                </div>
-                <div className="font-mono text-[10px] text-[rgba(245,240,235,0.45)] truncate">
-                  <span className="text-[rgba(245,240,235,0.7)] font-semibold">{agent.task}</span>
-                </div>
-              </div>
-            )}
-
-            {status === 'waiting' && agent.task !== null && (
-              <div className="pl-[15px] mt-1 mb-0.5">
-                <div className="h-1 rounded-full overflow-hidden mb-1" style={{ background: 'rgba(255,181,71,0.25)' }}>
                   <div
-                    className="h-full w-[40%]"
-                    style={{ background: 'repeating-linear-gradient(90deg,rgba(255,181,71,0.5) 0,rgba(255,181,71,0.5) 4px,transparent 4px,transparent 8px)' }}
+                    className="h-full bg-[#FF6B2B] rounded-full animate-pulse"
+                    style={{ width: '45%' }}
                   />
                 </div>
-                <div className="font-mono text-[10px] text-[rgba(245,240,235,0.35)]">queued · {agent.task}</div>
+                <div className="font-mono text-[10px] text-[rgba(245,240,235,0.45)] truncate">
+                  <span className="text-[rgba(245,240,235,0.7)] font-semibold">{firstTask.id}</span>
+                  {deviceTasks.length > 1 && (
+                    <span className="ml-1 text-[rgba(245,240,235,0.3)]">+{deviceTasks.length - 1}</span>
+                  )}
+                </div>
               </div>
             )}
           </div>
