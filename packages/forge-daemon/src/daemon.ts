@@ -77,6 +77,9 @@ export class Daemon {
     this.client.on('task.assigned', (env: EventEnvelope) => {
       void this.handleIncomingTask(env);
     });
+    this.client.on('task.requeued', (env: EventEnvelope) => {
+      void this.handleIncomingTask(env);
+    });
     const doneListener: DoneListener = (taskId, result) => this.handleTaskDone(taskId, result);
     this.watcher = await watchDoneFiles(this.opts.workdir, doneListener);
 
@@ -196,7 +199,9 @@ export class Daemon {
           taskId: claimed.id,
           config: {},
         },
-        claimed.title,
+        claimed.description != null
+          ? `${claimed.title}\n\n${claimed.description}`
+          : claimed.title,
       );
       this.activeInstances.set(claimed.id, { instance, runtimeId: this.opts.defaultRuntimeId });
       this.logger.info('task spawned', { taskId: claimed.id, runtime: this.opts.defaultRuntimeId });
