@@ -38,6 +38,16 @@ describe('loadConfig', () => {
     expect(cfg.skipPermissions).toBe(false);
   });
 
+  it('FORGE_DAEMON_SKIP_PERMISSIONS=0 disables skip', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_SKIP_PERMISSIONS: '0' });
+    expect(cfg.skipPermissions).toBe(false);
+  });
+
+  it('FORGE_DAEMON_SKIP_PERMISSIONS="" (empty string) treats as unset — defaults to true', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_SKIP_PERMISSIONS: '' });
+    expect(cfg.skipPermissions).toBe(true);
+  });
+
   it('workspaceId is undefined when not set', () => {
     const cfg = loadConfig({ ...REQUIRED });
     expect(cfg.workspaceId).toBeUndefined();

@@ -42,7 +42,16 @@ async function buildLogger(workdir: string) {
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = await buildLogger(config.workdir);
-  const personalityRegistry = await loadBuiltinRegistry();
+  let personalityRegistry;
+  try {
+    personalityRegistry = await loadBuiltinRegistry();
+  } catch (err) {
+    logger.error('failed to load personality registry — falling back to default personality', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    // Daemon continues without composition; agents get defaultPersonality string.
+    personalityRegistry = undefined;
+  }
   const runtimes = new RuntimeRegistry();
   runtimes.register(new MockRuntime());
   runtimes.register(new ClaudeCodeRuntime());
@@ -59,7 +68,7 @@ async function main(): Promise<void> {
     runtimes,
     defaultRuntimeId: config.defaultRuntimeId,
     defaultAgentId: config.defaultAgentId,
-    personalityRegistry,
+    ...(personalityRegistry !== undefined && { personalityRegistry }),
     ...(config.workspaceId !== undefined && { workspaceId: config.workspaceId }),
     logger,
   });

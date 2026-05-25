@@ -12,11 +12,13 @@ const ConfigSchema = z.object({
   // Defaults to true since background agents run unattended with no human
   // to approve tool calls. Set FORGE_DAEMON_SKIP_PERMISSIONS=false to disable.
   // z.coerce.boolean() is NOT used here: Boolean('false') === true (non-empty
-  // string is truthy). Instead we preprocess so 'false'/'0' → false and
-  // undefined → true (the safe default for unattended daemon use).
+  // string is truthy). Instead we preprocess so 'false'/'0'/'' → false and
+  // undefined/empty → true (the safe default for unattended daemon use).
+  // An explicitly empty env var (FORGE_DAEMON_SKIP_PERMISSIONS="") is treated
+  // as "not set" and defaults to true, not false.
   skipPermissions: z.preprocess(
     (val) => {
-      if (val === undefined) return true;
+      if (val === undefined || val === '') return true;
       if (val === 'false' || val === '0') return false;
       return Boolean(val);
     },
