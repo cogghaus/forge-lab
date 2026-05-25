@@ -71,6 +71,11 @@ export class Daemon {
     if (this.running) return;
     this.running = true;
     await this.client.connect();
+    // task.created / task.assigned / task.requeued all funnel through
+    // handleIncomingTask. The hub's claim endpoint is an atomic SQL UPDATE
+    // guarded by status IN ('pending_agent', 'assigned'), so concurrent
+    // daemon instances racing on the same event will produce at most one
+    // successful claim — the loser gets a 409 and logs a non-fatal error.
     this.client.on('task.created', (env: EventEnvelope) => {
       void this.handleIncomingTask(env);
     });
@@ -150,8 +155,11 @@ export class Daemon {
       if (task.status !== 'pending_agent' && task.status !== 'assigned') {
         return;
       }
-      // Only filter by workspace when a scope is explicitly configured.
-      // Unscoped daemon processes tasks across all workspaces.
+      // Scope guard: when workspaceId is configured this daemon only claims
+      // tasks belonging to that workspace. When undefined (no scope), the
+      // daemon acts as a global worker and claims tasks from all workspaces —
+      // this is intentional for single-machine setups. Production deployments
+      // with multiple workspaces should configure FORGE_DAEMON_WORKSPACE_ID.
       if (this.opts.workspaceId !== undefined && task.workspaceId !== this.opts.workspaceId) {
         return;
       }

@@ -195,6 +195,9 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
           payload: schema.taskHistory.payload,
           createdAt: schema.taskHistory.createdAt,
         })
+        // innerJoin is safe: taskHistory.taskId has onDelete:cascade so history
+        // rows are removed when tasks are deleted. Filter on taskHistory.workspaceId
+        // uses the workspace index (task_history_workspace_idx).
         .from(schema.taskHistory)
         .innerJoin(schema.tasks, eq(schema.taskHistory.taskId, schema.tasks.id))
         .where(eq(schema.taskHistory.workspaceId, id))
