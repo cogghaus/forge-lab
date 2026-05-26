@@ -781,4 +781,128 @@ describe('GET /workspaces/:workspaceId/context', () => {
     expect(ctx.inboxTasks).toHaveLength(0);
     expect(ctx.queueDepth['pending_dispatcher_action']).toBeUndefined();
   });
+
+  it('dispatcherHistory only includes events from the calling device', async () => {
+    // Create a task and produce history from FM device
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dh', title: 'Dispatcher task' },
+    });
+    const taskId = (taskRes.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, taskId));
+
+    // FM assigns the task (creates task.assigned history with source = device:fm-id)
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'architect' },
+    });
+
+    // Register a second orchestrator device
+    const fm2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'forge-master-2', agentId: 'forge-master', deviceType: 'orchestrator' },
+    });
+    const fm2Token = (fm2Res.json() as { token: string }).token;
+
+    // Context via fm2 should have 0 dispatcherHistory (it hasn't done anything)
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${fm2Token}` },
+    });
+    const ctx = res.json() as ContextResponse;
+    expect(ctx.dispatcherHistory).toHaveLength(0);
+  });
+
+  it('goals excludes archived and cancelled goals', async () => {
+    // Create active goal
+    const activeRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/goals`,
+      headers: { cookie },
+      payload: { title: 'Active goal' },
+    });
+    const activeGoalId = (activeRes.json() as { id: string }).id;
+
+    // Create a second goal then mark it completed (inactive)
+    const completedRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/goals`,
+      headers: { cookie },
+      payload: { title: 'Completed goal' },
+    });
+    const completedGoalId = (completedRes.json() as { id: string }).id;
+    await hub.db
+      .update(schema.goals)
+      .set({ status: 'completed' })
+      .where(eq(schema.goals.id, completedGoalId));
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    const ctx = res.json() as ContextResponse;
+    const goalIds = (ctx.goals as { id: string }[]).map((g) => g.id);
+    expect(goalIds).toContain(activeGoalId);
+    expect(goalIds).not.toContain(completedGoalId);
+  });
+
+  it('liveInstances excludes stopped and crashed instances', async () => {
+    // Create agent + stopped instance directly in DB
+    const agentId = nanoid();
+    await hub.db.insert(schema.agents).values({
+      id: agentId,
+      workspaceId,
+      name: 'architect',
+      personality: 'You are architect.',
+      runtimeId: 'background',
+      config: {},
+    });
+    const devRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'arch-dev', agentId: 'architect', deviceType: 'worker' },
+    });
+    const deviceId = (devRes.json() as { id: string }).id;
+
+    // Running instance
+    const runningId = nanoid();
+    await hub.db.insert(schema.agentInstances).values({
+      id: runningId,
+      workspaceId,
+      agentId,
+      deviceId,
+      status: 'running',
+    });
+
+    // Stopped instance
+    await hub.db.insert(schema.agentInstances).values({
+      id: nanoid(),
+      workspaceId,
+      agentId,
+      deviceId,
+      status: 'stopped',
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    const ctx = res.json() as ContextResponse;
+    const instanceIds = (ctx.liveInstances as { id: string }[]).map((i) => i.id);
+    expect(instanceIds).toContain(runningId);
+    expect(instanceIds).toHaveLength(1); // stopped instance excluded
+  });
 });
