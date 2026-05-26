@@ -232,26 +232,6 @@ export class Daemon {
     const dispatcherPersonalityId = this.opts.dispatcherPersonality ?? 'forge-master';
     const syntheticTaskId = `_fm_${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-    // Compose FM system prompt: load from personality registry if available,
-    // otherwise fall back to a minimal system prompt string.
-    let fmPersonality: string = this.opts.defaultPersonality || 'You are the Forge Master orchestrator.';
-    const registry = this.opts.personalityRegistry;
-    if (registry) {
-      const personality = registry.get(dispatcherPersonalityId);
-      if (personality) {
-        fmPersonality = await composeSystemPrompt({
-          personality,
-          projectContextPath: path.join(this.opts.workdir, 'context', 'project-context.md'),
-          agentOverridesDir: path.join(this.opts.workdir, 'context', 'agent-overrides'),
-        });
-        this.logger.info('fm personality loaded from registry', { id: dispatcherPersonalityId });
-      } else {
-        this.logger.info('fm personality not found in registry, using fallback', {
-          id: dispatcherPersonalityId,
-        });
-      }
-    }
-
     const contextJson = JSON.stringify(ctx, null, 2);
     const doneInstruction =
       `\n\n---\nWhen you have finished triaging, write the done file to signal completion:\n` +
@@ -264,6 +244,28 @@ export class Daemon {
 
     try {
       this.fmRunning = true;
+
+      // Compose FM system prompt inside the try block so that a composeSystemPrompt
+      // error triggers the catch and resets fmRunning — preventing a deadlock where
+      // fmRunning stays true forever and the dispatcher never retries.
+      let fmPersonality: string = this.opts.defaultPersonality || 'You are the Forge Master orchestrator.';
+      const registry = this.opts.personalityRegistry;
+      if (registry) {
+        const personality = registry.get(dispatcherPersonalityId);
+        if (personality) {
+          fmPersonality = await composeSystemPrompt({
+            personality,
+            projectContextPath: path.join(this.opts.workdir, 'context', 'project-context.md'),
+            agentOverridesDir: path.join(this.opts.workdir, 'context', 'agent-overrides'),
+          });
+          this.logger.info('fm personality loaded from registry', { id: dispatcherPersonalityId });
+        } else {
+          this.logger.info('fm personality not found in registry, using fallback', {
+            id: dispatcherPersonalityId,
+          });
+        }
+      }
+
       // runtime.get() inside the try block so a missing runtime ID logs gracefully.
       const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
       const instance = await runtime.spawn(

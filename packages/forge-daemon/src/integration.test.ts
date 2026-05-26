@@ -1017,22 +1017,24 @@ describe('integration: dispatcher mode — personality registry', () => {
     });
     await daemon2.start();
 
-    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
-      body: JSON.stringify({ projectPrefix: 'fmp', title: 'Fallback personality test' }),
-    });
-    const { id: taskId } = (await taskRes.json()) as { id: string };
-    await hub.db
-      .update(schema.tasks)
-      .set({ status: 'pending_dispatcher_action' })
-      .where(eq(schema.tasks.id, taskId));
+    try {
+      const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+        body: JSON.stringify({ projectPrefix: 'fmp', title: 'Fallback personality test' }),
+      });
+      const { id: taskId } = (await taskRes.json()) as { id: string };
+      await hub.db
+        .update(schema.tasks)
+        .set({ status: 'pending_dispatcher_action' })
+        .where(eq(schema.tasks.id, taskId));
 
-    await waitFor(async () => {
-      return fallbackPersonalities.length > 0 ? 'done' : null;
-    }, 8000);
-
-    await daemon2.stop();
+      await waitFor(async () => {
+        return fallbackPersonalities.length > 0 ? 'done' : null;
+      }, 8000);
+    } finally {
+      await daemon2.stop();
+    }
 
     // Fallback personality should be the default string (not forge-master content)
     expect(fallbackPersonalities.length).toBeGreaterThan(0);
