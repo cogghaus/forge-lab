@@ -60,6 +60,21 @@ export interface DaemonOptions {
    * until a slot opens. Default: no limit (all tasks claimed immediately).
    */
   maxConcurrentTasks?: number;
+  /**
+   * When true, daemon subscribes to `task.completed` events and evaluates each
+   * completion for documentation significance. If the task is deemed significant
+   * (schema changes, new endpoints, architectural decisions, etc.), a new
+   * doc-update task is created and assigned to `scribeAgentId` so the Scribe
+   * daemon can pick it up automatically.
+   *
+   * Requires `workspaceId` to be set (Scribe tasks are workspace-scoped).
+   */
+  listenCompletions?: boolean;
+  /**
+   * Agent ID to assign auto-created documentation tasks when `listenCompletions`
+   * is true. Defaults to 'scribe'.
+   */
+  scribeAgentId?: string;
 }
 
 export interface DaemonLogger {
@@ -119,6 +134,11 @@ export class Daemon {
     this.client.on('task.requeued', (env: EventEnvelope) => {
       void this.handleIncomingTask(env);
     });
+    if (this.opts.listenCompletions) {
+      this.client.on('task.completed', (env: EventEnvelope) => {
+        void this.handleTaskCompleted(env);
+      });
+    }
     const doneListener: DoneListener = (taskId, result) => this.handleTaskDone(taskId, result);
     this.watcher = await watchDoneFiles(this.opts.workdir, doneListener);
 
@@ -400,6 +420,85 @@ export class Daemon {
           error: failErr instanceof Error ? failErr.message : String(failErr),
         });
       }
+    }
+  }
+
+  /**
+   * Significance keywords: if any appear in the combined text of a completed
+   * task's title, description, and completion result, we treat it as worth
+   * documenting and create a Scribe follow-up task.
+   */
+  private static readonly SIGNIFICANCE_KEYWORDS = [
+    'endpoint', 'api', 'route',
+    'schema', 'migration', 'database', 'db', 'table', 'column', 'index',
+    'component', 'page', 'view',
+    'pattern', 'architecture', 'architectural',
+    'auth', 'authentication', 'authorization',
+    'agent', 'daemon', 'orchestrator',
+    'deploy', 'deployment', 'infrastructure',
+    'adr', 'decision',
+  ] as const;
+
+  /** Returns true if the combined task text suggests architectural significance. */
+  static isArchitecturallySignificant(title: string, description: string | null, result: string | null): boolean {
+    const text = [title, description, result].filter(Boolean).join(' ').toLowerCase();
+    return Daemon.SIGNIFICANCE_KEYWORDS.some((kw) => text.includes(kw));
+  }
+
+  private async handleTaskCompleted(env: EventEnvelope): Promise<void> {
+    // Guard: do not react to events after stop() is called.
+    if (!this.running) return;
+
+    const raw = env.payload;
+    if (typeof raw !== 'object' || raw === null) return;
+    const p = raw as Record<string, unknown>;
+    const taskId = typeof p['taskId'] === 'string' ? p['taskId'] : undefined;
+    if (!taskId) return;
+    const result = typeof p['result'] === 'string' ? p['result'] : null;
+    const payloadWorkspaceId = typeof p['workspaceId'] === 'string' ? p['workspaceId'] : null;
+
+    // Only react to tasks in our workspace when workspaceId is configured.
+    if (this.opts.workspaceId !== undefined && payloadWorkspaceId !== this.opts.workspaceId) {
+      return;
+    }
+
+    let task: { title: string; description: string | null; projectPrefix: string; workspaceId: string | null };
+    try {
+      task = await this.client.getTask(taskId);
+    } catch {
+      return; // best-effort; if we can't fetch the task, skip
+    }
+
+    if (!Daemon.isArchitecturallySignificant(task.title, task.description, result)) {
+      return;
+    }
+
+    const scribeAgentId = this.opts.scribeAgentId ?? 'scribe';
+    const wsId = payloadWorkspaceId ?? this.opts.workspaceId ?? null;
+
+    const descLines = [
+      `Completed task: ${taskId}`,
+      `Title: ${task.title}`,
+    ];
+    if (task.description) descLines.push(`Description: ${task.description}`);
+    if (result) descLines.push(`Completion summary: ${result}`);
+    descLines.push('');
+    descLines.push('Evaluate whether this completion warrants workspace doc updates.');
+
+    try {
+      await this.client.createTask({
+        projectPrefix: task.projectPrefix,
+        title: `[Scribe] Document: ${task.title}`,
+        description: descLines.join('\n'),
+        assignedAgentId: scribeAgentId,
+        ...(wsId !== null ? { workspaceId: wsId } : {}),
+      });
+      this.logger.info('scribe doc task created', { completedTaskId: taskId, scribeAgentId });
+    } catch (err) {
+      this.logger.error('failed to create scribe doc task', {
+        completedTaskId: taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
