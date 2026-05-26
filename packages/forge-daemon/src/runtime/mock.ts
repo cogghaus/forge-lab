@@ -5,7 +5,7 @@ import type {
   AgentRuntimeSpawnConfig,
   RuntimeInstance,
 } from '@forge-lab/core';
-import { doneFilePath, taskFilePath } from '../sync/task-file.js';
+import { doneFilePath, taskDir, taskFilePath } from '../sync/task-file.js';
 
 export interface MockRuntimeOptions {
   /** Milliseconds to wait before writing the completion marker. */
@@ -61,7 +61,14 @@ export class MockRuntime implements AgentRuntime {
           result,
           completedAt: new Date().toISOString(),
         });
-        await fs.writeFile(doneFilePath(workdir, taskId), payload, 'utf8');
+        try {
+          // Ensure dir exists — synthetic FM tasks skip writeTaskFile so the dir
+          // may not exist yet. Also guards against post-teardown races in tests.
+          await fs.mkdir(taskDir(workdir), { recursive: true });
+          await fs.writeFile(doneFilePath(workdir, taskId), payload, 'utf8');
+        } catch {
+          // Workdir may have been removed during daemon shutdown / test teardown.
+        }
       })();
     }, delay);
 
