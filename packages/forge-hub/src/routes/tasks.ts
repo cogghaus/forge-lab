@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { and, eq, desc, asc, inArray, isNull, or } from 'drizzle-orm';
+import { and, eq, desc, asc, inArray, isNull, lt, or } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import {
@@ -447,6 +447,116 @@ export function registerTaskRoutes(
       });
 
       await reply.send({ ok: true });
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Stale assignment detection — FM calls this to find tasks stuck in 'assigned'
+  // longer than ttlMinutes (default 30). Orchestrator-only.
+  // ---------------------------------------------------------------------------
+
+  const StaleQuerySchema = z.object({
+    ttlMinutes: z.coerce.number().int().min(1).max(1440).default(30),
+  });
+
+  fastify.get<{ Params: { workspaceId: string }; Querystring: Record<string, string> }>(
+    '/workspaces/:workspaceId/tasks/stale-assigned',
+    { preHandler: requireDevice },
+    async (req, reply) => {
+      const device = getDevice(req);
+      if (device.deviceType !== 'orchestrator') {
+        await reply.code(403).send({ error: 'orchestrator_required' });
+        return;
+      }
+      const { workspaceId } = req.params;
+      const { ttlMinutes } = StaleQuerySchema.parse(req.query);
+
+      const cutoff = new Date(Date.now() - ttlMinutes * 60 * 1000);
+
+      const tasks = await db
+        .select()
+        .from(schema.tasks)
+        .where(
+          and(
+            eq(schema.tasks.workspaceId, workspaceId),
+            eq(schema.tasks.status, 'assigned'),
+            lt(schema.tasks.assignedAt, cutoff),
+          ),
+        )
+        .orderBy(asc(schema.tasks.assignedAt));
+
+      return { tasks, ttlMinutes, cutoff };
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Bulk requeue stale assigned tasks back to pending_dispatcher_action.
+  // Orchestrator-only. Writes task.requeued history event for each task.
+  // ---------------------------------------------------------------------------
+
+  fastify.post<{ Params: { workspaceId: string } }>(
+    '/workspaces/:workspaceId/tasks/stale-assigned/requeue',
+    { preHandler: requireDevice },
+    async (req, reply) => {
+      const device = getDevice(req);
+      if (device.deviceType !== 'orchestrator') {
+        await reply.code(403).send({ error: 'orchestrator_required' });
+        return;
+      }
+      const { workspaceId } = req.params;
+      const { ttlMinutes } = StaleQuerySchema.parse(req.query ?? {});
+
+      const cutoff = new Date(Date.now() - ttlMinutes * 60 * 1000);
+      const source = `device:${device.id}`;
+
+      const stale = await db
+        .select({ id: schema.tasks.id })
+        .from(schema.tasks)
+        .where(
+          and(
+            eq(schema.tasks.workspaceId, workspaceId),
+            eq(schema.tasks.status, 'assigned'),
+            lt(schema.tasks.assignedAt, cutoff),
+          ),
+        );
+
+      if (stale.length === 0) {
+        return { requeued: 0 };
+      }
+
+      const staleIds = stale.map((t) => t.id);
+
+      await db
+        .update(schema.tasks)
+        .set({
+          status: 'pending_dispatcher_action',
+          assignedAgentId: null,
+          assignedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(inArray(schema.tasks.id, staleIds));
+
+      const historyRows = staleIds.map((taskId) => ({
+        id: nanoid(),
+        taskId,
+        eventName: 'task.requeued',
+        source,
+        payload: { reason: 'stale_assignment', ttlMinutes },
+        workspaceId,
+      }));
+      await db.insert(schema.taskHistory).values(historyRows);
+
+      for (const taskId of staleIds) {
+        bus.emit({
+          id: nanoid(),
+          name: 'task.requeued',
+          occurredAt: new Date(),
+          source,
+          payload: { taskId, workspaceId, reason: 'stale_assignment' },
+        });
+      }
+
+      return { requeued: staleIds.length };
     },
   );
 }

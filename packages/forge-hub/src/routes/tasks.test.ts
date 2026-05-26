@@ -1035,3 +1035,212 @@ describe('/tasks/:id/claim — agentId routing', () => {
     expect(res.statusCode).toBe(409);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stale assignment detection + requeue
+// ---------------------------------------------------------------------------
+
+describe('GET+POST /workspaces/:wsId/tasks/stale-assigned', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+  let fmToken: string;
+  let workerToken: string;
+
+  async function registerOrchestrator(): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' },
+    });
+    return (res.json() as { token: string }).token;
+  }
+
+  async function registerWorker(): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'worker', agentId: 'worker', deviceType: 'worker' },
+    });
+    return (res.json() as { token: string }).token;
+  }
+
+  async function createAssignedTask(assignedAt: Date): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'st', title: 'Stale task' },
+    });
+    const taskId = (res.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'assigned', assignedAgentId: 'worker', assignedAt })
+      .where(eq(schema.tasks.id, taskId));
+    return taskId;
+  }
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+    fmToken = await registerOrchestrator();
+    workerToken = await registerWorker();
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('GET returns empty list when no stale tasks', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned?ttlMinutes=30`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { tasks: unknown[] };
+    expect(body.tasks).toHaveLength(0);
+  });
+
+  it('GET returns task assigned beyond ttl', async () => {
+    const oldDate = new Date(Date.now() - 60 * 60 * 1000); // 60 min ago
+    await createAssignedTask(oldDate);
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned?ttlMinutes=30`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { tasks: unknown[] };
+    expect(body.tasks).toHaveLength(1);
+  });
+
+  it('GET does not return recently-assigned task', async () => {
+    const recentDate = new Date(Date.now() - 5 * 60 * 1000); // 5 min ago
+    await createAssignedTask(recentDate);
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned?ttlMinutes=30`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { tasks: unknown[] };
+    expect(body.tasks).toHaveLength(0);
+  });
+
+  it('GET worker device returns 403', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned`,
+      headers: { authorization: `Bearer ${workerToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+  });
+
+  it('POST requeue returns requeued=0 when nothing stale', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned/requeue?ttlMinutes=30`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { requeued: number }).requeued).toBe(0);
+  });
+
+  it('POST requeue reverts stale tasks to pending_dispatcher_action', async () => {
+    const oldDate = new Date(Date.now() - 60 * 60 * 1000); // 60 min ago
+    const taskId = await createAssignedTask(oldDate);
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned/requeue?ttlMinutes=30`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { requeued: number }).requeued).toBe(1);
+
+    const task = await hub.db
+      .select({ status: schema.tasks.status, assignedAgentId: schema.tasks.assignedAgentId, assignedAt: schema.tasks.assignedAt })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.status).toBe('pending_dispatcher_action');
+    expect(task?.assignedAgentId).toBeNull();
+    expect(task?.assignedAt).toBeNull();
+  });
+
+  it('POST requeue writes task.requeued history event', async () => {
+    const oldDate = new Date(Date.now() - 60 * 60 * 1000);
+    const taskId = await createAssignedTask(oldDate);
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned/requeue?ttlMinutes=30`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+
+    const histRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks/${taskId}/history`,
+      headers: { cookie },
+    });
+    const { history } = histRes.json() as { history: { eventName: string; payload: unknown }[] };
+    const reqEvent = history.find((h) => h.eventName === 'task.requeued');
+    expect(reqEvent).toBeDefined();
+    const payload = reqEvent?.payload as Record<string, unknown> | undefined;
+    expect(payload?.['reason']).toBe('stale_assignment');
+  });
+
+  it('POST requeue worker device returns 403', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned/requeue`,
+      headers: { authorization: `Bearer ${workerToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+  });
+
+  it('POST requeue does not touch tasks in other workspaces', async () => {
+    const ws2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'WS2', slug: 'ws2-stale' },
+    });
+    const ws2Id = (ws2Res.json() as { id: string }).id;
+
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${ws2Id}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ws', title: 'WS2 task' },
+    });
+    const ws2TaskId = (taskRes.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'assigned', assignedAgentId: 'worker', assignedAt: new Date(Date.now() - 60 * 60 * 1000) })
+      .where(eq(schema.tasks.id, ws2TaskId));
+
+    // Requeue on workspaceId (not ws2Id)
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned/requeue?ttlMinutes=30`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect((res.json() as { requeued: number }).requeued).toBe(0);
+
+    const task = await hub.db
+      .select({ status: schema.tasks.status })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, ws2TaskId))
+      .get();
+    expect(task?.status).toBe('assigned'); // untouched
+  });
+});
