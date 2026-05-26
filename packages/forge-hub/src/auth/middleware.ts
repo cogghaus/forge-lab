@@ -15,6 +15,10 @@ export interface AuthDevice {
   id: string;
   userId: string;
   name: string;
+  /** Logical agent role this device runs (e.g. 'architect', 'forge-master'). Null for untyped devices. */
+  agentId: string | null;
+  /** Whether this device is an FM orchestrator or a worker. */
+  deviceType: 'worker' | 'orchestrator';
 }
 
 export interface AuthWorkspace {
@@ -62,12 +66,20 @@ export function populateAuth(db: Db): onRequestHookHandler {
           id: schema.devices.id,
           userId: schema.devices.userId,
           name: schema.devices.name,
+          agentId: schema.devices.agentId,
+          deviceType: schema.devices.deviceType,
         })
         .from(schema.devices)
         .where(eq(schema.devices.tokenHash, tokenHash))
         .get();
       if (device) {
-        req.authDevice = { id: device.id, userId: device.userId, name: device.name };
+        req.authDevice = {
+          id: device.id,
+          userId: device.userId,
+          name: device.name,
+          agentId: device.agentId ?? null,
+          deviceType: device.deviceType,
+        };
         await db
           .update(schema.devices)
           .set({ lastSeen: new Date() })
