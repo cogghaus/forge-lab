@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import { createHub, type Hub } from '../app.js';
 import { schema } from '@forge-lab/core';
 import type { HubConfig } from '../config.js';
@@ -1495,5 +1496,198 @@ describe('POST /tasks/:id/fail', () => {
       headers: { cookie }, // user session, not device token
     });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('GET /tasks/stats', () => {
+  let hub: Hub;
+  let cookie: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    ({ cookie } = await setupAdmin(hub));
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('returns zero counts when no tasks exist', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      total: number;
+      byStatus: Record<string, number>;
+      completionRate: number;
+      completedLast7Days: number;
+      summary: { completed: number; failed: number; inProgress: number; pending: number };
+    };
+    expect(body.total).toBe(0);
+    expect(body.completionRate).toBe(0);
+    expect(body.completedLast7Days).toBe(0);
+    expect(body.summary.completed).toBe(0);
+    expect(body.summary.failed).toBe(0);
+  });
+
+  it('counts tasks by status correctly', async () => {
+    // Create 3 tasks via API (they land as pending_agent by default)
+    for (let i = 0; i < 3; i++) {
+      await hub.fastify.inject({
+        method: 'POST',
+        url: '/tasks',
+        headers: { cookie },
+        payload: { projectPrefix: 'fl', title: `Task ${i}` },
+      });
+    }
+
+    // Manually set one to completed and one to failed via hub.db
+    const tasks = await hub.db.select({ id: schema.tasks.id }).from(schema.tasks);
+    const [t0, t1] = tasks;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'completed', completedAt: new Date() })
+      .where(eq(schema.tasks.id, t0!.id));
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'failed' })
+      .where(eq(schema.tasks.id, t1!.id));
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      total: number;
+      byStatus: Record<string, number>;
+      completionRate: number;
+      summary: { completed: number; failed: number };
+    };
+    expect(body.total).toBe(3);
+    expect(body.byStatus['completed']).toBe(1);
+    expect(body.byStatus['failed']).toBe(1);
+    expect(body.byStatus['pending_agent']).toBe(1);
+    expect(body.summary.completed).toBe(1);
+    expect(body.summary.failed).toBe(1);
+    // 1 of 3 = 33%
+    expect(body.completionRate).toBe(33);
+  });
+
+  it('completedLast7Days counts only recent completed tasks', async () => {
+    // Create 2 tasks via API so they have the correct createdBy (user's ID)
+    const recentRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Recent done' },
+    });
+    const oldRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Old done' },
+    });
+    const recentId = (recentRes.json() as { id: string }).id;
+    const oldId = (oldRes.json() as { id: string }).id;
+
+    const nowMs = Date.now();
+    // "old" is strictly outside the 7-day window by 1 ms
+    const oldMs = nowMs - 7 * 24 * 60 * 60 * 1000 - 1;
+
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'completed', completedAt: new Date(nowMs) })
+      .where(eq(schema.tasks.id, recentId));
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'completed', completedAt: new Date(oldMs) })
+      .where(eq(schema.tasks.id, oldId));
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { completedLast7Days: number; total: number };
+    expect(body.total).toBe(2);
+    expect(body.completedLast7Days).toBe(1);
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 401 when authenticated only as a device (not a user)', async () => {
+    const { token: deviceToken } = await registerDevice(hub, cookie, 'stats-device');
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('excludes tasks in workspaces the user is not a member of', async () => {
+    // Create a task in a workspace the user owns (via API)
+    const wsRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'My WS', slug: 'my-ws' },
+    });
+    const { id: ownedWsId } = wsRes.json() as { id: string };
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'My task', workspaceId: ownedWsId },
+    });
+
+    // Insert a workspace the user is NOT a member of (owned by admin but no workspace_member row)
+    const userRow = await hub.db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .get();
+    const adminId = userRow!.id;
+    const alienWsId = nanoid();
+    await hub.db.insert(schema.workspaces).values({
+      id: alienWsId,
+      name: 'Alien WS',
+      slug: 'alien-ws',
+      ownerUserId: adminId,
+      updatedAt: new Date(),
+      createdAt: new Date(),
+    });
+    // Note: intentionally NOT inserting into workspace_members — stats must NOT include this task
+    await hub.db.insert(schema.tasks).values({
+      id: 'alien-task-1',
+      projectPrefix: 'al',
+      title: 'Alien task',
+      status: 'completed',
+      workspaceId: alienWsId,
+      createdBy: `user:${adminId}`,
+      updatedAt: new Date(),
+      createdAt: new Date(),
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { total: number };
+    // Should see only the 1 task in the owned workspace, NOT the alien task
+    expect(body.total).toBe(1);
   });
 });
