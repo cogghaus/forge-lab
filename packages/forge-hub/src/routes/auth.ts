@@ -7,6 +7,7 @@ import type { Db } from '../db/index.js';
 import type { HubConfig } from '../config.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { createSession, deleteSession } from '../auth/sessions.js';
+import { requireUser, getUser } from '../auth/middleware.js';
 
 const RegisterInputSchema = z.object({
   email: z.string().email(),
@@ -64,6 +65,17 @@ export function registerAuthRoutes(
       })
       .code(200)
       .send({ id: user.id, email: user.email, role: user.role });
+  });
+
+  fastify.get('/auth/me', { preHandler: requireUser }, async (req) => {
+    const user = getUser(req);
+    // Re-fetch from DB so role is always fresh (authUser is set at request start)
+    const row = await db
+      .select({ id: schema.users.id, email: schema.users.email, role: schema.users.role })
+      .from(schema.users)
+      .where(eq(schema.users.id, user.id))
+      .get();
+    return row ?? { id: user.id, email: user.email, role: user.role };
   });
 
   fastify.post('/auth/logout', async (req, reply) => {
