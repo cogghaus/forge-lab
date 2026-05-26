@@ -304,29 +304,38 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
           .orderBy(desc(schema.taskHistory.createdAt))
           .limit(CONTEXT_HISTORY_LIMIT),
 
-        // Dispatcher-specific history (task.assigned, task.commented events from dispatcher)
+        // Last N dispatcher comments — FM reads these to avoid re-deciding what it already decided.
+        // Source: taskComments with authorType='dispatcher', NOT taskHistory events.
         db
           .select()
-          .from(schema.taskHistory)
+          .from(schema.taskComments)
           .where(
             and(
-              eq(schema.taskHistory.workspaceId, workspaceId),
-              eq(schema.taskHistory.source, `device:${device.id}`),
+              eq(schema.taskComments.workspaceId, workspaceId),
+              eq(schema.taskComments.authorType, 'dispatcher'),
             ),
           )
-          .orderBy(desc(schema.taskHistory.createdAt))
+          .orderBy(desc(schema.taskComments.createdAt))
           .limit(CONTEXT_DISPATCHER_LIMIT),
       ]);
 
-      // Queue depth summary — count tasks by status for FM bottleneck detection
-      const allTasks = await db
-        .select({ status: schema.tasks.status })
+      // Queue depth: count of pending_agent tasks per assignedAgentId.
+      // FM uses this for bottleneck detection (queueDepth[agentId] / liveInstances[agentId]).
+      // Keyed by agentId (not by status) so FM can directly look up per-agent queue pressure.
+      const pendingAgentTasks = await db
+        .select({ assignedAgentId: schema.tasks.assignedAgentId })
         .from(schema.tasks)
-        .where(eq(schema.tasks.workspaceId, workspaceId));
+        .where(
+          and(
+            eq(schema.tasks.workspaceId, workspaceId),
+            eq(schema.tasks.status, 'pending_agent'),
+          ),
+        );
 
       const queueDepth: Record<string, number> = {};
-      for (const t of allTasks) {
-        queueDepth[t.status] = (queueDepth[t.status] ?? 0) + 1;
+      for (const t of pendingAgentTasks) {
+        const agent = t.assignedAgentId ?? 'unassigned';
+        queueDepth[agent] = (queueDepth[agent] ?? 0) + 1;
       }
 
       return {

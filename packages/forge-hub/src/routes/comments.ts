@@ -15,7 +15,7 @@ const CreateCommentInputSchema = z.object({
 
 async function getTask(db: Db, taskId: string) {
   return db
-    .select({ id: schema.tasks.id })
+    .select({ id: schema.tasks.id, workspaceId: schema.tasks.workspaceId })
     .from(schema.tasks)
     .where(eq(schema.tasks.id, taskId))
     .get();
@@ -99,6 +99,9 @@ export function registerCommentRoutes(fastify: FastifyInstance, db: Db): void {
       await db.insert(schema.taskComments).values({
         id,
         taskId,
+        // Propagate workspaceId from the task so workspace-scoped queries work
+        // (e.g. GET /workspaces/:id/context dispatcherHistory).
+        workspaceId: task.workspaceId,
         authorType,
         authorId,
         body: input.body,
