@@ -88,6 +88,18 @@ describe('loadConfig', () => {
     expect(cfg.staleTtlMinutes).toBe(45);
   });
 
+  it('FORGE_DAEMON_STALE_TTL_MINUTES=0 throws (min 1)', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_STALE_TTL_MINUTES: '0' })).toThrow();
+  });
+
+  it('FORGE_DAEMON_STALE_TTL_MINUTES=-1 throws (min 1)', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_STALE_TTL_MINUTES: '-1' })).toThrow();
+  });
+
+  it('FORGE_DAEMON_MAX_CONCURRENT_TASKS=-1 throws (min 1)', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_MAX_CONCURRENT_TASKS: '-1' })).toThrow();
+  });
+
   it('maxConcurrentTasks is undefined when not set', () => {
     const cfg = loadConfig({ ...REQUIRED });
     expect(cfg.maxConcurrentTasks).toBeUndefined();
