@@ -86,30 +86,30 @@ curl -s -X POST "$FORGE_DAEMON_HUB_URL/tasks/${TASK_ID}/comments" \
 
 ### Create a subtask (for decomposition)
 
-Use `POST /tasks` to create a subtask. After creating, assign it to the target agent
-using the assign endpoint above.
+Use `POST /tasks` to create a subtask with `parentId` linking it to the parent task.
+After creating, assign it to the target agent using the assign endpoint above.
+
+`$FORGE_DAEMON_WORKSPACE_ID` is available in your environment (inherited from the daemon).
 
 ```bash
-# Step 1: create the subtask
+# Step 1: create the subtask, linked to parent
 NEW_TASK_ID=$(curl -s -X POST "$FORGE_DAEMON_HUB_URL/tasks" \
   -H "Authorization: Bearer $FORGE_DAEMON_DEVICE_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
     \"projectPrefix\": \"${PROJECT_PREFIX}\",
     \"title\": \"${TITLE}\",
-    \"description\": \"${DESCRIPTION}\"
+    \"description\": \"${DESCRIPTION}\",
+    \"parentId\": \"${PARENT_TASK_ID}\",
+    \"workspaceId\": \"$FORGE_DAEMON_WORKSPACE_ID\"
   }" | jq -r '.id')
 
 # Step 2: assign to the target agent
-curl -s -X PATCH "$FORGE_DAEMON_HUB_URL/workspaces/${WORKSPACE_ID}/tasks/${NEW_TASK_ID}/assign" \
+curl -s -X PATCH "$FORGE_DAEMON_HUB_URL/workspaces/$FORGE_DAEMON_WORKSPACE_ID/tasks/${NEW_TASK_ID}/assign" \
   -H "Authorization: Bearer $FORGE_DAEMON_DEVICE_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"agentId\": \"${AGENT_ID}\"}"
 ```
-
-Note: `parentId` association for subtasks will be wired via `hub_create_task` tool
-in Phase 3 Cycle 2. Until then, post the parent task ID in the subtask description
-so the agent has context about the parent work.
 
 ### Escalate to Oracle (task too large to decompose without BA analysis)
 
