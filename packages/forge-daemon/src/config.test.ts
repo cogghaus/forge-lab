@@ -58,6 +58,50 @@ describe('loadConfig', () => {
     expect(cfg.workspaceId).toBe('ws-123');
   });
 
+  it('dispatcherMode defaults to false', () => {
+    const cfg = loadConfig({ ...REQUIRED });
+    expect(cfg.dispatcherMode).toBe(false);
+  });
+
+  it('FORGE_DAEMON_DISPATCHER_MODE=true enables dispatcher mode', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_DISPATCHER_MODE: 'true' });
+    expect(cfg.dispatcherMode).toBe(true);
+  });
+
+  it('FORGE_DAEMON_DISPATCHER_MODE=false keeps dispatcher mode off', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_DISPATCHER_MODE: 'false' });
+    expect(cfg.dispatcherMode).toBe(false);
+  });
+
+  it('FORGE_DAEMON_DISPATCHER_MODE="" (empty) treats as unset — defaults to false', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_DISPATCHER_MODE: '' });
+    expect(cfg.dispatcherMode).toBe(false);
+  });
+
+  it('staleTtlMinutes is undefined when not set', () => {
+    const cfg = loadConfig({ ...REQUIRED });
+    expect(cfg.staleTtlMinutes).toBeUndefined();
+  });
+
+  it('FORGE_DAEMON_STALE_TTL_MINUTES sets staleTtlMinutes', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_STALE_TTL_MINUTES: '45' });
+    expect(cfg.staleTtlMinutes).toBe(45);
+  });
+
+  it('maxConcurrentTasks is undefined when not set', () => {
+    const cfg = loadConfig({ ...REQUIRED });
+    expect(cfg.maxConcurrentTasks).toBeUndefined();
+  });
+
+  it('FORGE_DAEMON_MAX_CONCURRENT_TASKS sets maxConcurrentTasks', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_MAX_CONCURRENT_TASKS: '3' });
+    expect(cfg.maxConcurrentTasks).toBe(3);
+  });
+
+  it('FORGE_DAEMON_MAX_CONCURRENT_TASKS=0 throws (min 1)', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_MAX_CONCURRENT_TASKS: '0' })).toThrow();
+  });
+
   it('throws on missing required fields', () => {
     expect(() => loadConfig({})).toThrow();
   });

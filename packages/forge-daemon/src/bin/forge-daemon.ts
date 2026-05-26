@@ -59,7 +59,12 @@ async function main(): Promise<void> {
   runtimes.register(new BackgroundRuntime({ dangerouslySkipPermissions: config.skipPermissions }));
 
   // C7: log the active runtime and agent so operators notice if the defaults changed.
-  logger.info('active default runtime', { runtimeId: config.defaultRuntimeId, agentId: config.defaultAgentId, skipPermissions: config.skipPermissions });
+  logger.info('active default runtime', {
+    runtimeId: config.defaultRuntimeId,
+    agentId: config.defaultAgentId,
+    skipPermissions: config.skipPermissions,
+    dispatcherMode: config.dispatcherMode,
+  });
 
   const daemon = new Daemon({
     hubUrl: config.hubUrl,
@@ -70,6 +75,9 @@ async function main(): Promise<void> {
     defaultAgentId: config.defaultAgentId,
     ...(personalityRegistry !== undefined && { personalityRegistry }),
     ...(config.workspaceId !== undefined && { workspaceId: config.workspaceId }),
+    ...(config.dispatcherMode && { dispatcherMode: true }),
+    ...(config.staleTtlMinutes !== undefined && { staleTtlMinutes: config.staleTtlMinutes }),
+    ...(config.maxConcurrentTasks !== undefined && { maxConcurrentTasks: config.maxConcurrentTasks }),
     logger,
   });
 
