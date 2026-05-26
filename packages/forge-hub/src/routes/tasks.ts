@@ -17,6 +17,10 @@ const CompleteTaskBodySchema = z.object({
   result: z.string().optional(),
 });
 
+const FailTaskBodySchema = z.object({
+  reason: z.string().max(500).optional(),
+});
+
 const PatchTaskBodySchema = z.object({
   status: z.enum(['cancelled', 'pending_agent']),
 });
@@ -378,6 +382,57 @@ export function registerTaskRoutes(
       bus.emit({
         id: nanoid(),
         name: 'task.completed',
+        occurredAt: new Date(),
+        source: `device:${device.id}`,
+        payload: { taskId: id },
+      });
+      await reply.send({ ok: true });
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Device fail: marks an in_progress task as failed. Only the device that
+  // claimed the task (assignedDeviceId) may call this. Allows recovery when
+  // agent spawn fails after claim — without this the task is stuck in_progress.
+  // ---------------------------------------------------------------------------
+  fastify.post<{ Params: { id: string } }>(
+    '/tasks/:id/fail',
+    { preHandler: requireDevice },
+    async (req, reply) => {
+      const device = getDevice(req);
+      const id = TaskIdSchema.parse(req.params.id);
+      const body = FailTaskBodySchema.parse(req.body ?? {});
+      const task = await db
+        .select({ id: schema.tasks.id, status: schema.tasks.status, assignedDeviceId: schema.tasks.assignedDeviceId })
+        .from(schema.tasks)
+        .where(eq(schema.tasks.id, id))
+        .get();
+      if (!task) {
+        await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+      if (task.status !== 'in_progress') {
+        await reply.code(409).send({ error: 'not_in_progress' });
+        return;
+      }
+      if (task.assignedDeviceId !== device.id) {
+        await reply.code(403).send({ error: 'not_assigned_to_you' });
+        return;
+      }
+      await db
+        .update(schema.tasks)
+        .set({ status: 'failed', updatedAt: new Date() })
+        .where(eq(schema.tasks.id, id));
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId: id,
+        eventName: 'task.failed',
+        source: `device:${device.id}`,
+        payload: { reason: body.reason ?? null, ...maybeRunId(req) },
+      });
+      bus.emit({
+        id: nanoid(),
+        name: 'task.failed',
         occurredAt: new Date(),
         source: `device:${device.id}`,
         payload: { taskId: id },

@@ -5,6 +5,7 @@ import os from 'node:os';
 import { eq } from 'drizzle-orm';
 import { createHub, type Hub } from '@forge-lab/hub';
 import { schema } from '@forge-lab/core';
+import type { AgentRuntime, AgentRuntimeSpawnConfig, RuntimeInstance } from '@forge-lab/core';
 import { loadBuiltinRegistry } from '@forge-lab/agents';
 import { Daemon } from './daemon.js';
 import { HubClient } from './hub-client.js';
@@ -845,5 +846,129 @@ describe('integration: dispatcher mode', () => {
 
     // Verify daemon is still healthy (no crash from double-spawn)
     expect(daemon['running']).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spawn failure recovery — daemon calls failTask after spawn throws
+// ---------------------------------------------------------------------------
+
+/** Runtime that always throws during spawn. Used to test daemon failTask recovery. */
+class FailingRuntime implements AgentRuntime {
+  readonly id = 'failing';
+  readonly displayName = 'Failing Runtime';
+  readonly capabilities = { supportsStreaming: false, supportsTools: false } as const;
+
+  spawn(_config: AgentRuntimeSpawnConfig, _initialPrompt: string): Promise<RuntimeInstance> {
+    return Promise.reject(new Error('Simulated spawn failure'));
+  }
+
+  sendInstruction(_instance: RuntimeInstance, _text: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  stop(_instance: RuntimeInstance): Promise<void> {
+    return Promise.resolve();
+  }
+
+  isAlive(_instance: RuntimeInstance): Promise<boolean> {
+    return Promise.resolve(false);
+  }
+}
+
+describe('integration: spawn failure recovery', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let sessionCookie: string;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-fail-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-spawn-failure-recovery-xxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'failing-device' }),
+    });
+    const deviceToken = ((await devRes.json()) as { token: string }).token;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new FailingRuntime());
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'failing',
+      pollIntervalMs: 100,
+      logger: {
+        info: () => {},
+        error: () => {},
+      },
+    });
+    await daemon.start();
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('daemon marks task as failed when spawn throws', { timeout: 10000 }, async () => {
+    const createRes = await fetch(`${hubUrl}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'fail', title: 'Will fail to spawn' }),
+    });
+    expect(createRes.status).toBe(201);
+    const { id: taskId } = (await createRes.json()) as { id: string };
+
+    // Wait for daemon to claim and attempt spawn (then fail and call failTask)
+    await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+      const task = (await res.json()) as { status: string };
+      return task.status === 'failed' ? 'failed' : null;
+    }, 5000);
+
+    // Verify final state
+    const finalRes = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+    const finalTask = (await finalRes.json()) as { status: string };
+    expect(finalTask.status).toBe('failed');
+
+    // Verify task.failed history event
+    const histRes = await fetch(`${hubUrl}/tasks/${taskId}/history`, { headers: { cookie: sessionCookie } });
+    const { history } = (await histRes.json()) as { history: { eventName: string; payload: unknown }[] };
+    const failEvent = history.find((h) => h.eventName === 'task.failed');
+    expect(failEvent).toBeDefined();
+    const payload = failEvent?.payload as Record<string, unknown> | undefined;
+    expect(typeof payload?.['reason']).toBe('string');
+    expect((payload?.['reason'] as string)).toContain('Simulated spawn failure');
   });
 });
