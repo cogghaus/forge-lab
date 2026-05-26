@@ -1814,3 +1814,96 @@ describe('task parentId linking', () => {
     expect(task?.parentId).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// assignedAgentId — reactive agent pre-assignment
+// ---------------------------------------------------------------------------
+
+describe('task assignedAgentId via flat POST', () => {
+  let hub: Hub;
+  let cookie: string;
+  let deviceToken: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+    ({ token: deviceToken } = await registerDevice(hub, cookie, 'scribe-daemon', { deviceType: 'worker' }));
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('flat POST persists assignedAgentId on the task', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { projectPrefix: 'doc', title: 'Document the auth endpoint', assignedAgentId: 'scribe' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const task = await hub.db
+      .select({ assignedAgentId: schema.tasks.assignedAgentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.assignedAgentId).toBe('scribe');
+  });
+
+  it('flat POST with no assignedAgentId stores null', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { projectPrefix: 'doc', title: 'Generic task' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const task = await hub.db
+      .select({ assignedAgentId: schema.tasks.assignedAgentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.assignedAgentId).toBeNull();
+  });
+
+  it('task.completed SSE event includes result and workspaceId in payload', async () => {
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'doc', title: 'Build the API endpoint' },
+    });
+    const { id: taskId } = taskRes.json() as { id: string };
+
+    // Claim the task so it can be completed by the same device
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+
+    const emitted: Array<{ name: string; payload: Record<string, unknown> }> = [];
+    hub.bus.subscribe((ev) => {
+      emitted.push(ev as { name: string; payload: Record<string, unknown> });
+    });
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/complete`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { result: 'Added GET /api/auth endpoint with JWT validation' },
+    });
+
+    const completedEvent = emitted.find(ev => ev.name === 'task.completed');
+    expect(completedEvent).toBeDefined();
+    expect(completedEvent?.payload['taskId']).toBe(taskId);
+    expect(completedEvent?.payload['result']).toBe('Added GET /api/auth endpoint with JWT validation');
+    expect(completedEvent?.payload['workspaceId']).toBe(workspaceId);
+  });
+});

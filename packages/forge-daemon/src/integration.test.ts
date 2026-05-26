@@ -1486,3 +1486,190 @@ describe('integration: FM triage — full assign cycle', () => {
     expect(log.inboxCount).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Scribe reactive mode — isArchitecturallySignificant unit tests
+// ---------------------------------------------------------------------------
+
+describe('Daemon.isArchitecturallySignificant', () => {
+  it('returns true for titles mentioning endpoint', () => {
+    expect(Daemon.isArchitecturallySignificant('Add GET /api/users endpoint', null, null)).toBe(true);
+  });
+
+  it('returns true for titles mentioning schema migration', () => {
+    expect(Daemon.isArchitecturallySignificant('Add migration for users table', null, null)).toBe(true);
+  });
+
+  it('returns true for result mentioning architecture', () => {
+    expect(Daemon.isArchitecturallySignificant('Update tests', null, 'Refactored architecture of auth module')).toBe(true);
+  });
+
+  it('returns true for description mentioning auth', () => {
+    expect(Daemon.isArchitecturallySignificant('Fix login bug', 'Changed JWT auth validation logic', null)).toBe(true);
+  });
+
+  it('returns false for purely chore tasks', () => {
+    expect(Daemon.isArchitecturallySignificant('Bump dependency versions', 'Update package.json', 'Updated 3 packages')).toBe(false);
+  });
+
+  it('returns false for test-only tasks', () => {
+    expect(Daemon.isArchitecturallySignificant('Add unit tests for parser', null, 'Added 5 unit tests')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scribe reactive mode — integration: listenCompletions creates Scribe tasks
+// ---------------------------------------------------------------------------
+
+describe('integration: Scribe reactive mode — listenCompletions', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let workspaceId: string;
+  let workerToken: string;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-scribe-reactive-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-scribe-reactive-xxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    // Register user + session
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'scribe@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'scribe@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    // Register a worker device (claims tasks, completes them)
+    const workerRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'worker', deviceType: 'worker' }),
+    });
+    workerToken = ((await workerRes.json()) as { token: string }).token;
+
+    // Register a scribe observer device (daemon that listens for completions)
+    const scribeDevRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'scribe-observer', deviceType: 'worker' }),
+    });
+    const scribeDevToken = ((await scribeDevRes.json()) as { token: string }).token;
+
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'Scribe WS', slug: 'scribe-ws' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime());
+
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken: scribeDevToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      workspaceId,
+      listenCompletions: true,
+      scribeAgentId: 'scribe',
+      pollIntervalMs: 100,
+      logger: {
+        info: (msg, meta) => {
+          process.stdout.write(`[scribe-reactive] ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+        error: (msg, meta) => {
+          process.stderr.write(`[scribe-reactive] ERR ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+      },
+    });
+    await daemon.start();
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('creates a Scribe doc task when a significant task completes', { timeout: 15000 }, async () => {
+    // Create and complete an architecturally significant task
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'eng', title: 'Add GET /api/users endpoint' }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+
+    // Worker claims and completes the task
+    await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workerToken}` },
+    });
+    await fetch(`${hubUrl}/tasks/${taskId}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${workerToken}` },
+      body: JSON.stringify({ result: 'Implemented the endpoint with auth middleware' }),
+    });
+
+    // Wait for a Scribe doc task to be created
+    await waitFor(async () => {
+      const tasksRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+        headers: { cookie: sessionCookie },
+      });
+      const { tasks } = (await tasksRes.json()) as { tasks: Array<{ id: string; title: string; assignedAgentId: string | null }> };
+      const scribeTask = tasks.find(t => t.title.startsWith('[Scribe]') && t.assignedAgentId === 'scribe');
+      return scribeTask ? 'done' : null;
+    }, 10000);
+  });
+
+  it('does NOT create a Scribe task for insignificant completions', { timeout: 10000 }, async () => {
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'eng', title: 'Bump dependency versions' }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+
+    await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workerToken}` },
+    });
+    await fetch(`${hubUrl}/tasks/${taskId}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${workerToken}` },
+      body: JSON.stringify({ result: 'Updated 3 packages' }),
+    });
+
+    // Wait a bit and verify no Scribe task was created
+    await new Promise(r => setTimeout(r, 500));
+
+    const tasksRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      headers: { cookie: sessionCookie },
+    });
+    const { tasks } = (await tasksRes.json()) as { tasks: Array<{ title: string }> };
+    const scribeTasks = tasks.filter(t => t.title.startsWith('[Scribe]'));
+    expect(scribeTasks).toHaveLength(0);
+  });
+});
