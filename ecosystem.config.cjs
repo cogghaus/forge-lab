@@ -17,12 +17,17 @@
 
 const DAEMON_BIN = './packages/forge-daemon/dist/bin/forge-daemon.js';
 
-// Shared defaults — overridden per-app where needed.
+// Shared defaults applied to every daemon.
 const COMMON_ENV = {
   FORGE_DAEMON_HUB_URL: 'http://localhost:3001',
   FORGE_DAEMON_WORKDIR: './forge-workdir',
   FORGE_DAEMON_DEFAULT_RUNTIME: 'background',
   FORGE_DAEMON_SKIP_PERMISSIONS: 'true',
+};
+
+// Shared defaults for worker daemons only (not the FM orchestrator).
+const WORKER_ENV = {
+  ...COMMON_ENV,
   FORGE_DAEMON_MAX_CONCURRENT_TASKS: '1',
 };
 
@@ -40,8 +45,8 @@ const apps = [
       FORGE_DAEMON_AGENT_ID: 'forge-master',
       FORGE_DAEMON_DISPATCHER_MODE: 'true',
       FORGE_DAEMON_STALE_TTL_MINUTES: '30',
-      // Orchestrator does not claim worker tasks — no maxConcurrentTasks needed.
-      FORGE_DAEMON_MAX_CONCURRENT_TASKS: undefined,
+      // Orchestrator does not claim worker tasks. MAX_CONCURRENT_TASKS is
+      // intentionally absent so the daemon treats it as unlimited (undefined).
     },
     max_memory_restart: '512M',
     restart_delay: 5000,
@@ -54,7 +59,7 @@ const apps = [
     script: DAEMON_BIN,
     env_file: '.env.architect',
     env: {
-      ...COMMON_ENV,
+      ...WORKER_ENV,
       FORGE_DAEMON_AGENT_ID: 'architect',
     },
     max_memory_restart: '512M',
@@ -66,7 +71,7 @@ const apps = [
     script: DAEMON_BIN,
     env_file: '.env.furnace',
     env: {
-      ...COMMON_ENV,
+      ...WORKER_ENV,
       FORGE_DAEMON_AGENT_ID: 'furnace',
     },
     max_memory_restart: '512M',
@@ -78,7 +83,7 @@ const apps = [
     script: DAEMON_BIN,
     env_file: '.env.anvil',
     env: {
-      ...COMMON_ENV,
+      ...WORKER_ENV,
       FORGE_DAEMON_AGENT_ID: 'anvil',
     },
     max_memory_restart: '512M',
@@ -90,7 +95,7 @@ const apps = [
     script: DAEMON_BIN,
     env_file: '.env.crucible',
     env: {
-      ...COMMON_ENV,
+      ...WORKER_ENV,
       FORGE_DAEMON_AGENT_ID: 'crucible',
     },
     max_memory_restart: '512M',
@@ -102,7 +107,7 @@ const apps = [
     script: DAEMON_BIN,
     env_file: '.env.oracle',
     env: {
-      ...COMMON_ENV,
+      ...WORKER_ENV,
       FORGE_DAEMON_AGENT_ID: 'oracle',
     },
     max_memory_restart: '512M',
@@ -116,7 +121,7 @@ const apps = [
     script: DAEMON_BIN,
     env_file: '.env.scribe',
     env: {
-      ...COMMON_ENV,
+      ...WORKER_ENV,
       FORGE_DAEMON_AGENT_ID: 'scribe',
     },
     max_memory_restart: '512M',
