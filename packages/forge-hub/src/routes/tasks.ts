@@ -79,6 +79,11 @@ export function registerTaskRoutes(
       description: body.description ?? null,
       priority: body.priority ?? 'normal',
       goalId: body.goalId || null,
+      parentId: body.parentId ?? null,
+      // Devices may supply workspaceId to associate subtasks with a workspace.
+      // Device tokens are provisioned by workspace owners and are semi-trusted
+      // (same rationale as GET /tasks?workspaceId= above).
+      workspaceId: body.workspaceId ?? null,
       createdBy,
     });
     await db.insert(schema.taskHistory).values({
@@ -376,6 +381,20 @@ export function registerTaskRoutes(
         }
       }
 
+      // Validate parentId: the parent task must exist in the same workspace.
+      const parentId = body.parentId ?? null;
+      if (parentId !== null) {
+        const parent = await db
+          .select({ id: schema.tasks.id })
+          .from(schema.tasks)
+          .where(and(eq(schema.tasks.id, parentId), eq(schema.tasks.workspaceId, workspaceId)))
+          .get();
+        if (!parent) {
+          await reply.code(404).send({ error: 'parent_task_not_found' });
+          return;
+        }
+      }
+
       await db.insert(schema.tasks).values({
         id,
         projectPrefix: body.projectPrefix,
@@ -383,6 +402,7 @@ export function registerTaskRoutes(
         description: body.description ?? null,
         priority: body.priority ?? 'normal',
         goalId,
+        parentId,
         workspaceId,
         createdBy,
       });

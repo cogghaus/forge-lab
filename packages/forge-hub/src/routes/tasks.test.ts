@@ -1629,3 +1629,132 @@ describe('GET /tasks/stats', () => {
     expect(body.total).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// parentId — FM decomposition subtask linking
+// ---------------------------------------------------------------------------
+
+describe('task parentId linking', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('workspace POST creates subtask with parentId persisted', async () => {
+    const parentRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'par', title: 'Parent task' },
+    });
+    expect(parentRes.statusCode).toBe(201);
+    const { id: parentId } = parentRes.json() as { id: string };
+
+    const childRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'par', title: 'Child task', parentId },
+    });
+    expect(childRes.statusCode).toBe(201);
+    const { id: childId } = childRes.json() as { id: string };
+
+    const child = await hub.db
+      .select({ parentId: schema.tasks.parentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, childId))
+      .get();
+    expect(child?.parentId).toBe(parentId);
+  });
+
+  it('workspace POST returns 404 when parentId does not exist in workspace', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'par', title: 'Orphan task', parentId: 'par-9999' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: string }).error).toBe('parent_task_not_found');
+  });
+
+  it('workspace POST returns 404 when parentId belongs to different workspace', async () => {
+    // Create a task in a different workspace using the flat endpoint (no workspace)
+    const flatRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'par', title: 'Task in different workspace' },
+    });
+    expect(flatRes.statusCode).toBe(201);
+    const { id: alienParentId } = flatRes.json() as { id: string };
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'par', title: 'Cross-ws subtask', parentId: alienParentId },
+    });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: string }).error).toBe('parent_task_not_found');
+  });
+
+  it('flat POST with parentId and workspaceId persists both (device use case)', async () => {
+    const { token } = await registerDevice(hub, cookie, 'forge-fm-test');
+
+    // Create a parent task via flat endpoint with workspaceId
+    const parentRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { projectPrefix: 'fmd', title: 'FM parent', workspaceId },
+    });
+    expect(parentRes.statusCode).toBe(201);
+    const { id: parentId } = parentRes.json() as { id: string };
+
+    // Create a subtask with parentId + workspaceId
+    const childRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { projectPrefix: 'fmd', title: 'FM subtask', parentId, workspaceId },
+    });
+    expect(childRes.statusCode).toBe(201);
+    const { id: childId } = childRes.json() as { id: string };
+
+    const child = await hub.db
+      .select({ parentId: schema.tasks.parentId, workspaceId: schema.tasks.workspaceId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, childId))
+      .get();
+    expect(child?.parentId).toBe(parentId);
+    expect(child?.workspaceId).toBe(workspaceId);
+  });
+
+  it('task created without parentId has null parentId', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'par', title: 'Top-level task' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const task = await hub.db
+      .select({ parentId: schema.tasks.parentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.parentId).toBeNull();
+  });
+});
