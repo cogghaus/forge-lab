@@ -80,6 +80,15 @@ describe('POST /auth/register', () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it('returns 400 for password shorter than 8 characters', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/register',
+      payload: { email: 'admin@example.com', password: 'short' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });
 
 describe('POST /auth/login', () => {
@@ -164,6 +173,15 @@ describe('GET /auth/me', () => {
     });
     expect(res.statusCode).toBe(401);
   });
+
+  it('returns 401 with a bogus session token', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/auth/me',
+      headers: { cookie: 'session=this-is-not-a-real-token' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
 });
 
 describe('POST /auth/logout', () => {
@@ -194,5 +212,15 @@ describe('POST /auth/logout', () => {
       headers: { cookie },
     });
     expect(meRes.statusCode).toBe(401);
+  });
+
+  it('returns 200 ok even when called without a session cookie', async () => {
+    // POST /auth/logout is not protected — graceful no-op when unauthenticated
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/logout',
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { ok: boolean }).ok).toBe(true);
   });
 });

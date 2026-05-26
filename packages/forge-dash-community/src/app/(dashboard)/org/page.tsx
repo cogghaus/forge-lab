@@ -118,7 +118,7 @@ export default async function OrgPage() {
                 color: '#A78BFA',
               }}
             >
-              {me.email[0]?.toUpperCase() ?? '?'}
+              {(me.email[0] ?? '?').toUpperCase()}
             </div>
 
             <div className="flex-1 min-w-0">
