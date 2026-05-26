@@ -2,10 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { schema } from '@forge-lab/core';
 import { createHub, type Hub } from '../app.js';
-import type { HubConfig } from '../config.js';
 import { TEST_HUB_CONFIG, setupAdmin, createWorkspace } from '../test-utils.js';
 
-const testConfig: HubConfig = TEST_HUB_CONFIG;
 
 async function registerOrchestrator(hub: Hub, cookie: string): Promise<string> {
   const res = await hub.fastify.inject({
@@ -34,7 +32,7 @@ describe('/workspaces/:workspaceId/docs', () => {
   let fmToken: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
     ({ cookie } = await setupAdmin(hub));
     workspaceId = await createWorkspace(hub, cookie, { slug: 'docs-ws' });
     fmToken = await registerOrchestrator(hub, cookie);

@@ -1,15 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createHub, type Hub } from '../app.js';
-import type { HubConfig } from '../config.js';
 import { TEST_HUB_CONFIG, setupAdmin } from '../test-utils.js';
 
-const testConfig: HubConfig = TEST_HUB_CONFIG;
 
 describe('POST /auth/register', () => {
   let hub: Hub;
 
   beforeEach(async () => {
-    hub = await createHub({ config: testConfig });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
   });
 
   afterEach(async () => {
@@ -67,7 +65,7 @@ describe('POST /auth/login', () => {
   let hub: Hub;
 
   beforeEach(async () => {
-    hub = await createHub({ config: testConfig });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     await hub.fastify.inject({
       method: 'POST',
       url: '/auth/register',
@@ -117,7 +115,7 @@ describe('GET /auth/me', () => {
   let hub: Hub;
 
   beforeEach(async () => {
-    hub = await createHub({ config: testConfig });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
   });
 
   afterEach(async () => {
@@ -160,7 +158,7 @@ describe('POST /auth/logout', () => {
   let hub: Hub;
 
   beforeEach(async () => {
-    hub = await createHub({ config: testConfig });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
   });
 
   afterEach(async () => {

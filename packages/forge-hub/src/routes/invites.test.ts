@@ -1,9 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createHub, type Hub } from '../app.js';
-import type { HubConfig } from '../config.js';
 import { TEST_HUB_CONFIG, setupAdmin, createWorkspace } from '../test-utils.js';
 
-const testConfig: HubConfig = TEST_HUB_CONFIG;
 
 async function setupUser(hub: Hub, adminCookie: string, email = 'user@example.com'): Promise<{ cookie: string }> {
   const inviteRes = await hub.fastify.inject({
@@ -28,7 +26,7 @@ describe('POST /admin/invites', () => {
   let adminCookie: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
     ({ cookie: adminCookie } = await setupAdmin(hub));
   });
   afterEach(async () => { await hub.close(); });
@@ -94,7 +92,7 @@ describe('GET /invites/:token', () => {
   let adminCookie: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
     ({ cookie: adminCookie } = await setupAdmin(hub));
   });
   afterEach(async () => { await hub.close(); });
@@ -144,7 +142,7 @@ describe('POST /invites/:token/accept', () => {
   let adminCookie: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
     ({ cookie: adminCookie } = await setupAdmin(hub));
   });
   afterEach(async () => { await hub.close(); });

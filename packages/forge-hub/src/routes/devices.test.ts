@@ -1,20 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createHub, type Hub } from '../app.js';
-import type { HubConfig } from '../config.js';
 import { nanoid } from 'nanoid';
 import { schema } from '@forge-lab/core';
 import { createSession } from '../auth/sessions.js';
 import { hashPassword } from '../auth/password.js';
 import { TEST_HUB_CONFIG, setupAdmin } from '../test-utils.js';
 
-const testConfig: HubConfig = TEST_HUB_CONFIG;
 
 describe('POST /devices', () => {
   let hub: Hub;
   let cookie: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: testConfig });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
   });
 
@@ -80,7 +78,7 @@ describe('GET /devices', () => {
   let cookie: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: testConfig });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
   });
 

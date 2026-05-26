@@ -2,10 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createHub, type Hub } from '../app.js';
 import { schema } from '@forge-lab/core';
-import type { HubConfig } from '../config.js';
 import { TEST_HUB_CONFIG, setupAdmin, createWorkspace } from '../test-utils.js';
 
-const testConfig: HubConfig = TEST_HUB_CONFIG;
 
 async function createGoal(
   hub: Hub,
@@ -29,7 +27,7 @@ describe('/workspaces/:workspaceId/goals', () => {
   let workspaceId: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
     ({ cookie } = await setupAdmin(hub));
     workspaceId = await createWorkspace(hub, cookie);
   });
@@ -185,7 +183,7 @@ describe('PATCH /workspaces/:workspaceId/goals/:goalId', () => {
   let workspaceId: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
     ({ cookie } = await setupAdmin(hub));
     workspaceId = await createWorkspace(hub, cookie);
   });
