@@ -166,7 +166,8 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
       pathname === base ||
       (pathname.startsWith(base + '/') &&
         !pathname.startsWith(base + '/goals') &&
-        !pathname.startsWith(base + '/triage'))
+        !pathname.startsWith(base + '/triage') &&
+        !pathname.startsWith(base + '/knowledge'))
     );
   }
 
@@ -212,7 +213,8 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
               <div id={subNavId} className="mb-1">
                 <Link href={base}              className={subItem(isWorkshopActive(base))}>Workshop</Link>
                 <Link href={`${base}/goals`}   className={subItem(isGoalsActive(base))}>Goals</Link>
-                <Link href={`${base}/triage`}  className={subItem(pathname === `${base}/triage`)}>Triage 🔱</Link>
+                <Link href={`${base}/triage`}     className={subItem(pathname === `${base}/triage`)}>Triage 🔱</Link>
+                <Link href={`${base}/knowledge`} className={subItem(pathname.startsWith(`${base}/knowledge`))}>Knowledge 📚</Link>
                 <span
                   className={subItem(false, true)}
                   role="menuitem"
