@@ -1299,6 +1299,15 @@ describe('GET+POST /workspaces/:wsId/tasks/stale-assigned', () => {
         .where(eq(schema.tasks.id, taskId))
         .get();
       expect(task?.status).toBe('pending_dispatcher_action');
+
+      // Verify history event written for each task
+      const histRes = await hub.fastify.inject({
+        method: 'GET',
+        url: `/tasks/${taskId}/history`,
+        headers: { cookie },
+      });
+      const { history } = histRes.json() as { history: { eventName: string }[] };
+      expect(history.some((h) => h.eventName === 'task.requeued')).toBe(true);
     }
   });
 
