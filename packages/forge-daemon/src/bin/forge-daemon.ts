@@ -78,6 +78,7 @@ async function main(): Promise<void> {
     ...(config.dispatcherMode && { dispatcherMode: true }),
     ...(config.staleTtlMinutes !== undefined && { staleTtlMinutes: config.staleTtlMinutes }),
     ...(config.maxConcurrentTasks !== undefined && { maxConcurrentTasks: config.maxConcurrentTasks }),
+    ...(config.dispatcherPersonality !== undefined && { dispatcherPersonality: config.dispatcherPersonality }),
     logger,
   });
 

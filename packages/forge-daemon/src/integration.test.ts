@@ -850,6 +850,200 @@ describe('integration: dispatcher mode', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Dispatcher mode — FM personality registry loading
+// ---------------------------------------------------------------------------
+
+describe('integration: dispatcher mode — personality registry', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let workspaceId: string;
+  let capturedPersonalities: string[] = [];
+
+  beforeEach(async () => {
+    capturedPersonalities = [];
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-fm-personality-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-fm-personality-test-xxxxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    const orchestratorToken = ((await devRes.json()) as { token: string }).token;
+
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'FM Personality WS', slug: 'fm-personality' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+
+    const registry = await loadBuiltinRegistry();
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(
+      new MockRuntime({
+        completionDelayMs: 20,
+        resultFactory: ({ personality }) => {
+          capturedPersonalities.push(personality);
+          return 'FM_TRIAGE_COMPLETE';
+        },
+      }),
+    );
+
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken: orchestratorToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      workspaceId,
+      dispatcherMode: true,
+      fmAgentId: 'forge-master',
+      dispatcherPersonality: 'forge-master',
+      personalityRegistry: registry,
+      pollIntervalMs: 100,
+      logger: {
+        info: (msg, meta) => {
+          process.stdout.write(`[fm-daemon] ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+        error: (msg, meta) => {
+          process.stderr.write(`[fm-daemon] ERR ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+      },
+    });
+    await daemon.start();
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('dispatcher uses forge-master personality from registry when spawning FM', { timeout: 20000 }, async () => {
+    // Create a task in pending_dispatcher_action
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'fmp', title: 'Personality registry test task' }),
+    });
+    expect(taskRes.status).toBe(201);
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, taskId));
+
+    // Wait for FM to spawn and complete
+    await waitFor(async () => {
+      return capturedPersonalities.length > 0 ? 'done' : null;
+    }, 8000);
+
+    expect(capturedPersonalities.length).toBeGreaterThan(0);
+    // The FM personality loaded from the registry should contain the FM identity marker
+    const fmPersonality = capturedPersonalities[0] ?? '';
+    expect(fmPersonality).toContain('Forge Master');
+    // Should contain FM-specific content from the personality file
+    expect(fmPersonality).toContain('orchestrator');
+  });
+
+  it('dispatcher falls back to default personality when registry missing the id', { timeout: 15000 }, async () => {
+    // Stop the daemon and restart without personality registry
+    await daemon.stop();
+
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master-2', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    const orchestratorToken2 = ((await devRes.json()) as { token: string }).token;
+
+    const fallbackPersonalities: string[] = [];
+    const runtimes2 = new RuntimeRegistry();
+    runtimes2.register(
+      new MockRuntime({
+        completionDelayMs: 20,
+        resultFactory: ({ personality }) => {
+          fallbackPersonalities.push(personality);
+          return 'FALLBACK_DONE';
+        },
+      }),
+    );
+
+    const daemon2 = new Daemon({
+      hubUrl,
+      deviceToken: orchestratorToken2,
+      workdir,
+      runtimes: runtimes2,
+      defaultRuntimeId: 'mock',
+      workspaceId,
+      dispatcherMode: true,
+      fmAgentId: 'forge-master',
+      dispatcherPersonality: 'nonexistent-personality',
+      // No personalityRegistry → fallback to defaultPersonality / built-in string
+      pollIntervalMs: 100,
+      logger: {
+        info: () => {},
+        error: () => {},
+      },
+    });
+    await daemon2.start();
+
+    try {
+      const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+        body: JSON.stringify({ projectPrefix: 'fmp', title: 'Fallback personality test' }),
+      });
+      const { id: taskId } = (await taskRes.json()) as { id: string };
+      await hub.db
+        .update(schema.tasks)
+        .set({ status: 'pending_dispatcher_action' })
+        .where(eq(schema.tasks.id, taskId));
+
+      await waitFor(async () => {
+        return fallbackPersonalities.length > 0 ? 'done' : null;
+      }, 8000);
+    } finally {
+      await daemon2.stop();
+    }
+
+    // Fallback personality should be the default string (not forge-master content)
+    expect(fallbackPersonalities.length).toBeGreaterThan(0);
+    // The fallback is 'You are the Forge Master orchestrator.' (from daemon.ts)
+    expect(fallbackPersonalities[0]).toContain('Forge Master orchestrator');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Spawn failure recovery — daemon calls failTask after spawn throws
 // ---------------------------------------------------------------------------
 
