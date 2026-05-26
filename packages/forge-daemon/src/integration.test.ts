@@ -1633,13 +1633,21 @@ describe('integration: Scribe reactive mode — listenCompletions', () => {
       body: JSON.stringify({ result: 'Implemented the endpoint with auth middleware' }),
     });
 
-    // Wait for a Scribe doc task to be created
+    // Wait for a Scribe doc task to be created that references the specific completed task
     await waitFor(async () => {
       const tasksRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
         headers: { cookie: sessionCookie },
       });
-      const { tasks } = (await tasksRes.json()) as { tasks: Array<{ id: string; title: string; assignedAgentId: string | null }> };
-      const scribeTask = tasks.find(t => t.title.startsWith('[Scribe]') && t.assignedAgentId === 'scribe');
+      const { tasks } = (await tasksRes.json()) as {
+        tasks: Array<{ id: string; title: string; description: string | null; assignedAgentId: string | null }>;
+      };
+      // Filter by title prefix, agent assignment, AND description containing the completed task ID
+      // so we don't accidentally match a Scribe task created for a different completion.
+      const scribeTask = tasks.find(
+        t => t.title.startsWith('[Scribe]') &&
+          t.assignedAgentId === 'scribe' &&
+          (t.description?.includes(taskId) ?? false),
+      );
       return scribeTask ? 'done' : null;
     }, 10000);
   });
