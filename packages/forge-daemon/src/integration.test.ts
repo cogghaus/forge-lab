@@ -1970,7 +1970,7 @@ describe('Scribe — Crucible test matrix: reactive scope + routing', () => {
       });
 
       // Wait and verify NO Scribe task was created in workspace A.
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 1000));
 
       const tasksRes = await fetch(`${hubUrl}/workspaces/${workspaceA}/tasks`, {
         headers: { cookie: sessionCookie },
@@ -2145,7 +2145,7 @@ describe('Scribe — Crucible test matrix: audit edge cases', () => {
       }
 
       // Wait a bit and verify no audit task was created.
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 1000));
 
       const tasksRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
         headers: { cookie: sessionCookie },
