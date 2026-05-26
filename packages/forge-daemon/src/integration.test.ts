@@ -965,9 +965,10 @@ describe('integration: spawn failure recovery', () => {
     // Verify task.failed history event
     const histRes = await fetch(`${hubUrl}/tasks/${taskId}/history`, { headers: { cookie: sessionCookie } });
     const { history } = (await histRes.json()) as { history: { eventName: string; payload: unknown }[] };
-    const failEvent = history.find((h) => h.eventName === 'task.failed');
-    expect(failEvent).toBeDefined();
-    const payload = failEvent?.payload as Record<string, unknown> | undefined;
+    // Exactly one task.failed event — guards against duplicate events from race condition
+    const failEvents = history.filter((h) => h.eventName === 'task.failed');
+    expect(failEvents).toHaveLength(1);
+    const payload = failEvents[0]?.payload as Record<string, unknown> | undefined;
     expect(typeof payload?.['reason']).toBe('string');
     expect((payload?.['reason'] as string)).toContain('Simulated spawn failure');
   });
