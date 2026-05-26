@@ -88,18 +88,36 @@ export class HubClient extends EventEmitter {
 
     if (!isReconnect) {
       // Initial connect: surface errors to the caller.
+      // Also listen for 'close' so that calling close() mid-connect resolves
+      // the promise rather than hanging indefinitely.
       await new Promise<void>((resolve, reject) => {
-        ws.once('open', () => {
+        const onOpen = () => {
+          ws.removeListener('error', onError);
+          ws.removeListener('close', onClose);
           this._reconnectAttempts = 0;
           resolve();
-        });
-        ws.once('error', (err) => reject(err));
+        };
+        const onError = (err: Error) => {
+          ws.removeListener('close', onClose);
+          reject(err);
+        };
+        const onClose = () => {
+          ws.removeListener('error', onError);
+          reject(new Error('WebSocket closed before open'));
+        };
+        ws.once('open', onOpen);
+        ws.once('error', onError);
+        ws.once('close', onClose);
       });
       this._attachHandlers(ws);
     } else {
       // Reconnect: don't expose the promise — let the close handler retry on failure.
-      // Must attach a no-op error listener to prevent unhandled error events.
-      ws.on('error', () => {});
+      // Must attach a no-op error listener to prevent unhandled error events during
+      // reconnect attempts where the server may not be reachable yet.
+      ws.on('error', () => {
+        // Errors during reconnect are expected while the server is unavailable.
+        // The close handler below will schedule the next retry.
+      });
       ws.once('open', () => {
         this._reconnectAttempts = 0;
         this.emit('reconnect');
@@ -128,6 +146,8 @@ export class HubClient extends EventEmitter {
     });
 
     ws.on('close', () => {
+      // Guard: if this is a stale socket (replaced by a newer reconnect), skip.
+      if (ws !== this.ws) return;
       this.emit('disconnect');
       if (!this._closed && this.opts.reconnectMaxAttempts > 0) {
         this._scheduleReconnect();

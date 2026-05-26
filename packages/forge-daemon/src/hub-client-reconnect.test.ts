@@ -169,9 +169,44 @@ describe('HubClient reconnect', () => {
     });
     await client.connect();
 
-    // After connect, reconnect attempt counter should be 0
+    // After initial connect, counter should be 0
     expect(client['_reconnectAttempts']).toBe(0);
-  });
+
+    // Disconnect and allow reconnect to same server (still running)
+    const reconnectPromise = once(client, 'reconnect');
+    const disconnectPromise = once(client, 'disconnect');
+    for (const sock of server.clients) {
+      sock.terminate();
+    }
+    await disconnectPromise;
+    // Counter increments when reconnect is scheduled
+    expect(client['_reconnectAttempts']).toBeGreaterThanOrEqual(1);
+
+    // After successful reconnect, counter resets to 0
+    await reconnectPromise;
+    expect(client['_reconnectAttempts']).toBe(0);
+  }, 5000);
+
+  it('close() before open rejects connect() promise', async () => {
+    // Start a server that never accepts (immediately closes connections)
+    const { server, port } = await startServer();
+    primaryServer = server;
+
+    // Create client but don't await connect yet
+    client = new HubClient({
+      hubUrl: `http://127.0.0.1:${port}`,
+      deviceToken: 'test-token',
+      reconnectMaxAttempts: 0,
+    });
+
+    const connectPromise = client.connect();
+    // close() immediately — should abort the connection attempt
+    await client.close();
+    client = null;
+
+    // connect() should reject (close event fires on the socket before open)
+    await expect(connectPromise).rejects.toThrow();
+  }, 3000);
 
   it('forwards hub messages to event listeners (no reconnect scenario)', async () => {
     // Verify that message forwarding works correctly after connect.
