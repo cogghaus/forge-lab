@@ -1432,9 +1432,10 @@ describe('POST /tasks/:id/fail', () => {
       .select()
       .from(schema.taskHistory)
       .where(eq(schema.taskHistory.taskId, taskId));
-    const failEvent = history.find((h) => h.eventName === 'task.failed');
-    expect(failEvent).toBeDefined();
-    const payload = failEvent?.payload as Record<string, unknown> | undefined;
+    const failEvents = history.filter((h) => h.eventName === 'task.failed');
+    // Exactly one task.failed event — guards against duplicate writes from race condition
+    expect(failEvents).toHaveLength(1);
+    const payload = failEvents[0]?.payload as Record<string, unknown> | undefined;
     expect(payload?.['reason']).toBe('runtime crash');
   });
 

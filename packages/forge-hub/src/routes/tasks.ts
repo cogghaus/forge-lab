@@ -419,10 +419,24 @@ export function registerTaskRoutes(
         await reply.code(403).send({ error: 'not_assigned_to_you' });
         return;
       }
-      await db
+      // Atomic UPDATE with status + device guard prevents concurrent fail requests
+      // from the same device from both inserting duplicate task.failed history events.
+      const failed = await db
         .update(schema.tasks)
         .set({ status: 'failed', updatedAt: new Date() })
-        .where(eq(schema.tasks.id, id));
+        .where(
+          and(
+            eq(schema.tasks.id, id),
+            eq(schema.tasks.status, 'in_progress'),
+            eq(schema.tasks.assignedDeviceId, device.id),
+          ),
+        )
+        .returning({ id: schema.tasks.id });
+      if (failed.length === 0) {
+        // Lost race — another concurrent request already failed/changed this task
+        await reply.code(409).send({ error: 'not_in_progress' });
+        return;
+      }
       await db.insert(schema.taskHistory).values({
         id: nanoid(),
         taskId: id,
