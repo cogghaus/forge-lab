@@ -117,6 +117,12 @@ export interface HubRuntimeConfig {
   createdAt: string;
 }
 
+export interface HubMe {
+  id: string;
+  email: string;
+  role: string;
+}
+
 export interface HubTaskStats {
   total: number;
   byStatus: Record<string, number>;
