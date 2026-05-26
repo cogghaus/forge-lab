@@ -113,4 +113,6 @@ export interface HubDevice {
   platform: string | null;
   lastSeen: string | null;
   createdAt: string;
+  deviceType: 'worker' | 'orchestrator';
+  agentId: string | null;
 }

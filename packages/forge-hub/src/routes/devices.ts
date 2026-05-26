@@ -36,6 +36,8 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): void {
         platform: schema.devices.platform,
         lastSeen: schema.devices.lastSeen,
         createdAt: schema.devices.createdAt,
+        deviceType: schema.devices.deviceType,
+        agentId: schema.devices.agentId,
       })
       .from(schema.devices)
       .where(eq(schema.devices.userId, user.id));

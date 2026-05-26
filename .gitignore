@@ -26,3 +26,4 @@ _vibe-forge/
 # Deploy secrets (keep .gitkeep, ignore actual secrets)
 deploy/secrets/*
 !deploy/secrets/.gitkeep
+cookies.txt
