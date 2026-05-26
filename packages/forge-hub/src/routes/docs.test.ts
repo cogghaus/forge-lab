@@ -445,6 +445,31 @@ describe('/workspaces/:workspaceId/docs', () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it('PATCH content edit on archived doc returns 422 (fully immutable)', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { key: 'immutable-content', title: 'Immutable', content: 'Original.', category: 'adr' },
+    });
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/docs/immutable-content`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { status: 'archived' },
+    });
+
+    // Title-only edit on archived doc must also be rejected
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/docs/immutable-content`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { title: 'Should not update' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error).toBe('doc_not_active');
+  });
+
   it('PATCH with empty body returns 400', async () => {
     await hub.fastify.inject({
       method: 'POST',

@@ -239,8 +239,8 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
       }
 
       // Docs can only move forward: active -> archived | superseded.
-      // Once archived or superseded, the doc is immutable.
-      if (existing.status !== 'active' && body.status) {
+      // Once archived or superseded, the doc is fully immutable (no edits, no status changes).
+      if (existing.status !== 'active') {
         await reply.code(422).send({ error: 'doc_not_active', status: existing.status });
         return;
       }
