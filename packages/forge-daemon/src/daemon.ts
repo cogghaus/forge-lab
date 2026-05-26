@@ -75,6 +75,14 @@ export interface DaemonOptions {
    * is true. Defaults to 'scribe'.
    */
   scribeAgentId?: string;
+  /**
+   * Number of task completions (in the daemon's workspace scope) that trigger a
+   * Scribe knowledge-base audit task. When this threshold is reached the counter
+   * resets to zero and one `[Scribe Audit]` task is created pre-assigned to
+   * `scribeAgentId`. Only meaningful when `listenCompletions` is true and
+   * `workspaceId` is set. When unset, no audit task is ever created automatically.
+   */
+  auditThreshold?: number;
 }
 
 export interface DaemonLogger {
@@ -104,6 +112,13 @@ export class Daemon {
   private readonly activeInstances = new Map<string, ActiveInstance>();
   /** True while an FM agent is running in dispatcher mode. Prevents double-spawn. */
   private fmRunning = false;
+  /**
+   * Rolling count of task.completed events received within this daemon's workspace
+   * scope since the last audit task was created (or since daemon start). When it
+   * reaches `opts.auditThreshold`, a Scribe audit task is created and the counter
+   * resets to zero.
+   */
+  private completionsSinceAudit = 0;
 
   constructor(opts: DaemonOptions) {
     this.opts = opts;
@@ -462,6 +477,18 @@ export class Daemon {
       return;
     }
 
+    const wsId = payloadWorkspaceId ?? this.opts.workspaceId ?? null;
+
+    // Track completions for audit threshold. Every in-scope completion counts,
+    // regardless of significance. Reset before creating the audit task to prevent
+    // double-triggering if concurrent events arrive near the boundary.
+    this.completionsSinceAudit++;
+    const auditThreshold = this.opts.auditThreshold;
+    if (auditThreshold !== undefined && this.completionsSinceAudit >= auditThreshold && wsId !== null) {
+      this.completionsSinceAudit = 0;
+      await this.createScribeAuditTask(wsId);
+    }
+
     let task: { title: string; description: string | null; projectPrefix: string; workspaceId: string | null };
     try {
       task = await this.client.getTask(taskId);
@@ -474,7 +501,6 @@ export class Daemon {
     }
 
     const scribeAgentId = this.opts.scribeAgentId ?? 'scribe';
-    const wsId = payloadWorkspaceId ?? this.opts.workspaceId ?? null;
 
     const descLines = [
       `Completed task: ${taskId}`,
@@ -497,6 +523,45 @@ export class Daemon {
     } catch (err) {
       this.logger.error('failed to create scribe doc task', {
         completedTaskId: taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Creates a Scribe audit task pre-assigned to the scribe agent.
+   * Called automatically when `completionsSinceAudit` reaches `auditThreshold`.
+   */
+  private async createScribeAuditTask(workspaceId: string): Promise<void> {
+    const scribeAgentId = this.opts.scribeAgentId ?? 'scribe';
+    const description = [
+      `Audit trigger: ${this.opts.auditThreshold ?? '?'} tasks completed since last audit.`,
+      '',
+      'Review the workspace knowledge base and:',
+      '1. Identify docs that are stale, redundant, or superseded by newer decisions.',
+      '2. Consolidate near-duplicate docs into a single authoritative doc.',
+      '3. Update docs whose content no longer reflects the current codebase.',
+      '4. Supersede any docs that have been replaced by newer decisions.',
+      '',
+      'This is a Scribe audit task. See your personality for audit mode instructions.',
+    ].join('\n');
+
+    try {
+      await this.client.createTask({
+        projectPrefix: 'scribe',
+        title: '[Scribe Audit] Knowledge base audit',
+        description,
+        assignedAgentId: scribeAgentId,
+        workspaceId,
+      });
+      this.logger.info('scribe audit task created', {
+        workspaceId,
+        scribeAgentId,
+        auditThreshold: this.opts.auditThreshold,
+      });
+    } catch (err) {
+      this.logger.error('failed to create scribe audit task', {
+        workspaceId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
