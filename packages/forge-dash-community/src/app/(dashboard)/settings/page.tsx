@@ -111,6 +111,7 @@ export default async function SettingsPage() {
   const devicesRes = await hubFetch<{ devices: HubDevice[] }>('/devices', {
     cookie: cookieHeader,
   });
+  const devicesFetchFailed = !devicesRes.ok;
   const devices = devicesRes.ok ? devicesRes.data.devices : [];
 
   const onlineCount = devices.filter((d) => isOnline(d.lastSeen)).length;
@@ -152,7 +153,16 @@ export default async function SettingsPage() {
             border: '1px solid rgba(255,255,255,0.06)',
           }}
         >
-          {devices.length === 0 ? (
+          {devicesFetchFailed ? (
+            <div className="px-5 py-10 text-center">
+              <p
+                className="text-[13px]"
+                style={{ color: 'rgba(255,80,80,0.7)' }}
+              >
+                Could not load devices. Hub may be unreachable.
+              </p>
+            </div>
+          ) : devices.length === 0 ? (
             <div className="px-5 py-10 text-center">
               <p
                 className="text-[13px] mb-2"

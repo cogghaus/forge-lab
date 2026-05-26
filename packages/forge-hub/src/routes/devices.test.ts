@@ -78,6 +78,16 @@ describe('POST /devices', () => {
     expect(body.token).toBeTruthy();
   });
 
+  it('returns 400 when name is empty string', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: '' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('returns 401 when not authenticated', async () => {
     const res = await hub.fastify.inject({
       method: 'POST',
@@ -194,6 +204,7 @@ describe('GET /devices', () => {
       name: 'user2-device',
       tokenHash: 'fake-hash-' + nanoid(),
       deviceType: 'worker',
+      agentId: null,
     });
 
     // user1 sees only their own device
