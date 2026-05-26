@@ -214,7 +214,7 @@ export class Daemon {
     this.logger.info('inbox non-empty, spawning FM agent', { count: ctx.inboxTasks.length });
 
     const fmAgentId = this.opts.fmAgentId ?? 'forge-master';
-    const syntheticTaskId = `_fm_${Date.now()}`;
+    const syntheticTaskId = `_fm_${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
 
     const contextJson = JSON.stringify(ctx, null, 2);
@@ -340,7 +340,14 @@ export class Daemon {
   private async handleTaskDone(taskId: string, result: DoneResult): Promise<void> {
     // Synthetic FM tasks (prefixed with _fm_) are not tracked in the hub.
     if (taskId.startsWith('_fm_')) {
-      await cleanupTaskFiles(this.opts.workdir, taskId);
+      try {
+        await cleanupTaskFiles(this.opts.workdir, taskId);
+      } catch (err) {
+        this.logger.error('failed to cleanup FM task files', {
+          taskId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       this.activeInstances.delete(taskId);
       this.fmRunning = false;
       this.logger.info('fm agent completed', { taskId, result: result.result });

@@ -820,10 +820,8 @@ describe('integration: dispatcher mode', () => {
     } catch {
       // Directory may not exist if no tasks ran — that's fine
     }
-    // No FM task file should be pending (it would be cleaned up if FM ran and completed)
-    // The key assertion: fmRunning should be false since no spawn happened
-    // We test this indirectly — if FM had spawned and not completed, activeInstances would have an _fm_ entry
-    // Since done-file cleanup happens quickly with MockRuntime, we just verify the daemon is still running
+    // No FM done files should exist since inbox was empty and FM never spawned
+    expect(files.filter((f) => f.startsWith('_fm_'))).toHaveLength(0);
     expect(daemon['running']).toBe(true);
   });
 
