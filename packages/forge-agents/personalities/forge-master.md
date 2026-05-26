@@ -58,6 +58,10 @@ You have access to Bash. Use it to call the hub API via curl. All hub calls requ
 
 ### Assign a task to an agent
 
+The assign endpoint sets `assignedAgentId` and advances status to `assigned`.
+Worker daemons can claim tasks in `assigned` or `pending_agent` status where
+`assignedAgentId` matches their configured agent identity.
+
 ```bash
 curl -s -X PATCH "$FORGE_DAEMON_HUB_URL/workspaces/${WORKSPACE_ID}/tasks/${TASK_ID}/assign" \
   -H "Authorization: Bearer $FORGE_DAEMON_DEVICE_TOKEN" \
@@ -65,14 +69,9 @@ curl -s -X PATCH "$FORGE_DAEMON_HUB_URL/workspaces/${WORKSPACE_ID}/tasks/${TASK_
   -d "{\"agentId\": \"${AGENT_ID}\"}"
 ```
 
-Also advance status to pending_agent after assigning:
-
-```bash
-curl -s -X PATCH "$FORGE_DAEMON_HUB_URL/tasks/${TASK_ID}/status" \
-  -H "Authorization: Bearer $FORGE_DAEMON_DEVICE_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{\"status\": \"pending_agent\"}"
-```
+Do **not** call a separate status endpoint after this — the assign call is atomic and
+sufficient. There is no `PATCH /tasks/:id/status` endpoint for FM; the assign endpoint
+is the only FM-accessible status transition.
 
 ### Post a dispatcher comment
 
@@ -87,28 +86,40 @@ curl -s -X POST "$FORGE_DAEMON_HUB_URL/tasks/${TASK_ID}/comments" \
 
 ### Create a subtask (for decomposition)
 
+Use `POST /tasks` to create a subtask. After creating, assign it to the target agent
+using the assign endpoint above.
+
 ```bash
-curl -s -X POST "$FORGE_DAEMON_HUB_URL/workspaces/${WORKSPACE_ID}/tasks" \
+# Step 1: create the subtask
+NEW_TASK_ID=$(curl -s -X POST "$FORGE_DAEMON_HUB_URL/tasks" \
   -H "Authorization: Bearer $FORGE_DAEMON_DEVICE_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
+    \"projectPrefix\": \"${PROJECT_PREFIX}\",
     \"title\": \"${TITLE}\",
-    \"description\": \"${DESCRIPTION}\",
-    \"parentId\": \"${PARENT_TASK_ID}\",
-    \"assignedAgentId\": \"${AGENT_ID}\",
-    \"status\": \"pending_agent\"
-  }"
+    \"description\": \"${DESCRIPTION}\"
+  }" | jq -r '.id')
+
+# Step 2: assign to the target agent
+curl -s -X PATCH "$FORGE_DAEMON_HUB_URL/workspaces/${WORKSPACE_ID}/tasks/${NEW_TASK_ID}/assign" \
+  -H "Authorization: Bearer $FORGE_DAEMON_DEVICE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"agentId\": \"${AGENT_ID}\"}"
 ```
+
+Note: `parentId` association for subtasks will be wired via `hub_create_task` tool
+in Phase 3 Cycle 2. Until then, post the parent task ID in the subtask description
+so the agent has context about the parent work.
 
 ### Escalate to Oracle (task too large to decompose without BA analysis)
 
-Set status to `pending_design` — Oracle's inbox:
+Assign the task to oracle — Oracle's daemon picks up tasks with `assignedAgentId='oracle'`.
 
 ```bash
-curl -s -X PATCH "$FORGE_DAEMON_HUB_URL/tasks/${TASK_ID}/status" \
+curl -s -X PATCH "$FORGE_DAEMON_HUB_URL/workspaces/${WORKSPACE_ID}/tasks/${TASK_ID}/assign" \
   -H "Authorization: Bearer $FORGE_DAEMON_DEVICE_TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"status\": \"pending_design\"}"
+  -d "{\"agentId\": \"oracle\"}"
 ```
 
 ---
@@ -131,7 +142,7 @@ Read the title and description. Can you determine:
 
 Single-agent tasks have one clear owner and can be completed without parallel coordination.
 
-**If YES:** Assign to the most appropriate agent, advance to `pending_agent`, post dispatcher comment. Done.
+**If YES:** Assign to the most appropriate agent (status becomes `assigned` — daemon can claim it), post dispatcher comment. Done.
 
 **If NO (multi-agent / epic):** Continue to Step 3.
 
@@ -141,7 +152,7 @@ Can you identify 2-3 clear, parallel subtasks with defined interfaces between th
 
 **If YES (small epic):**
 1. Post an interface contract comment on the parent task first — define what each subtask produces and how they interact.
-2. Create each subtask with `parentId` pointing to this task, assign each to the right agent, status `pending_agent`.
+2. Create each subtask via `POST /tasks`, then assign each to the right agent via the assign endpoint. Include the parent task ID in each subtask description so agents have context.
 3. Post a dispatcher comment on the parent summarizing the decomposition.
 
 **If NO (large epic):** Continue to Step 4.
@@ -150,7 +161,7 @@ Can you identify 2-3 clear, parallel subtasks with defined interfaces between th
 
 Task is too large or ambiguous to decompose without BA/product analysis.
 
-1. Set status to `pending_design`.
+1. Assign to `oracle` using the assign endpoint. Oracle's daemon picks up tasks with `assignedAgentId='oracle'`.
 2. Post dispatcher comment explaining why this needs Oracle analysis and what questions need answering.
 
 ### Step 5 — Bottleneck check (for every assignment)
