@@ -1578,31 +1578,34 @@ describe('GET /tasks/stats', () => {
   });
 
   it('completedLast7Days counts only recent completed tasks', async () => {
-    // Insert a task completed now and one completed >7 days ago
+    // Create 2 tasks via API so they have the correct createdBy (user's ID)
+    const recentRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Recent done' },
+    });
+    const oldRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Old done' },
+    });
+    const recentId = (recentRes.json() as { id: string }).id;
+    const oldId = (oldRes.json() as { id: string }).id;
+
     const nowMs = Date.now();
-    const oldMs = nowMs - 8 * 24 * 60 * 60 * 1000;
-    await hub.db.insert(schema.tasks).values([
-      {
-        id: 'stats-t1',
-        projectPrefix: 'fl',
-        title: 'Recent done',
-        status: 'completed',
-        completedAt: new Date(nowMs),
-        createdBy: 'test',
-        updatedAt: new Date(),
-        createdAt: new Date(),
-      },
-      {
-        id: 'stats-t2',
-        projectPrefix: 'fl',
-        title: 'Old done',
-        status: 'completed',
-        completedAt: new Date(oldMs),
-        createdBy: 'test',
-        updatedAt: new Date(),
-        createdAt: new Date(),
-      },
-    ]);
+    // "old" is strictly outside the 7-day window by 1 ms
+    const oldMs = nowMs - 7 * 24 * 60 * 60 * 1000 - 1;
+
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'completed', completedAt: new Date(nowMs) })
+      .where(eq(schema.tasks.id, recentId));
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'completed', completedAt: new Date(oldMs) })
+      .where(eq(schema.tasks.id, oldId));
 
     const res = await hub.fastify.inject({
       method: 'GET',
@@ -1619,6 +1622,16 @@ describe('GET /tasks/stats', () => {
     const res = await hub.fastify.inject({
       method: 'GET',
       url: '/tasks/stats',
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 401 when authenticated only as a device (not a user)', async () => {
+    const { token: deviceToken } = await registerDevice(hub, cookie, 'stats-device');
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { authorization: `Bearer ${deviceToken}` },
     });
     expect(res.statusCode).toBe(401);
   });

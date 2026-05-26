@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { and, eq, desc, asc, inArray, isNull, lt, or, sql, count } from 'drizzle-orm';
+import { and, eq, desc, asc, inArray, isNull, lt, or, count, gte } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import {
@@ -121,16 +121,38 @@ export function registerTaskRoutes(
   });
 
   // User-facing task statistics. Returns per-status counts, completion rate, and recent velocity.
+  // Scoped to workspaces the user is a member of (or un-scoped/null-workspace tasks they created).
   fastify.get('/tasks/stats', async (req, reply) => {
     if (!req.authUser) {
       await reply.code(401).send({ error: 'unauthorized' });
       return;
     }
+    const userId = req.authUser.id;
+
+    // Collect workspace IDs the user belongs to
+    const memberRows = await db
+      .select({ workspaceId: schema.workspaceMembers.workspaceId })
+      .from(schema.workspaceMembers)
+      .where(eq(schema.workspaceMembers.userId, userId));
+    const memberWorkspaceIds = memberRows.map((r) => r.workspaceId);
+
+    // createdBy stores "user:<id>" for user-created tasks (see POST /tasks handler)
+    const createdByKey = `user:${userId}`;
+
+    // Scope: tasks in the user's workspaces OR unscoped tasks created by the user
+    const scopeFilter =
+      memberWorkspaceIds.length > 0
+        ? or(
+            inArray(schema.tasks.workspaceId, memberWorkspaceIds),
+            and(isNull(schema.tasks.workspaceId), eq(schema.tasks.createdBy, createdByKey)),
+          )
+        : and(isNull(schema.tasks.workspaceId), eq(schema.tasks.createdBy, createdByKey));
 
     // Count tasks grouped by status in a single query
     const rows = await db
       .select({ status: schema.tasks.status, n: count() })
       .from(schema.tasks)
+      .where(scopeFilter)
       .groupBy(schema.tasks.status);
 
     const byStatus: Record<string, number> = {};
@@ -146,15 +168,16 @@ export function registerTaskRoutes(
     const pending = byStatus['pending_agent'] ?? 0;
     const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-    // Tasks completed in the last 7 days
+    // Tasks completed in the last 7 days (within scope)
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const recentRow = await db
       .select({ n: count() })
       .from(schema.tasks)
       .where(
         and(
+          scopeFilter,
           eq(schema.tasks.status, 'completed'),
-          sql`${schema.tasks.completedAt} >= ${sevenDaysAgo.getTime()}`,
+          gte(schema.tasks.completedAt, sevenDaysAgo),
         ),
       )
       .get();
