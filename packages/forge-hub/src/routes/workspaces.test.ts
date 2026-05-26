@@ -917,3 +917,187 @@ describe('GET /workspaces/:workspaceId/context', () => {
     expect(instanceIds).toHaveLength(1); // stopped instance excluded
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /workspaces/:workspaceId/dispatcher-log — FM triage dashboard feed
+// ---------------------------------------------------------------------------
+
+type DispatcherLogResponse = {
+  comments: { id: string; taskId: string; taskTitle: string; body: string; authorId: string; createdAt: string }[];
+  inboxCount: number;
+};
+
+describe('GET /workspaces/:workspaceId/dispatcher-log', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+  let fmToken: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+
+    const devRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' },
+    });
+    fmToken = (devRes.json() as { token: string }).token;
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('returns 401 for unauthenticated requests', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/dispatcher-log`,
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns empty comments and inboxCount=0 for fresh workspace', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/dispatcher-log`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as DispatcherLogResponse;
+    expect(body.comments).toHaveLength(0);
+    expect(body.inboxCount).toBe(0);
+  });
+
+  it('inboxCount reflects pending_dispatcher_action tasks in workspace', async () => {
+    const t1 = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dl', title: 'Inbox task 1' },
+    });
+    const t2 = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dl', title: 'Inbox task 2' },
+    });
+    const id1 = (t1.json() as { id: string }).id;
+    const id2 = (t2.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, id1));
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, id2));
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/dispatcher-log`,
+      headers: { cookie },
+    });
+    const body = res.json() as DispatcherLogResponse;
+    expect(body.inboxCount).toBe(2);
+  });
+
+  it('returns dispatcher comments with taskTitle from join', async () => {
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dl', title: 'Design the API' },
+    });
+    const taskId = (taskRes.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, taskId));
+
+    // Post dispatcher comment via FM device
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/comments`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: {
+        body: 'Decision: ROUTED\nAgent: architect\nReason: ADR task.\nConfidence: HIGH',
+        authorType: 'dispatcher',
+      },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/dispatcher-log`,
+      headers: { cookie },
+    });
+    const body = res.json() as DispatcherLogResponse;
+    expect(body.comments).toHaveLength(1);
+    const comment = body.comments[0]!;
+    expect(comment.taskId).toBe(taskId);
+    expect(comment.taskTitle).toBe('Design the API');
+    expect(comment.body).toContain('ROUTED');
+  });
+
+  it('excludes non-dispatcher comments (agent, user, system)', async () => {
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dl', title: 'Noisy task' },
+    });
+    const taskId = (taskRes.json() as { id: string }).id;
+
+    // Post a user comment (not dispatcher)
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/comments`,
+      headers: { cookie },
+      payload: { body: 'User note here' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/dispatcher-log`,
+      headers: { cookie },
+    });
+    const body = res.json() as DispatcherLogResponse;
+    // User comments should not appear in dispatcher log
+    expect(body.comments).toHaveLength(0);
+  });
+
+  it('excludes comments from other workspaces', async () => {
+    // Create another workspace and task + dispatcher comment there
+    const ws2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'Other WS Log', slug: 'other-ws-log' },
+    });
+    const ws2Id = (ws2Res.json() as { id: string }).id;
+    const t2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${ws2Id}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dl', title: 'Other WS task' },
+    });
+    const t2Id = (t2Res.json() as { id: string }).id;
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${t2Id}/comments`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { body: 'Decision: ROUTED\nAgent: furnace', authorType: 'dispatcher' },
+    });
+
+    // dispatcher-log for workspaceId should be empty (comment is in ws2)
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/dispatcher-log`,
+      headers: { cookie },
+    });
+    const body = res.json() as DispatcherLogResponse;
+    expect(body.comments).toHaveLength(0);
+  });
+});
