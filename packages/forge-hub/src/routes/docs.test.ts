@@ -2,43 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { schema } from '@forge-lab/core';
 import { createHub, type Hub } from '../app.js';
-import type { HubConfig } from '../config.js';
+import { TEST_HUB_CONFIG, setupAdmin, createWorkspace } from '../test-utils.js';
 
-const testConfig: HubConfig = {
-  port: 0,
-  host: '127.0.0.1',
-  databaseUrl: ':memory:',
-  sessionSecret: 'test-secret-with-at-least-32-characters-xxxx',
-  sessionTtlHours: 24,
-  bcryptCost: 10,
-  cookieSecure: false,
-};
-
-async function setupAdmin(hub: Hub): Promise<{ cookie: string }> {
-  await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload: { email: 'admin@example.com', password: 'password123' },
-  });
-  const loginRes = await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/login',
-    payload: { email: 'admin@example.com', password: 'password123' },
-  });
-  const setCookie = loginRes.headers['set-cookie'];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!;
-  return { cookie };
-}
-
-async function createWorkspace(hub: Hub, cookie: string): Promise<string> {
-  const res = await hub.fastify.inject({
-    method: 'POST',
-    url: '/workspaces',
-    headers: { cookie },
-    payload: { name: 'Test WS', slug: 'docs-ws' },
-  });
-  return (res.json() as { id: string }).id;
-}
 
 async function registerOrchestrator(hub: Hub, cookie: string): Promise<string> {
   const res = await hub.fastify.inject({
@@ -67,9 +32,9 @@ describe('/workspaces/:workspaceId/docs', () => {
   let fmToken: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
     ({ cookie } = await setupAdmin(hub));
-    workspaceId = await createWorkspace(hub, cookie);
+    workspaceId = await createWorkspace(hub, cookie, { slug: 'docs-ws' });
     fmToken = await registerOrchestrator(hub, cookie);
   });
 

@@ -44,7 +44,7 @@ export interface BackgroundSpawner {
  * Real spawner: starts `claude` with piped stdio and `detached: true` so the
  * daemon process can exit without killing the agent subprocess.
  */
-export const defaultBackgroundSpawner: BackgroundSpawner = {
+const defaultBackgroundSpawner: BackgroundSpawner = {
   spawn(command, args, options) {
     // Note: detached+unref() causes stdout socket to be unref'd on Windows,
     // which stops data delivery to the piped log stream. Keep the process

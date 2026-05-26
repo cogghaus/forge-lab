@@ -3,69 +3,7 @@ import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { createHub, type Hub } from '../app.js';
 import { schema } from '@forge-lab/core';
-import type { HubConfig } from '../config.js';
-
-const testConfig: HubConfig = {
-  port: 0,
-  host: '127.0.0.1',
-  databaseUrl: ':memory:',
-  sessionSecret: 'test-secret-with-at-least-32-characters-xxxx',
-  sessionTtlHours: 24,
-  bcryptCost: 10,
-  cookieSecure: false,
-};
-
-async function setupAdmin(hub: Hub): Promise<{ cookie: string }> {
-  await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload: { email: 'admin@example.com', password: 'password123' },
-  });
-  const loginRes = await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/login',
-    payload: { email: 'admin@example.com', password: 'password123' },
-  });
-  const setCookie = loginRes.headers['set-cookie'];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!;
-  return { cookie };
-}
-
-async function registerDevice(
-  hub: Hub,
-  cookie: string,
-  name: string,
-): Promise<{ id: string; token: string }> {
-  const res = await hub.fastify.inject({
-    method: 'POST',
-    url: '/devices',
-    headers: { cookie },
-    payload: { name, hostname: 'host', platform: 'win32' },
-  });
-  const body = res.json() as { id: string; token: string };
-  return { id: body.id, token: body.token };
-}
-
-async function createTask(hub: Hub, cookie: string): Promise<string> {
-  const res = await hub.fastify.inject({
-    method: 'POST',
-    url: '/tasks',
-    headers: { cookie },
-    payload: { projectPrefix: 'fl', title: 'Test task' },
-  });
-  const body = res.json() as { id: string };
-  return body.id;
-}
-
-async function createWorkspace(hub: Hub, cookie: string): Promise<string> {
-  const res = await hub.fastify.inject({
-    method: 'POST',
-    url: '/workspaces',
-    headers: { cookie },
-    payload: { name: 'Test WS', slug: 'test-ws' },
-  });
-  return (res.json() as { id: string }).id;
-}
+import { TEST_HUB_CONFIG, setupAdmin, registerDevice, createTask, createWorkspace } from '../test-utils.js';
 
 describe('/workspaces/:workspaceId/tasks', () => {
   let hub: Hub;
@@ -73,7 +11,7 @@ describe('/workspaces/:workspaceId/tasks', () => {
   let workspaceId: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
     workspaceId = await createWorkspace(hub, cookie);
   });
@@ -231,7 +169,7 @@ describe('/tasks/:id/claim', () => {
   let device2: { id: string; token: string };
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
     device1 = await registerDevice(hub, cookie, 'device-1');
     device2 = await registerDevice(hub, cookie, 'device-2');
@@ -357,7 +295,7 @@ describe('X-Forge-Run-Id header', () => {
   let deviceToken: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
     ({ token: deviceToken } = await registerDevice(hub, cookie, 'run-device'));
   });
@@ -429,7 +367,7 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId', () => {
   let workspaceId: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: testConfig });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
     workspaceId = await createWorkspace(hub, cookie);
   });
@@ -622,7 +560,7 @@ describe('task goalId linking', () => {
   }
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
     const wsRes = await hub.fastify.inject({
       method: 'POST',
@@ -780,7 +718,7 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign', () => {
   }
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
     workspaceId = await createWorkspace(hub, cookie);
   });
@@ -959,7 +897,7 @@ describe('/tasks/:id/claim — agentId routing', () => {
   }
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
     workspaceId = await createWorkspace(hub, cookie);
   });
@@ -1118,7 +1056,7 @@ describe('GET+POST /workspaces/:wsId/tasks/stale-assigned', () => {
   }
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
     workspaceId = await createWorkspace(hub, cookie);
     fmToken = await registerOrchestrator();
@@ -1382,7 +1320,7 @@ describe('POST /tasks/:id/fail', () => {
   let deviceToken: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: testConfig });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     const admin = await setupAdmin(hub);
     cookie = admin.cookie;
     const dev = await registerDevice(hub, cookie, 'test-device');
@@ -1504,7 +1442,7 @@ describe('GET /tasks/stats', () => {
   let cookie: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
     ({ cookie } = await setupAdmin(hub));
   });
 
