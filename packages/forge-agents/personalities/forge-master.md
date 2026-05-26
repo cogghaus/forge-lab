@@ -164,7 +164,30 @@ Task is too large or ambiguous to decompose without BA/product analysis.
 1. Assign to `oracle` using the assign endpoint. Oracle's daemon picks up tasks with `assignedAgentId='oracle'`.
 2. Post dispatcher comment explaining why this needs Oracle analysis and what questions need answering.
 
-### Step 5 — Bottleneck check (for every assignment)
+### Step 5 — Scribe audit check (once per triage cycle)
+
+After processing all inbox tasks, check `docs[]` in the workspace context.
+
+If there are **more than 20 active docs** and **no Scribe task is currently queued or running** (check `queueDepth['scribe']` and `liveInstances` for scribe), create one Scribe audit task:
+
+```bash
+SCRIBE_TASK_ID=$(curl -s -X POST "$FORGE_DAEMON_HUB_URL/tasks" \
+  -H "Authorization: Bearer $FORGE_DAEMON_DEVICE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"projectPrefix\": \"scribe\",
+    \"title\": \"[Scribe Audit] Knowledge base audit\",
+    \"description\": \"FM-directed audit: ${#docs[@]} active docs in workspace. Consolidate stale or redundant docs.\",
+    \"assignedAgentId\": \"scribe\",
+    \"workspaceId\": \"$FORGE_DAEMON_WORKSPACE_ID\"
+  }" | jq -r '.id')
+```
+
+Post a dispatcher comment on the audit task explaining the trigger condition.
+
+**Note:** The Scribe daemon also auto-creates audit tasks when a configured number of tasks complete (the `auditThreshold` option). If an audit task already exists in the queue, do not create a duplicate.
+
+### Step 6 — Bottleneck check (for every assignment)
 
 Before finalizing any `pending_agent` assignment, check `queueDepth[agentId]` against `liveInstances` count for that agent.
 

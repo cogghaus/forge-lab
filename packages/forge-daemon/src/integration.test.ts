@@ -1681,3 +1681,173 @@ describe('integration: Scribe reactive mode — listenCompletions', () => {
     expect(scribeTasks).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Scribe audit mode — auditThreshold triggers [Scribe Audit] task
+// ---------------------------------------------------------------------------
+
+describe('integration: Scribe audit mode — auditThreshold', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let workspaceId: string;
+  let workerToken: string;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-scribe-audit-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-scribe-audit-xxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'audit@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'audit@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    // Worker device: claims + completes tasks
+    const workerRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'audit-worker', deviceType: 'worker' }),
+    });
+    workerToken = ((await workerRes.json()) as { token: string }).token;
+
+    // Scribe observer device: listens for completions
+    const scribeDevRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'scribe-audit-observer', deviceType: 'worker' }),
+    });
+    const scribeDevToken = ((await scribeDevRes.json()) as { token: string }).token;
+
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'Scribe Audit WS', slug: 'scribe-audit-ws' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime());
+
+    // auditThreshold: 3 — after 3 completions, create a Scribe audit task.
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken: scribeDevToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      workspaceId,
+      listenCompletions: true,
+      scribeAgentId: 'scribe',
+      auditThreshold: 3,
+      pollIntervalMs: 100,
+      logger: {
+        info: (msg, meta) => {
+          process.stdout.write(`[scribe-audit] ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+        error: (msg, meta) => {
+          process.stderr.write(`[scribe-audit] ERR ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+      },
+    });
+    await daemon.start();
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  /** Complete a task in the workspace scope. */
+  async function completeTask(prefix: string, title: string): Promise<string> {
+    const createRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: prefix, title }),
+    });
+    const { id: taskId } = (await createRes.json()) as { id: string };
+    await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${workerToken}` },
+    });
+    await fetch(`${hubUrl}/tasks/${taskId}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${workerToken}` },
+      body: JSON.stringify({ result: 'done' }),
+    });
+    return taskId;
+  }
+
+  it('creates a [Scribe Audit] task after auditThreshold completions', { timeout: 15000 }, async () => {
+    // Complete 3 tasks — even insignificant ones count toward the audit threshold.
+    await completeTask('chore', 'Bump dependency versions');
+    await completeTask('chore', 'Format code with prettier');
+    await completeTask('chore', 'Update README typos');
+
+    // After the 3rd completion, a Scribe audit task should appear.
+    await waitFor(async () => {
+      const tasksRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+        headers: { cookie: sessionCookie },
+      });
+      const { tasks } = (await tasksRes.json()) as {
+        tasks: Array<{ title: string; assignedAgentId: string | null }>;
+      };
+      const auditTask = tasks.find(
+        t => t.title === '[Scribe Audit] Knowledge base audit' && t.assignedAgentId === 'scribe',
+      );
+      return auditTask ? 'done' : null;
+    }, 10000);
+  });
+
+  it('counter resets after audit — completing threshold more tasks creates a second audit task', { timeout: 20000 }, async () => {
+    // Trigger first audit
+    await completeTask('chore', 'Task one');
+    await completeTask('chore', 'Task two');
+    await completeTask('chore', 'Task three');
+
+    // Wait for first audit task to appear
+    await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+        headers: { cookie: sessionCookie },
+      });
+      const { tasks } = (await res.json()) as { tasks: Array<{ title: string }> };
+      return tasks.some(t => t.title === '[Scribe Audit] Knowledge base audit') ? 'done' : null;
+    }, 10000);
+
+    // Complete 3 more tasks — counter reset, should trigger a second audit.
+    await completeTask('chore', 'Task four');
+    await completeTask('chore', 'Task five');
+    await completeTask('chore', 'Task six');
+
+    // Wait until there are at least 2 audit tasks.
+    await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+        headers: { cookie: sessionCookie },
+      });
+      const { tasks } = (await res.json()) as { tasks: Array<{ title: string }> };
+      const auditTasks = tasks.filter(t => t.title === '[Scribe Audit] Knowledge base audit');
+      return auditTasks.length >= 2 ? 'done' : null;
+    }, 10000);
+  });
+});
