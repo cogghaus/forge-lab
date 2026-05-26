@@ -1889,7 +1889,7 @@ describe('task assignedAgentId via flat POST', () => {
     });
 
     const emitted: Array<{ name: string; payload: Record<string, unknown> }> = [];
-    hub.bus.subscribe((ev) => {
+    const unsubscribe = hub.bus.subscribe((ev) => {
       emitted.push(ev as { name: string; payload: Record<string, unknown> });
     });
 
@@ -1901,6 +1901,8 @@ describe('task assignedAgentId via flat POST', () => {
     });
 
     const completedEvent = emitted.find(ev => ev.name === 'task.completed');
+    unsubscribe();
+
     expect(completedEvent).toBeDefined();
     expect(completedEvent?.payload['taskId']).toBe(taskId);
     expect(completedEvent?.payload['result']).toBe('Added GET /api/auth endpoint with JWT validation');

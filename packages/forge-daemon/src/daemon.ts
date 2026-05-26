@@ -446,13 +446,19 @@ export class Daemon {
   }
 
   private async handleTaskCompleted(env: EventEnvelope): Promise<void> {
-    const payload = env.payload as { taskId?: string; result?: string | null; workspaceId?: string | null };
-    const taskId = payload.taskId;
+    // Guard: do not react to events after stop() is called.
+    if (!this.running) return;
+
+    const raw = env.payload;
+    if (typeof raw !== 'object' || raw === null) return;
+    const p = raw as Record<string, unknown>;
+    const taskId = typeof p['taskId'] === 'string' ? p['taskId'] : undefined;
     if (!taskId) return;
+    const result = typeof p['result'] === 'string' ? p['result'] : null;
+    const payloadWorkspaceId = typeof p['workspaceId'] === 'string' ? p['workspaceId'] : null;
 
     // Only react to tasks in our workspace when workspaceId is configured.
-    const completedWorkspaceId = payload.workspaceId ?? null;
-    if (this.opts.workspaceId !== undefined && completedWorkspaceId !== this.opts.workspaceId) {
+    if (this.opts.workspaceId !== undefined && payloadWorkspaceId !== this.opts.workspaceId) {
       return;
     }
 
@@ -463,13 +469,12 @@ export class Daemon {
       return; // best-effort; if we can't fetch the task, skip
     }
 
-    const result = payload.result ?? null;
     if (!Daemon.isArchitecturallySignificant(task.title, task.description, result)) {
       return;
     }
 
     const scribeAgentId = this.opts.scribeAgentId ?? 'scribe';
-    const wsId = completedWorkspaceId ?? this.opts.workspaceId ?? null;
+    const wsId = payloadWorkspaceId ?? this.opts.workspaceId ?? null;
 
     const descLines = [
       `Completed task: ${taskId}`,
