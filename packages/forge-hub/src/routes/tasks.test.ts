@@ -125,6 +125,26 @@ describe('/workspaces/:workspaceId/tasks', () => {
     expect(tasks[0]!.id).toBe('ws-001');
   });
 
+  it('POST with special-char projectPrefix returns 400', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'a!', title: 'Bad prefix' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST with uppercase projectPrefix returns 400', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'FL', title: 'Uppercase prefix' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('POST requires workspace membership', async () => {
     const res = await hub.fastify.inject({
       method: 'POST',
