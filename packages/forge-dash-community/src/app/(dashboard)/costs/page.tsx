@@ -7,9 +7,9 @@ import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Format cents as a USD dollar string. e.g. 5000 → "$50.00" */
+/** Format positive cents as a USD dollar string. e.g. 5000 → "$50.00". 0 or negative → "Unlimited". */
 function formatBudget(cents: number): string {
-  if (cents === 0) return 'Unlimited';
+  if (cents <= 0) return 'Unlimited';
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
@@ -90,7 +90,8 @@ export default async function CostsPage() {
   ]);
 
   const fetchFailed = !workspacesRes.ok;
-  const workspaces = workspacesRes.ok ? workspacesRes.data.workspaces : [];
+  // Use optional chaining: hubFetch can return { ok: true, data: null } if response body is empty
+  const workspaces = workspacesRes.ok ? (workspacesRes.data?.workspaces ?? []) : [];
   const stats = statsRes.ok ? statsRes.data : null;
 
   // Total allocated budget across all workspaces with a limit set
@@ -121,13 +122,21 @@ export default async function CostsPage() {
             className="text-[22px] font-bold tabular-nums"
             style={{ color: 'rgba(245,240,235,0.9)' }}
           >
-            {totalBudgetCents > 0 ? formatBudget(totalBudgetCents) : '—'}
+            {workspaces.length === 0
+              ? '—'
+              : budgetedWsCount === 0
+                ? 'Unlimited'
+                : formatBudget(totalBudgetCents)}
           </span>
           <span
             className="font-mono text-[10px]"
             style={{ color: 'rgba(245,240,235,0.2)' }}
           >
-            across {budgetedWsCount} workspace{budgetedWsCount !== 1 ? 's' : ''}
+            {budgetedWsCount > 0
+              ? `${budgetedWsCount} of ${workspaces.length} workspace${workspaces.length !== 1 ? 's' : ''} capped`
+              : workspaces.length > 0
+                ? 'no limits set'
+                : 'no workspaces'}
           </span>
         </div>
 
