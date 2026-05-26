@@ -28,6 +28,23 @@ export interface DaemonOptions {
   /** If set, daemon only processes tasks belonging to this workspace. */
   workspaceId?: string;
   logger?: DaemonLogger;
+  /**
+   * When true, daemon operates as an FM orchestrator: on each poll cycle it
+   * fetches the Tier 0 context bundle, requeues stale assignments, then spawns
+   * the FM agent if there are pending_dispatcher_action tasks in the inbox.
+   * Requires workspaceId to be set.
+   */
+  dispatcherMode?: boolean;
+  /**
+   * agentId for the FM agent spawned in dispatcher mode.
+   * Defaults to 'forge-master'.
+   */
+  fmAgentId?: string;
+  /**
+   * Stale assignment TTL in minutes used when requeueing in dispatcher mode.
+   * Defaults to 30.
+   */
+  staleTtlMinutes?: number;
 }
 
 export interface DaemonLogger {
@@ -55,6 +72,8 @@ export class Daemon {
   private loopController: AbortController | null = null;
   private loopPromise: Promise<void> | null = null;
   private readonly activeInstances = new Map<string, ActiveInstance>();
+  /** True while an FM agent is running in dispatcher mode. Prevents double-spawn. */
+  private fmRunning = false;
 
   constructor(opts: DaemonOptions) {
     this.opts = opts;
@@ -130,6 +149,11 @@ export class Daemon {
       }
     }
 
+    if (this.opts.dispatcherMode) {
+      await this.pollDispatcher();
+      return;
+    }
+
     const { tasks } = await this.client.listTasks(this.opts.workspaceId);
     for (const task of tasks) {
       if (task.status === 'pending_agent') {
@@ -141,6 +165,85 @@ export class Daemon {
           payload: { taskId: task.id },
         });
       }
+    }
+  }
+
+  /**
+   * Dispatcher poll cycle (FM orchestrator mode).
+   * 1. Requeue stale assigned tasks.
+   * 2. Fetch Tier 0 context bundle.
+   * 3. Spawn FM agent if inbox is non-empty and FM is not already running.
+   */
+  private async pollDispatcher(): Promise<void> {
+    const workspaceId = this.opts.workspaceId;
+    if (!workspaceId) {
+      this.logger.error('dispatcherMode requires workspaceId');
+      return;
+    }
+    if (this.fmRunning) {
+      this.logger.info('fm agent already running, skipping dispatcher poll');
+      return;
+    }
+
+    try {
+      const staleTtl = this.opts.staleTtlMinutes ?? 30;
+      const { requeued } = await this.client.requeueStaleAssigned(workspaceId, staleTtl);
+      if (requeued > 0) {
+        this.logger.info('requeued stale assigned tasks', { requeued });
+      }
+    } catch (err) {
+      this.logger.error('stale requeue failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    let ctx: Awaited<ReturnType<typeof this.client.getWorkspaceContext>>;
+    try {
+      ctx = await this.client.getWorkspaceContext(workspaceId);
+    } catch (err) {
+      this.logger.error('failed to fetch workspace context', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    if (ctx.inboxTasks.length === 0) {
+      return;
+    }
+
+    this.logger.info('inbox non-empty, spawning FM agent', { count: ctx.inboxTasks.length });
+
+    const fmAgentId = this.opts.fmAgentId ?? 'forge-master';
+    const syntheticTaskId = `_fm_${Date.now()}`;
+    const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
+
+    const contextJson = JSON.stringify(ctx, null, 2);
+    const doneInstruction =
+      `\n\n---\nWhen you have finished triaging, write the done file to signal completion:\n` +
+      `Create \`.forge/tasks/${syntheticTaskId}.done\` with:\n` +
+      `{"result":"<summary of assignments made>","completedAt":"<ISO 8601 timestamp>"}\n` +
+      `Write the file with a tool call (Bash, Write, or shell command).`;
+    const initialPrompt = `You are the Forge Master orchestrator. Triage the following workspace inbox.\n\n${contextJson}${doneInstruction}`;
+
+    try {
+      this.fmRunning = true;
+      const instance = await runtime.spawn(
+        {
+          agentId: fmAgentId,
+          personality: this.opts.defaultPersonality ?? 'default',
+          workdir: this.opts.workdir,
+          taskId: syntheticTaskId,
+          config: {},
+        },
+        initialPrompt,
+      );
+      this.activeInstances.set(syntheticTaskId, { instance, runtimeId: this.opts.defaultRuntimeId });
+      this.logger.info('fm agent spawned', { syntheticTaskId, fmAgentId });
+    } catch (err) {
+      this.fmRunning = false;
+      this.logger.error('failed to spawn FM agent', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -235,6 +338,15 @@ export class Daemon {
   }
 
   private async handleTaskDone(taskId: string, result: DoneResult): Promise<void> {
+    // Synthetic FM tasks (prefixed with _fm_) are not tracked in the hub.
+    if (taskId.startsWith('_fm_')) {
+      await cleanupTaskFiles(this.opts.workdir, taskId);
+      this.activeInstances.delete(taskId);
+      this.fmRunning = false;
+      this.logger.info('fm agent completed', { taskId, result: result.result });
+      return;
+    }
+
     try {
       await this.client.completeTask(taskId, result.result);
       await cleanupTaskFiles(this.opts.workdir, taskId);
