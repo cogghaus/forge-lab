@@ -4,34 +4,7 @@ import { eq } from 'drizzle-orm';
 import { schema } from '@forge-lab/core';
 import { createHub, type Hub } from '../app.js';
 import { createSession } from '../auth/sessions.js';
-import type { HubConfig } from '../config.js';
-
-const testConfig: HubConfig = {
-  port: 0,
-  host: '127.0.0.1',
-  databaseUrl: ':memory:',
-  sessionSecret: 'test-secret-with-at-least-32-characters-xxxx',
-  sessionTtlHours: 24,
-  bcryptCost: 10,
-  cookieSecure: false,
-};
-
-async function setupOwner(hub: Hub) {
-  const regRes = await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload: { email: 'owner@example.com', password: 'password123' },
-  });
-  const ownerId = (regRes.json() as { id: string }).id;
-  const loginRes = await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/login',
-    payload: { email: 'owner@example.com', password: 'password123' },
-  });
-  const setCookie = loginRes.headers['set-cookie'];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!;
-  return { ownerId, cookie };
-}
+import { TEST_HUB_CONFIG, setupAdmin, createWorkspace } from '../test-utils.js';
 
 async function setupSecondUser(hub: Hub) {
   const userId = nanoid();
@@ -46,21 +19,11 @@ async function setupSecondUser(hub: Hub) {
   return { userId, cookie };
 }
 
-async function createWorkspace(hub: Hub, cookie: string, slug = 'test-ws') {
-  const res = await hub.fastify.inject({
-    method: 'POST',
-    url: '/workspaces',
-    headers: { cookie },
-    payload: { name: 'Test WS', slug },
-  });
-  return (res.json() as { id: string }).id;
-}
-
 describe('/workspaces routes', () => {
   let hub: Hub;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: TEST_HUB_CONFIG });
   });
 
   afterEach(async () => {
@@ -92,7 +55,7 @@ describe('/workspaces routes', () => {
   });
 
   it('creates workspace and auto-adds creator as owner', async () => {
-    const { ownerId, cookie } = await setupOwner(hub);
+    const { id: ownerId, cookie } = await setupAdmin(hub);
     const res = await hub.fastify.inject({
       method: 'POST',
       url: '/workspaces',
@@ -116,7 +79,7 @@ describe('/workspaces routes', () => {
   });
 
   it('POST /workspaces - 409 for duplicate slug', async () => {
-    const { cookie } = await setupOwner(hub);
+    const { cookie } = await setupAdmin(hub);
     await hub.fastify.inject({
       method: 'POST',
       url: '/workspaces',
@@ -134,7 +97,7 @@ describe('/workspaces routes', () => {
   });
 
   it('POST /workspaces - 400 for invalid slug', async () => {
-    const { cookie } = await setupOwner(hub);
+    const { cookie } = await setupAdmin(hub);
     const res = await hub.fastify.inject({
       method: 'POST',
       url: '/workspaces',
@@ -145,10 +108,10 @@ describe('/workspaces routes', () => {
   });
 
   it('GET /workspaces lists only user memberships', async () => {
-    const { cookie } = await setupOwner(hub);
+    const { cookie } = await setupAdmin(hub);
     const { cookie: cookieB } = await setupSecondUser(hub);
 
-    await createWorkspace(hub, cookie, 'ws-owner');
+    await createWorkspace(hub, cookie, { slug: 'ws-owner' });
     const listRes = await hub.fastify.inject({
       method: 'GET',
       url: '/workspaces',
@@ -160,9 +123,9 @@ describe('/workspaces routes', () => {
   });
 
   it('GET /workspaces lists workspaces with role', async () => {
-    const { cookie } = await setupOwner(hub);
-    await createWorkspace(hub, cookie, 'ws-a');
-    await createWorkspace(hub, cookie, 'ws-b');
+    const { cookie } = await setupAdmin(hub);
+    await createWorkspace(hub, cookie, { slug: 'ws-a' });
+    await createWorkspace(hub, cookie, { slug: 'ws-b' });
     const listRes = await hub.fastify.inject({
       method: 'GET',
       url: '/workspaces',
@@ -175,8 +138,8 @@ describe('/workspaces routes', () => {
   });
 
   it('GET /workspaces/:workspaceId returns workspace', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'my-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'my-ws' });
     const res = await hub.fastify.inject({
       method: 'GET',
       url: `/workspaces/${wsId}`,
@@ -187,8 +150,8 @@ describe('/workspaces routes', () => {
   });
 
   it('GET /workspaces/:workspaceId - 403 for non-member', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'priv-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'priv-ws' });
     const { cookie: cookieB } = await setupSecondUser(hub);
     const res = await hub.fastify.inject({
       method: 'GET',
@@ -199,8 +162,8 @@ describe('/workspaces routes', () => {
   });
 
   it('PATCH /workspaces/:workspaceId updates name and description', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'patch-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'patch-ws' });
     const res = await hub.fastify.inject({
       method: 'PATCH',
       url: `/workspaces/${wsId}`,
@@ -220,8 +183,8 @@ describe('/workspaces routes', () => {
   });
 
   it('PATCH /workspaces/:workspaceId - 400 when no fields sent', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'patch-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'patch-ws' });
     const res = await hub.fastify.inject({
       method: 'PATCH',
       url: `/workspaces/${wsId}`,
@@ -232,8 +195,8 @@ describe('/workspaces routes', () => {
   });
 
   it('PATCH /workspaces/:workspaceId - 403 for collaborator', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'patch-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'patch-ws' });
     const { userId: userBId, cookie: cookieB } = await setupSecondUser(hub);
 
     await hub.fastify.inject({
@@ -254,8 +217,8 @@ describe('/workspaces routes', () => {
   });
 
   it('DELETE /workspaces/:workspaceId soft-deletes workspace', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'del-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'del-ws' });
     const res = await hub.fastify.inject({
       method: 'DELETE',
       url: `/workspaces/${wsId}`,
@@ -266,8 +229,8 @@ describe('/workspaces routes', () => {
   });
 
   it('DELETE /workspaces/:workspaceId - 403 for admin (not owner)', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'del-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'del-ws' });
     const { userId: userBId, cookie: cookieB } = await setupSecondUser(hub);
 
     await hub.fastify.inject({
@@ -286,8 +249,8 @@ describe('/workspaces routes', () => {
   });
 
   it('POST /workspaces/:workspaceId/members adds member', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'mem-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'mem-ws' });
     const { userId: userBId } = await setupSecondUser(hub);
 
     const res = await hub.fastify.inject({
@@ -310,8 +273,8 @@ describe('/workspaces routes', () => {
   });
 
   it('POST /workspaces/:workspaceId/members - 409 for already member', async () => {
-    const { cookie, ownerId } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'mem-ws');
+    const { cookie, id: ownerId } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'mem-ws' });
 
     const res = await hub.fastify.inject({
       method: 'POST',
@@ -324,8 +287,8 @@ describe('/workspaces routes', () => {
   });
 
   it('POST /workspaces/:workspaceId/members - 404 for nonexistent user', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'mem-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'mem-ws' });
 
     const res = await hub.fastify.inject({
       method: 'POST',
@@ -337,8 +300,8 @@ describe('/workspaces routes', () => {
   });
 
   it('DELETE /workspaces/:workspaceId/members/:userId removes member', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'mem-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'mem-ws' });
     const { userId: userBId } = await setupSecondUser(hub);
 
     await hub.fastify.inject({
@@ -365,8 +328,8 @@ describe('/workspaces routes', () => {
   });
 
   it('DELETE /workspaces/:workspaceId/members/:userId - 422 for owner removal', async () => {
-    const { cookie, ownerId } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'mem-ws');
+    const { cookie, id: ownerId } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'mem-ws' });
 
     const res = await hub.fastify.inject({
       method: 'DELETE',
@@ -378,8 +341,8 @@ describe('/workspaces routes', () => {
   });
 
   it('DELETE /workspaces/:workspaceId/members/:userId - 404 for nonexistent member', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'mem-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'mem-ws' });
 
     const res = await hub.fastify.inject({
       method: 'DELETE',
@@ -390,8 +353,8 @@ describe('/workspaces routes', () => {
   });
 
   it('GET /workspaces excludes soft-deleted workspaces from list', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'del-list');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'del-list' });
     await hub.fastify.inject({ method: 'DELETE', url: `/workspaces/${wsId}`, headers: { cookie } });
     const res = await hub.fastify.inject({ method: 'GET', url: '/workspaces', headers: { cookie } });
     const { workspaces } = res.json() as { workspaces: unknown[] };
@@ -399,8 +362,8 @@ describe('/workspaces routes', () => {
   });
 
   it('GET /workspaces/:workspaceId returns 404 after soft-delete', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'dead-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'dead-ws' });
     await hub.fastify.inject({ method: 'DELETE', url: `/workspaces/${wsId}`, headers: { cookie } });
     const res = await hub.fastify.inject({
       method: 'GET',
@@ -411,8 +374,8 @@ describe('/workspaces routes', () => {
   });
 
   it('POST /workspaces/:workspaceId/members returns 404 after soft-delete', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'dead-mem');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'dead-mem' });
     const { userId: userBId } = await setupSecondUser(hub);
     await hub.fastify.inject({ method: 'DELETE', url: `/workspaces/${wsId}`, headers: { cookie } });
     const res = await hub.fastify.inject({
@@ -425,7 +388,7 @@ describe('/workspaces routes', () => {
   });
 
   it('POST /workspaces returns 409 when UNIQUE constraint fires (no pre-check race)', async () => {
-    const { cookie, ownerId } = await setupOwner(hub);
+    const { cookie, id: ownerId } = await setupAdmin(hub);
     await hub.db.insert(schema.workspaces).values({
       id: 'pre-existing-id',
       name: 'Pre-inserted',
@@ -447,8 +410,8 @@ describe('/workspaces routes', () => {
   });
 
   it('added member can access workspace', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'shared-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'shared-ws' });
     const { userId: userBId, cookie: cookieB } = await setupSecondUser(hub);
 
     await hub.fastify.inject({
@@ -479,8 +442,8 @@ describe('/workspaces routes', () => {
   });
 
   it('GET /workspaces/:workspaceId/activity - 403 for non-member', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'act-priv');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'act-priv' });
     const { cookie: cookieB } = await setupSecondUser(hub);
     const res = await hub.fastify.inject({
       method: 'GET',
@@ -491,8 +454,8 @@ describe('/workspaces routes', () => {
   });
 
   it('GET /workspaces/:workspaceId/activity returns task history with task title', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'act-ws');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'act-ws' });
 
     const taskRes = await hub.fastify.inject({
       method: 'POST',
@@ -518,9 +481,9 @@ describe('/workspaces routes', () => {
   });
 
   it('GET /workspaces/:workspaceId/activity excludes tasks from other workspaces', async () => {
-    const { cookie } = await setupOwner(hub);
-    const wsId = await createWorkspace(hub, cookie, 'act-ws-a');
-    const wsIdB = await createWorkspace(hub, cookie, 'act-ws-b');
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'act-ws-a' });
+    const wsIdB = await createWorkspace(hub, cookie, { slug: 'act-ws-b' });
 
     await hub.fastify.inject({
       method: 'POST',
@@ -563,8 +526,8 @@ describe('GET /workspaces/:workspaceId/context', () => {
   let fmToken: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
-    ({ cookie } = await setupOwner(hub));
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
     workspaceId = await createWorkspace(hub, cookie);
 
     // Register FM orchestrator device
