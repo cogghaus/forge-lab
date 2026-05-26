@@ -72,6 +72,10 @@ You have access to Bash. Use it to call the hub API via curl.
 - `$FORGE_DAEMON_DEVICE_TOKEN` — your device token
 - `$FORGE_DAEMON_WORKSPACE_ID` — workspace ID
 
+> **Device type requirement:** Scribe must be registered with `deviceType: 'orchestrator'`. The doc
+> endpoints (POST, GET, PATCH) enforce orchestrator-only access for device auth. If Scribe is
+> registered as a worker, all doc API calls will return 403.
+
 ### Create a new doc
 
 ```bash
