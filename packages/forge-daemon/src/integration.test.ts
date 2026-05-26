@@ -5,6 +5,7 @@ import os from 'node:os';
 import { createHub, type Hub } from '@forge-lab/hub';
 import { loadBuiltinRegistry } from '@forge-lab/agents';
 import { Daemon } from './daemon.js';
+import { HubClient } from './hub-client.js';
 import { MockRuntime } from './runtime/mock.js';
 import { RuntimeRegistry } from './runtime/registry.js';
 
@@ -557,5 +558,131 @@ describe('integration: composed personality via registry', () => {
     expect(echoedResult).toContain('COMPOSE_MARKER_FOUND');
     // The task context should be in the composed prompt
     expect(echoedResult).toContain('Composition test task');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HubClient FM orchestrator methods
+// ---------------------------------------------------------------------------
+
+describe('HubClient: FM orchestrator methods', () => {
+  let hub: Hub;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let orchestratorToken: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-fm-methods-test-xxxxxxxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    // Register an orchestrator device
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    orchestratorToken = ((await devRes.json()) as { token: string }).token;
+
+    // Create workspace
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'FM Test WS', slug: 'fm-test' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+  }, 15000);
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('getWorkspaceContext returns correct shape', async () => {
+    const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
+    const ctx = await client.getWorkspaceContext(workspaceId);
+
+    expect(ctx.workspaceId).toBe(workspaceId);
+    expect(Array.isArray(ctx.docs)).toBe(true);
+    expect(Array.isArray(ctx.goals)).toBe(true);
+    expect(Array.isArray(ctx.inboxTasks)).toBe(true);
+    expect(typeof ctx.queueDepth).toBe('object');
+  });
+
+  it('assignTask routes task to agentId', async () => {
+    const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
+
+    // Task created in pending_agent status — pending_agent is in FM_ASSIGNABLE_STATUSES
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'fm', title: 'FM assign test' }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+
+    await client.assignTask(workspaceId, taskId, 'architect');
+
+    const task = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+    const body = (await task.json()) as { status: string; assignedAgentId: string };
+    expect(body.status).toBe('assigned');
+    expect(body.assignedAgentId).toBe('architect');
+  });
+
+  it('assignTask with worker token throws (orchestrator_required)', async () => {
+    // Register a worker device
+    const workerRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'worker', agentId: 'worker', deviceType: 'worker' }),
+    });
+    const workerToken = ((await workerRes.json()) as { token: string }).token;
+    const workerClient = new HubClient({ hubUrl, deviceToken: workerToken });
+
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'fw', title: 'Worker assign attempt' }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+
+    await expect(workerClient.assignTask(workspaceId, taskId, 'architect')).rejects.toThrow('403');
+  });
+
+  it('getStaleAssigned returns tasks past ttl', async () => {
+    const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
+
+    const result = await client.getStaleAssigned(workspaceId, 30);
+    expect(Array.isArray(result.tasks)).toBe(true);
+    expect(result.ttlMinutes).toBe(30);
+    expect(typeof result.cutoff).toBe('string');
+  });
+
+  it('requeueStaleAssigned returns requeued count', async () => {
+    const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
+
+    const result = await client.requeueStaleAssigned(workspaceId, 30);
+    expect(typeof result.requeued).toBe('number');
+    expect(result.requeued).toBe(0); // nothing stale in fresh workspace
   });
 });
