@@ -498,7 +498,7 @@ describe('/workspaces routes', () => {
       method: 'POST',
       url: `/workspaces/${wsId}/tasks`,
       headers: { cookie },
-      payload: { projectPrefix: 'ACT', title: 'Activity task' },
+      payload: { projectPrefix: 'act', title: 'Activity task' },
     });
     expect(taskRes.statusCode).toBe(201);
 
@@ -526,7 +526,7 @@ describe('/workspaces routes', () => {
       method: 'POST',
       url: `/workspaces/${wsIdB}/tasks`,
       headers: { cookie },
-      payload: { projectPrefix: 'OTH', title: 'Other workspace task' },
+      payload: { projectPrefix: 'oth', title: 'Other workspace task' },
     });
 
     const actRes = await hub.fastify.inject({

@@ -39,7 +39,7 @@ async function setup(hub: Hub) {
     method: 'POST',
     url: '/tasks',
     headers: { cookie },
-    payload: { projectPrefix: 'FL', title: 'Test task' },
+    payload: { projectPrefix: 'fl', title: 'Test task' },
   });
   const { id: taskId } = taskRes.json() as { id: string };
 
@@ -152,7 +152,7 @@ describe('/tasks/:taskId/instructions routes', () => {
       method: 'POST',
       url: '/tasks',
       headers: { cookie },
-      payload: { projectPrefix: 'FL', title: 'Another task' },
+      payload: { projectPrefix: 'fl', title: 'Another task' },
     });
     const { id: otherId } = taskRes2.json() as { id: string };
 

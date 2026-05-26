@@ -64,6 +64,22 @@ describe('CreateTaskInputSchema', () => {
     expect(input.priority).toBeUndefined();
   });
 
+  it('rejects projectPrefix with special characters', () => {
+    expect(() => CreateTaskInputSchema.parse({ projectPrefix: 'a!', title: 'Bad prefix' })).toThrow();
+  });
+
+  it('rejects projectPrefix with spaces', () => {
+    expect(() => CreateTaskInputSchema.parse({ projectPrefix: 'a b', title: 'Space prefix' })).toThrow();
+  });
+
+  it('rejects uppercase projectPrefix', () => {
+    expect(() => CreateTaskInputSchema.parse({ projectPrefix: 'FL', title: 'Upper prefix' })).toThrow();
+  });
+
+  it('rejects projectPrefix shorter than 2 chars', () => {
+    expect(() => CreateTaskInputSchema.parse({ projectPrefix: 'a', title: 'Short prefix' })).toThrow();
+  });
+
   it('accepts full input', () => {
     const input = CreateTaskInputSchema.parse({
       projectPrefix: 'fl',

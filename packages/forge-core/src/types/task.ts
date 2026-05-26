@@ -20,7 +20,7 @@ export type TaskPriority = z.infer<typeof TaskPrioritySchema>;
 export const TaskSchema = z.object({
   id: TaskIdSchema,
   workspaceId: z.string().nullable(),
-  projectPrefix: z.string().min(2).max(6),
+  projectPrefix: z.string().min(2).max(6).regex(/^[a-z0-9]+$/, 'projectPrefix must be lowercase alphanumeric'),
   title: z.string().min(1).max(500),
   description: z.string().nullable(),
   status: TaskStatusSchema,
@@ -39,7 +39,7 @@ export const TaskSchema = z.object({
 export type Task = z.infer<typeof TaskSchema>;
 
 export const CreateTaskInputSchema = z.object({
-  projectPrefix: z.string().min(2).max(6),
+  projectPrefix: z.string().min(2).max(6).regex(/^[a-z0-9]+$/, 'projectPrefix must be lowercase alphanumeric'),
   title: z.string().min(1).max(500),
   description: z.string().nullable().optional(),
   priority: TaskPrioritySchema.optional(),
