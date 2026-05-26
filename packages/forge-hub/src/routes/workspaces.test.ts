@@ -623,27 +623,42 @@ describe('GET /workspaces/:workspaceId/context', () => {
     expect(inboxTask.status).toBe('pending_dispatcher_action');
   });
 
-  it('queueDepth counts tasks by status', async () => {
-    // Create 2 pending_agent + 1 in_progress tasks
+  it('queueDepth counts pending_agent tasks per assignedAgentId (not by status)', async () => {
+    // Create 2 tasks assigned to 'architect' and 1 assigned to 'furnace'
     for (let i = 0; i < 2; i++) {
-      await hub.fastify.inject({
+      const r = await hub.fastify.inject({
         method: 'POST',
         url: `/workspaces/${workspaceId}/tasks`,
         headers: { cookie },
-        payload: { projectPrefix: 'qd', title: `Task ${i}` },
+        payload: { projectPrefix: 'qd', title: `Architect task ${i}` },
       });
+      await hub.db
+        .update(schema.tasks)
+        .set({ assignedAgentId: 'architect' })
+        .where(eq(schema.tasks.id, (r.json() as { id: string }).id));
     }
+    const furnaceRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'qd', title: 'Furnace task' },
+    });
+    await hub.db
+      .update(schema.tasks)
+      .set({ assignedAgentId: 'furnace' })
+      .where(eq(schema.tasks.id, (furnaceRes.json() as { id: string }).id));
+
+    // Create an in_progress task — should NOT appear in queueDepth
     const inProgressRes = await hub.fastify.inject({
       method: 'POST',
       url: `/workspaces/${workspaceId}/tasks`,
       headers: { cookie },
       payload: { projectPrefix: 'qd', title: 'Running task' },
     });
-    const inProgressId = (inProgressRes.json() as { id: string }).id;
     await hub.db
       .update(schema.tasks)
-      .set({ status: 'in_progress' })
-      .where(eq(schema.tasks.id, inProgressId));
+      .set({ status: 'in_progress', assignedAgentId: 'architect' })
+      .where(eq(schema.tasks.id, (inProgressRes.json() as { id: string }).id));
 
     const res = await hub.fastify.inject({
       method: 'GET',
@@ -651,8 +666,12 @@ describe('GET /workspaces/:workspaceId/context', () => {
       headers: { authorization: `Bearer ${fmToken}` },
     });
     const ctx = res.json() as ContextResponse;
-    expect(ctx.queueDepth['pending_agent']).toBe(2);
-    expect(ctx.queueDepth['in_progress']).toBe(1);
+    // Only pending_agent tasks counted; in_progress excluded
+    expect(ctx.queueDepth['architect']).toBe(2);
+    expect(ctx.queueDepth['furnace']).toBe(1);
+    // Status keys should NOT appear — queueDepth is per-agentId, not per-status
+    expect(ctx.queueDepth['in_progress']).toBeUndefined();
+    expect(ctx.queueDepth['pending_agent']).toBeUndefined();
   });
 
   it('docs only includes active docs in FM-critical categories', async () => {
@@ -745,8 +764,8 @@ describe('GET /workspaces/:workspaceId/context', () => {
     expect(ctx.queueDepth['pending_dispatcher_action']).toBeUndefined();
   });
 
-  it('dispatcherHistory only includes events from the calling device', async () => {
-    // Create a task and produce history from FM device
+  it('dispatcherHistory surfaces taskComments with authorType=dispatcher (workspace-scoped)', async () => {
+    // Create a workspace task so the comment can be workspace-scoped
     const taskRes = await hub.fastify.inject({
       method: 'POST',
       url: `/workspaces/${workspaceId}/tasks`,
@@ -759,28 +778,57 @@ describe('GET /workspaces/:workspaceId/context', () => {
       .set({ status: 'pending_dispatcher_action' })
       .where(eq(schema.tasks.id, taskId));
 
-    // FM assigns the task (creates task.assigned history with source = device:fm-id)
+    // Post a dispatcher comment via FM device
     await hub.fastify.inject({
-      method: 'PATCH',
-      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
-      headers: { authorization: `Bearer ${fmToken}` },
-      payload: { agentId: 'architect' },
-    });
-
-    // Register a second orchestrator device
-    const fm2Res = await hub.fastify.inject({
       method: 'POST',
-      url: '/devices',
-      headers: { cookie },
-      payload: { name: 'forge-master-2', agentId: 'forge-master', deviceType: 'orchestrator' },
+      url: `/tasks/${taskId}/comments`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { body: 'Decision: ROUTED\nAgent: architect\nReason: Pure architecture task.\nConfidence: HIGH', authorType: 'dispatcher' },
     });
-    const fm2Token = (fm2Res.json() as { token: string }).token;
 
-    // Context via fm2 should have 0 dispatcherHistory (it hasn't done anything)
+    // Context should include the dispatcher comment in dispatcherHistory
     const res = await hub.fastify.inject({
       method: 'GET',
       url: `/workspaces/${workspaceId}/context`,
-      headers: { authorization: `Bearer ${fm2Token}` },
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    const ctx = res.json() as ContextResponse;
+    expect(ctx.dispatcherHistory).toHaveLength(1);
+    const comment = ctx.dispatcherHistory[0] as { authorType: string; body: string };
+    expect(comment.authorType).toBe('dispatcher');
+    expect(comment.body).toContain('ROUTED');
+  });
+
+  it('dispatcherHistory is workspace-scoped (other workspace comments excluded)', async () => {
+    // Create task in another workspace with no FM access
+    const ws2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'Other WS DH', slug: 'other-ws-dh' },
+    });
+    const ws2Id = (ws2Res.json() as { id: string }).id;
+    const t2 = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${ws2Id}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dh', title: 'Other WS task' },
+    });
+    const t2Id = (t2.json() as { id: string }).id;
+
+    // Post dispatcher comment on the other-workspace task
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${t2Id}/comments`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { body: 'Decision: ROUTED\nAgent: furnace', authorType: 'dispatcher' },
+    });
+
+    // Context for workspaceId should have 0 dispatcherHistory (comment is in ws2)
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${fmToken}` },
     });
     const ctx = res.json() as ContextResponse;
     expect(ctx.dispatcherHistory).toHaveLength(0);
