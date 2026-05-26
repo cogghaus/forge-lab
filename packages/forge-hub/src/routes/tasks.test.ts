@@ -1740,6 +1740,42 @@ describe('task parentId linking', () => {
     expect(child?.workspaceId).toBe(workspaceId);
   });
 
+  it('flat POST returns 404 when parentId does not exist', async () => {
+    const { token } = await registerDevice(hub, cookie, 'forge-fm-validate');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { projectPrefix: 'fmd', title: 'Bad parent', parentId: 'fmd-9999' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: string }).error).toBe('parent_task_not_found');
+  });
+
+  it('flat POST returns 404 when parentId is in a different workspace than supplied workspaceId', async () => {
+    const { token } = await registerDevice(hub, cookie, 'forge-fm-cross-ws');
+
+    // Create parent with no workspace (workspaceId = null)
+    const parentRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { projectPrefix: 'fmd', title: 'Unscoped parent' },
+    });
+    expect(parentRes.statusCode).toBe(201);
+    const { id: parentId } = parentRes.json() as { id: string };
+
+    // Attempt to create child with parentId + a specific workspaceId (parent is not in that workspace)
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { projectPrefix: 'fmd', title: 'Cross-ws child', parentId, workspaceId },
+    });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: string }).error).toBe('parent_task_not_found');
+  });
+
   it('flat POST with workspaceId mirrors workspaceId onto taskHistory audit event', async () => {
     const { token } = await registerDevice(hub, cookie, 'forge-fm-audit');
 
