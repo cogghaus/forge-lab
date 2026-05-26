@@ -1181,6 +1181,12 @@ describe('integration: spawn failure recovery', () => {
 // requiring a real claude subprocess.
 // ---------------------------------------------------------------------------
 
+/**
+ * Minimal subset of the hub's workspace context response.
+ * Only the fields FMSimRuntime actually reads are declared here.
+ * The full response also contains docs, goals, agents, liveInstances,
+ * recentHistory, dispatcherHistory, and queueDepth — not needed by the sim.
+ */
 type WorkspaceContext = {
   workspaceId: string;
   inboxTasks: { id: string; title: string }[];
@@ -1222,8 +1228,14 @@ class FMSimRuntime implements AgentRuntime {
           // continue with empty context
         }
 
-        const wsId = ctx?.workspaceId ?? '';
+        const wsId = ctx?.workspaceId;
         const inbox = ctx?.inboxTasks ?? [];
+
+        if (!wsId) {
+          // Context parse failed — log so the test timeout has a traceable cause.
+          process.stderr.write('[FMSimRuntime] failed to parse workspaceId from context; skipping triage\n');
+          return;
+        }
 
         for (const task of inbox) {
           // Assign task to architect
