@@ -42,7 +42,8 @@ const PatchDocBodySchema = z
 
 const ListDocsQuerySchema = z.object({
   category: z.enum(DOC_CATEGORIES).optional(),
-  status: z.enum(DOC_STATUSES).optional().default('active'),
+  // When omitted, defaults to 'active'. Pass status=all to return docs of any status.
+  status: z.enum([...DOC_STATUSES, 'all'] as const).optional().default('active'),
 });
 
 // ---------------------------------------------------------------------------
@@ -130,8 +131,11 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
 
       const conditions = [
         eq(schema.workspaceDocs.workspaceId, workspaceId),
-        eq(schema.workspaceDocs.status, query.status),
       ];
+      // 'all' is a sentinel meaning "no status filter" — return docs of any status.
+      if (query.status !== 'all') {
+        conditions.push(eq(schema.workspaceDocs.status, query.status));
+      }
       if (query.category) {
         conditions.push(eq(schema.workspaceDocs.category, query.category));
       }
