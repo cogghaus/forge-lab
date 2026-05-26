@@ -223,6 +223,39 @@ ALTER TABLE tasks ADD COLUMN goal_id TEXT REFERENCES goals(id) ON DELETE SET NUL
 CREATE INDEX tasks_goal_idx ON tasks(goal_id);
 `,
   },
+  {
+    name: '0005_fm_routing',
+    sql: `
+-- Forge Master routing infrastructure (Phase 1, Cycle 1)
+-- Devices gain a logical agent role and device type classification.
+-- Tasks gain an assignment timestamp for reassignment timeout.
+-- New workspace_docs table provides the Scribe-maintained knowledge base.
+
+ALTER TABLE devices ADD COLUMN agent_id TEXT;
+ALTER TABLE devices ADD COLUMN device_type TEXT NOT NULL DEFAULT 'worker' CHECK (device_type IN ('worker', 'orchestrator'));
+
+ALTER TABLE tasks ADD COLUMN assigned_at INTEGER;
+
+CREATE TABLE workspace_docs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  category TEXT NOT NULL CHECK (category IN ('architecture', 'api', 'pattern', 'adr', 'agent', 'feature', 'runbook')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'superseded')),
+  superseded_by_id TEXT REFERENCES workspace_docs(id) ON DELETE SET NULL,
+  superseded_reason TEXT,
+  updated_by TEXT NOT NULL,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+
+CREATE INDEX workspace_docs_active_idx ON workspace_docs(workspace_id, status);
+CREATE INDEX workspace_docs_category_idx ON workspace_docs(workspace_id, category);
+CREATE UNIQUE INDEX workspace_docs_key_idx ON workspace_docs(workspace_id, key);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {

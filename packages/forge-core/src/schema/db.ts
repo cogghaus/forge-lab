@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, integer, index, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, index, uniqueIndex, primaryKey } from 'drizzle-orm/sqlite-core';
 
 const timestampMs = (name: string) => integer(name, { mode: 'timestamp_ms' });
 const nowDefault = sql`(unixepoch() * 1000)`;
@@ -43,6 +43,12 @@ export const devices = sqliteTable(
     tokenHash: text('token_hash').notNull().unique(),
     lastSeen: timestampMs('last_seen'),
     createdAt: timestampMs('created_at').notNull().default(nowDefault),
+    /** Logical agent role this device runs (e.g. 'architect', 'furnace'). Set on registration. */
+    agentId: text('agent_id'),
+    /** Whether this device acts as an orchestrator (FM) or a worker (specialist). */
+    deviceType: text('device_type', { enum: ['worker', 'orchestrator'] })
+      .notNull()
+      .default('worker'),
   },
   (t) => ({
     userIdIdx: index('devices_user_id_idx').on(t.userId),
@@ -79,6 +85,8 @@ export const tasks = sqliteTable(
       onDelete: 'set null',
     }),
     assignedAgentId: text('assigned_agent_id'),
+    /** Unix ms timestamp set by FM when assignedAgentId is written. Used for reassignment timeout. */
+    assignedAt: timestampMs('assigned_at'),
     parentId: text('parent_id'),
     goalId: text('goal_id'),
     createdBy: text('created_by').notNull(),
@@ -276,3 +284,55 @@ export const goals = sqliteTable('goals', {
   createdAt: timestampMs('created_at').notNull().default(nowDefault),
   updatedAt: timestampMs('updated_at').notNull().default(nowDefault),
 });
+
+/**
+ * Workspace knowledge base — structured documentation maintained by Scribe and FM.
+ *
+ * Status semantics:
+ *   active     — current, true, included in FM's Tier 0 context
+ *   archived   — completed/done, no longer a live concern, excluded from FM context
+ *   superseded — was true, something replaced it; supersededReason explains what changed
+ *
+ * Docs are never deleted — audit trail is permanent.
+ * Only status transitions are permitted (active → archived | superseded).
+ */
+export const workspaceDocs = sqliteTable(
+  'workspace_docs',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** Slug identifier — unique per workspace. e.g. 'architecture-overview', 'adr-003' */
+    key: text('key').notNull(),
+    title: text('title').notNull(),
+    /** Markdown content */
+    content: text('content').notNull(),
+    category: text('category', {
+      enum: ['architecture', 'api', 'pattern', 'adr', 'agent', 'feature', 'runbook'],
+    }).notNull(),
+    status: text('status', {
+      enum: ['active', 'archived', 'superseded'],
+    })
+      .notNull()
+      .default('active'),
+    /**
+     * id of the workspace_docs row that replaces this one (null if not superseded).
+     * FK is intentionally not declared in Drizzle — self-referential FKs are defined
+     * in migrate.ts SQL only, following the goals.parentId pattern.
+     */
+    supersededById: text('superseded_by_id'),
+    /** Required when status = 'superseded'. Explains what changed and why. */
+    supersededReason: text('superseded_reason'),
+    /** Agent name or user id that last wrote this doc */
+    updatedBy: text('updated_by').notNull(),
+    updatedAt: timestampMs('updated_at').notNull().default(nowDefault),
+    createdAt: timestampMs('created_at').notNull().default(nowDefault),
+  },
+  (t) => ({
+    workspaceActiveIdx: index('workspace_docs_active_idx').on(t.workspaceId, t.status),
+    workspaceCategoryIdx: index('workspace_docs_category_idx').on(t.workspaceId, t.category),
+    /** Enforces one doc per key per workspace */
+    workspaceKeyIdx: uniqueIndex('workspace_docs_key_idx').on(t.workspaceId, t.key),
+  }),
+);
