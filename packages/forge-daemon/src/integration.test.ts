@@ -1167,3 +1167,310 @@ describe('integration: spawn failure recovery', () => {
     expect((payload?.['reason'] as string)).toContain('Simulated spawn failure');
   });
 });
+
+// ---------------------------------------------------------------------------
+// FM triage integration — full assign cycle
+//
+// FMSimRuntime simulates what the real FM agent does:
+//   1. Parse inboxTasks from the context JSON in initialPrompt
+//   2. Assign each inbox task to 'architect' via hub API
+//   3. Post a structured dispatcher comment on each task
+//   4. Write the done file
+//
+// This verifies the full dispatcher → FM → hub state change cycle without
+// requiring a real claude subprocess.
+// ---------------------------------------------------------------------------
+
+type WorkspaceContext = {
+  workspaceId: string;
+  inboxTasks: { id: string; title: string }[];
+};
+
+import { doneFilePath, taskDir } from './sync/task-file.js';
+
+class FMSimRuntime implements AgentRuntime {
+  readonly id = 'fm-sim';
+  readonly displayName = 'FM Simulation Runtime';
+  readonly capabilities = { supportsStreaming: false, supportsTools: false } as const;
+
+  private readonly hubUrl: string;
+  private readonly orchestratorToken: string;
+  readonly assignedTasks: string[] = [];
+  readonly postedComments: string[] = [];
+
+  constructor(hubUrl: string, orchestratorToken: string) {
+    this.hubUrl = hubUrl;
+    this.orchestratorToken = orchestratorToken;
+  }
+
+  spawn(config: AgentRuntimeSpawnConfig, initialPrompt: string): Promise<RuntimeInstance> {
+    const taskId = config.taskId;
+    const workdir = config.workdir;
+
+    setTimeout(() => {
+      void (async () => {
+        // Extract context JSON from initialPrompt.
+        // Format: "Workspace context for triage:\n\n{...json...}\n\n---\n..."
+        let ctx: WorkspaceContext | null = null;
+        try {
+          const jsonPart = initialPrompt.split('\n\n---\n')[0] ?? '';
+          const jsonStart = jsonPart.indexOf('{');
+          if (jsonStart >= 0) {
+            ctx = JSON.parse(jsonPart.slice(jsonStart)) as WorkspaceContext;
+          }
+        } catch {
+          // continue with empty context
+        }
+
+        const wsId = ctx?.workspaceId ?? '';
+        const inbox = ctx?.inboxTasks ?? [];
+
+        for (const task of inbox) {
+          // Assign task to architect
+          const assignRes = await fetch(
+            `${this.hubUrl}/workspaces/${wsId}/tasks/${task.id}/assign`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${this.orchestratorToken}`,
+              },
+              body: JSON.stringify({ agentId: 'architect' }),
+            },
+          );
+          if (assignRes.ok) {
+            this.assignedTasks.push(task.id);
+          }
+
+          // Post dispatcher comment
+          const commentRes = await fetch(`${this.hubUrl}/tasks/${task.id}/comments`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${this.orchestratorToken}`,
+            },
+            body: JSON.stringify({
+              body: `Decision: ROUTED\nAgent: architect\nReason: Task "${task.title}" routed to architect.\nConfidence: HIGH`,
+              authorType: 'dispatcher',
+            }),
+          });
+          if (commentRes.ok) {
+            this.postedComments.push(task.id);
+          }
+        }
+
+        // Write done file (FM exit signal)
+        const donePayload = JSON.stringify({
+          result: `FM triage complete: ${inbox.length} task(s) processed`,
+          completedAt: new Date().toISOString(),
+        });
+        try {
+          await fs.mkdir(taskDir(workdir), { recursive: true });
+          await fs.writeFile(doneFilePath(workdir, taskId), donePayload, 'utf8');
+        } catch {
+          // workdir may be cleaned up in teardown
+        }
+      })();
+    }, 50);
+
+    return Promise.resolve({
+      id: 'fm-sim-instance',
+      runtimeId: this.id,
+      agentId: config.agentId,
+      pid: null,
+      startedAt: new Date(),
+      metadata: { config },
+    });
+  }
+
+  sendInstruction(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  stop(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  isAlive(): Promise<boolean> {
+    // FM sim always completes quickly — isAlive returns false once done file is written.
+    // The daemon's file watcher handles cleanup; returning false here is safe.
+    return Promise.resolve(false);
+  }
+}
+
+describe('integration: FM triage — full assign cycle', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let workspaceId: string;
+  let fmSim: FMSimRuntime;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-fm-triage-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-fm-triage-integration-xxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    const orchestratorToken = ((await devRes.json()) as { token: string }).token;
+
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'FM Triage WS', slug: 'fm-triage' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+
+    fmSim = new FMSimRuntime(hubUrl, orchestratorToken);
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(fmSim);
+
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken: orchestratorToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'fm-sim',
+      workspaceId,
+      dispatcherMode: true,
+      fmAgentId: 'forge-master',
+      pollIntervalMs: 100,
+      logger: {
+        info: (msg, meta) => {
+          process.stdout.write(`[fm-triage] ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+        error: (msg, meta) => {
+          process.stderr.write(`[fm-triage] ERR ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+      },
+    });
+    await daemon.start();
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('FM sim assigns inbox task to architect and task status becomes assigned', { timeout: 20000 }, async () => {
+    // Create a task and put it in the FM inbox
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'tri', title: 'Design the authentication system' }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, taskId));
+
+    // Wait for FM sim to assign the task
+    await waitFor(async () => {
+      const taskR = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+      const t = (await taskR.json()) as { status: string; assignedAgentId: string | null };
+      return t.status === 'assigned' && t.assignedAgentId === 'architect' ? t.status : null;
+    }, 15000);
+
+    // Verify task is now assigned
+    const finalRes = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+    const finalTask = (await finalRes.json()) as { status: string; assignedAgentId: string | null };
+    expect(finalTask.status).toBe('assigned');
+    expect(finalTask.assignedAgentId).toBe('architect');
+    expect(fmSim.assignedTasks).toContain(taskId);
+  });
+
+  it('FM sim posts structured dispatcher comment on assigned task', { timeout: 20000 }, async () => {
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'tri', title: 'Write API documentation' }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, taskId));
+
+    // Wait for FM sim to post the comment
+    await waitFor(async () => {
+      return fmSim.postedComments.includes(taskId) ? 'done' : null;
+    }, 15000);
+
+    // Verify dispatcher comment appears in hub
+    const commentsRes = await fetch(`${hubUrl}/tasks/${taskId}/comments`, {
+      headers: { cookie: sessionCookie },
+    });
+    const { comments } = (await commentsRes.json()) as {
+      comments: { authorType: string; body: string }[];
+    };
+    const dispatcherComment = comments.find(c => c.authorType === 'dispatcher');
+    expect(dispatcherComment).toBeDefined();
+    expect(dispatcherComment?.body).toContain('Decision: ROUTED');
+    expect(dispatcherComment?.body).toContain('Agent: architect');
+  });
+
+  it('dispatcher-log endpoint reflects FM decisions after triage cycle', { timeout: 20000 }, async () => {
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'tri', title: 'Refactor the user service' }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, taskId));
+
+    // Wait for FM sim to complete
+    await waitFor(async () => {
+      return fmSim.postedComments.includes(taskId) ? 'done' : null;
+    }, 15000);
+
+    // Check dispatcher-log endpoint
+    const logRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/dispatcher-log`, {
+      headers: { cookie: sessionCookie },
+    });
+    const log = (await logRes.json()) as {
+      comments: { taskId: string; taskTitle: string; body: string }[];
+      inboxCount: number;
+    };
+
+    expect(log.comments.length).toBeGreaterThan(0);
+    const entry = log.comments.find(c => c.taskId === taskId);
+    expect(entry).toBeDefined();
+    expect(entry?.taskTitle).toBe('Refactor the user service');
+    expect(entry?.body).toContain('ROUTED');
+    // Task was assigned so it's no longer in the inbox
+    expect(log.inboxCount).toBe(0);
+  });
+});
