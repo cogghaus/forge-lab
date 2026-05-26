@@ -41,6 +41,15 @@ export interface DaemonOptions {
    */
   fmAgentId?: string;
   /**
+   * Personality ID used for the FM agent spawned in dispatcher mode.
+   * Must be registered in `personalityRegistry`. When set and the registry
+   * contains the ID, the full personality system prompt is composed and
+   * passed to the runtime. When unset or missing from the registry, falls
+   * back to a minimal system prompt string.
+   * Defaults to 'forge-master'.
+   */
+  dispatcherPersonality?: string;
+  /**
    * Stale assignment TTL in minutes used when requeueing in dispatcher mode.
    * Defaults to 30.
    */
@@ -220,7 +229,28 @@ export class Daemon {
     this.logger.info('inbox non-empty, spawning FM agent', { count: ctx.inboxTasks.length });
 
     const fmAgentId = this.opts.fmAgentId ?? 'forge-master';
+    const dispatcherPersonalityId = this.opts.dispatcherPersonality ?? 'forge-master';
     const syntheticTaskId = `_fm_${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    // Compose FM system prompt: load from personality registry if available,
+    // otherwise fall back to a minimal system prompt string.
+    let fmPersonality: string = this.opts.defaultPersonality || 'You are the Forge Master orchestrator.';
+    const registry = this.opts.personalityRegistry;
+    if (registry) {
+      const personality = registry.get(dispatcherPersonalityId);
+      if (personality) {
+        fmPersonality = await composeSystemPrompt({
+          personality,
+          projectContextPath: path.join(this.opts.workdir, 'context', 'project-context.md'),
+          agentOverridesDir: path.join(this.opts.workdir, 'context', 'agent-overrides'),
+        });
+        this.logger.info('fm personality loaded from registry', { id: dispatcherPersonalityId });
+      } else {
+        this.logger.info('fm personality not found in registry, using fallback', {
+          id: dispatcherPersonalityId,
+        });
+      }
+    }
 
     const contextJson = JSON.stringify(ctx, null, 2);
     const doneInstruction =
@@ -228,7 +258,9 @@ export class Daemon {
       `Create \`.forge/tasks/${syntheticTaskId}.done\` with:\n` +
       `{"result":"<summary of assignments made>","completedAt":"<ISO 8601 timestamp>"}\n` +
       `Write the file with a tool call (Bash, Write, or shell command).`;
-    const initialPrompt = `You are the Forge Master orchestrator. Triage the following workspace inbox.\n\n${contextJson}${doneInstruction}`;
+    // The FM system prompt (personality) already establishes FM's identity and tools.
+    // The initial prompt is the workspace state for FM to reason from.
+    const initialPrompt = `Workspace context for triage:\n\n${contextJson}${doneInstruction}`;
 
     try {
       this.fmRunning = true;
@@ -237,7 +269,7 @@ export class Daemon {
       const instance = await runtime.spawn(
         {
           agentId: fmAgentId,
-          personality: this.opts.defaultPersonality || 'default',
+          personality: fmPersonality,
           workdir: this.opts.workdir,
           taskId: syntheticTaskId,
           config: {},

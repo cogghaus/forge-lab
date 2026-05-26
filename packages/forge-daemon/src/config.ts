@@ -48,6 +48,10 @@ const ConfigSchema = z.object({
   staleTtlMinutes: z.coerce.number().int().min(1).optional(),
   // Maximum concurrent task instances for worker daemons. Default: 1.
   maxConcurrentTasks: z.coerce.number().int().min(1).optional(),
+  // Personality ID to use for the FM agent spawned in dispatcher mode.
+  // Must match an id registered in the PersonalityRegistry.
+  // Defaults to 'forge-master'. Ignored in worker mode.
+  dispatcherPersonality: z.string().optional(),
 });
 
 export type DaemonConfig = z.infer<typeof ConfigSchema>;
@@ -64,5 +68,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     dispatcherMode: env['FORGE_DAEMON_DISPATCHER_MODE'],
     staleTtlMinutes: env['FORGE_DAEMON_STALE_TTL_MINUTES'],
     maxConcurrentTasks: env['FORGE_DAEMON_MAX_CONCURRENT_TASKS'],
+    dispatcherPersonality: env['FORGE_DAEMON_DISPATCHER_PERSONALITY'],
   });
 }
