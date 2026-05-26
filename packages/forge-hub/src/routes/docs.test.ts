@@ -444,4 +444,51 @@ describe('/workspaces/:workspaceId/docs', () => {
     });
     expect(res.statusCode).toBe(404);
   });
+
+  it('PATCH with empty body returns 400', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { key: 'empty-patch', title: 'Empty Patch', content: 'Content.', category: 'adr' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/docs/empty-patch`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toBe('no_fields');
+  });
+
+  it('worker device on GET list returns 403', async () => {
+    const workerToken = await registerWorker(hub, cookie);
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${workerToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+  });
+
+  it('worker device on GET /:key returns 403', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { key: 'worker-read', title: 'Worker Read', content: 'Content.', category: 'adr' },
+    });
+
+    const workerToken = await registerWorker(hub, cookie);
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/docs/worker-read`,
+      headers: { authorization: `Bearer ${workerToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+  });
 });

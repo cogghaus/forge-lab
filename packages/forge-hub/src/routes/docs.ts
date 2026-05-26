@@ -1,14 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import {
-  requireDevice,
-  requireWorkspaceMember,
   getDevice,
-  getWorkspace,
   getUser,
 } from '../auth/middleware.js';
 
