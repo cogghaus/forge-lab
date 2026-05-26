@@ -38,7 +38,7 @@ async function setup(hub: Hub) {
     method: 'POST',
     url: '/tasks',
     headers: { cookie },
-    payload: { projectPrefix: 'FL', title: 'Test task' },
+    payload: { projectPrefix: 'fl', title: 'Test task' },
   });
   const { id: taskId } = taskRes.json() as { id: string };
 

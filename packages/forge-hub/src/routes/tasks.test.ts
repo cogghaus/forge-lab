@@ -135,6 +135,16 @@ describe('/workspaces/:workspaceId/tasks', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('POST with uppercase projectPrefix returns 400', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'FL', title: 'Uppercase prefix' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('POST requires workspace membership', async () => {
     const res = await hub.fastify.inject({
       method: 'POST',
