@@ -276,8 +276,8 @@ export class Daemon {
       return;
     }
 
-    // Task is now claimed. Any failure past this point leaves it stuck in_progress.
-    // A future failTask() hub endpoint would allow recovery.
+    // Task is now claimed. Any failure past this point calls failTask to mark it
+    // as failed rather than leaving it permanently stuck in in_progress.
     try {
       const claimed = await this.client.getTask(taskId);
       await writeTaskFile(this.opts.workdir, claimed);
@@ -331,10 +331,19 @@ export class Daemon {
       this.activeInstances.set(claimed.id, { instance, runtimeId: this.opts.defaultRuntimeId });
       this.logger.info('task spawned', { taskId: claimed.id, runtime: this.opts.defaultRuntimeId });
     } catch (err) {
-      this.logger.error('task claimed but spawn failed — task stuck in_progress', {
-        taskId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const reason = err instanceof Error ? err.message : String(err);
+      this.logger.error('task claimed but spawn failed', { taskId, error: reason });
+      // Best-effort: mark the task as failed so it is not stuck in_progress
+      // indefinitely. If failTask itself fails the task remains in_progress;
+      // the stale-assigned requeue mechanism does not cover in_progress tasks.
+      try {
+        await this.client.failTask(taskId, `spawn failed: ${reason}`);
+      } catch (failErr) {
+        this.logger.error('failed to mark task as failed after spawn error', {
+          taskId,
+          error: failErr instanceof Error ? failErr.message : String(failErr),
+        });
+      }
     }
   }
 

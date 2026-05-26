@@ -91,6 +91,10 @@ export class HubClient extends EventEmitter {
     await this.request<{ ok: boolean }>('POST', `/tasks/${id}/complete`, { result });
   }
 
+  async failTask(id: string, reason?: string): Promise<void> {
+    await this.request<{ ok: boolean }>('POST', `/tasks/${id}/fail`, { reason });
+  }
+
   // ---------------------------------------------------------------------------
   // FM / orchestrator methods
   // ---------------------------------------------------------------------------
