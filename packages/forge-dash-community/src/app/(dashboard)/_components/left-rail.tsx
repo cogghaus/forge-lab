@@ -162,7 +162,12 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
   const { devices, activeTasks, loading } = useAgentStatus(activeWsId);
 
   function isWorkshopActive(base: string) {
-    return pathname === base || (pathname.startsWith(base + '/') && !pathname.startsWith(base + '/goals'));
+    return (
+      pathname === base ||
+      (pathname.startsWith(base + '/') &&
+        !pathname.startsWith(base + '/goals') &&
+        !pathname.startsWith(base + '/triage'))
+    );
   }
 
   function isGoalsActive(base: string) {
@@ -205,8 +210,9 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
 
             {isExp && (
               <div id={subNavId} className="mb-1">
-                <Link href={base}            className={subItem(isWorkshopActive(base))}>Workshop</Link>
-                <Link href={`${base}/goals`} className={subItem(isGoalsActive(base))}>Goals</Link>
+                <Link href={base}              className={subItem(isWorkshopActive(base))}>Workshop</Link>
+                <Link href={`${base}/goals`}   className={subItem(isGoalsActive(base))}>Goals</Link>
+                <Link href={`${base}/triage`}  className={subItem(pathname === `${base}/triage`)}>Triage 🔱</Link>
                 <span
                   className={subItem(false, true)}
                   role="menuitem"
