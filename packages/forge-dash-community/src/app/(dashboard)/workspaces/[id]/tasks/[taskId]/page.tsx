@@ -1,7 +1,14 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Card, CardBody, Chip } from '@heroui/react';
-import { hubFetch, type HubGoal, type HubTask, type HubTaskHistory, type HubWorkspace } from '@/lib/hub';
+import {
+  hubFetch,
+  type HubGoal,
+  type HubTaskComment,
+  type HubTaskHistory,
+  type HubTaskWithParent,
+  type HubWorkspace,
+} from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { TaskDetailRefresh } from './task-detail-refresh';
 import { TaskActionButton } from './task-action-button';
@@ -29,12 +36,47 @@ const PRIORITY_COLOR: Record<string, 'default' | 'primary' | 'warning' | 'danger
   urgent: 'danger',
 };
 
+const DECISION_COLOR: Record<string, string> = {
+  ROUTED:     'text-green-400',
+  DECOMPOSED: 'text-blue-400',
+  ESCALATED:  'text-yellow-400',
+  DEFERRED:   'text-white/40',
+};
+
+const CONFIDENCE_COLOR: Record<string, string> = {
+  HIGH:   'text-green-400',
+  MEDIUM: 'text-yellow-400',
+  LOW:    'text-red-400',
+};
+
 function statusLabel(s: string) {
   return s.replace(/_/g, ' ');
 }
 
 function formatTs(ts: string): string {
   return new Date(ts).toLocaleString();
+}
+
+/** Parse a dispatcher comment body into structured decision fields. */
+function parseDecision(body: string) {
+  const lines = body.split('\n');
+  const fields: Record<string, string> = {};
+  const rest: string[] = [];
+  for (const line of lines) {
+    const m = /^(Decision|Agent|Reason|Confidence|Bottleneck|Missing info|Interface contract):\s*(.*)$/.exec(line);
+    if (m) {
+      fields[m[1]!.toLowerCase().replace(/\s+/g, '_')] = m[2]!.trim();
+    } else {
+      rest.push(line);
+    }
+  }
+  return {
+    decision:   fields['decision'],
+    agent:      fields['agent'],
+    reason:     fields['reason'],
+    confidence: fields['confidence'],
+    rest:       rest.join('\n').trim(),
+  };
 }
 
 function HistoryEvent({ event }: { event: HubTaskHistory }) {
@@ -66,6 +108,55 @@ function HistoryEvent({ event }: { event: HubTaskHistory }) {
   );
 }
 
+function DispatcherCommentCard({ comment }: { comment: HubTaskComment }) {
+  const parsed = parseDecision(comment.body);
+  const decisionColor = parsed.decision
+    ? (DECISION_COLOR[parsed.decision] ?? 'text-white/70')
+    : 'text-white/70';
+  const confidenceColor = parsed.confidence
+    ? (CONFIDENCE_COLOR[parsed.confidence] ?? 'text-white/40')
+    : 'text-white/40';
+
+  return (
+    <div className="rounded-xl border border-purple-500/20 bg-purple-500/[0.04] p-4">
+      {/* Structured decision fields */}
+      {parsed.decision && (
+        <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[12px] font-mono mb-2">
+          <span>
+            <span className="text-white/30">Decision: </span>
+            <span className={decisionColor}>{parsed.decision}</span>
+          </span>
+          {parsed.agent && (
+            <span>
+              <span className="text-white/30">Agent: </span>
+              <span className="text-white/70">{parsed.agent}</span>
+            </span>
+          )}
+          {parsed.confidence && (
+            <span>
+              <span className="text-white/30">Confidence: </span>
+              <span className={confidenceColor}>{parsed.confidence}</span>
+            </span>
+          )}
+        </div>
+      )}
+
+      {parsed.reason && (
+        <p className="text-[12px] text-white/60 leading-relaxed mb-2">{parsed.reason}</p>
+      )}
+
+      {/* Raw body fallback for non-structured comments */}
+      {!parsed.decision && (
+        <pre className="text-xs text-white/50 whitespace-pre-wrap font-mono leading-relaxed mb-2">
+          {comment.body}
+        </pre>
+      )}
+
+      <p className="text-[10px] text-white/20 font-mono">{formatTs(comment.createdAt)}</p>
+    </div>
+  );
+}
+
 export default async function TaskDetailPage({ params }: Props) {
   const { id: workspaceId, taskId } = await params;
   const session = await getSessionCookie();
@@ -73,12 +164,11 @@ export default async function TaskDetailPage({ params }: Props) {
 
   const cookieHeader = `${SESSION_COOKIE}=${session}`;
 
-  const [wsRes, taskRes, historyRes] = await Promise.all([
+  const [wsRes, taskRes, historyRes, commentsRes] = await Promise.all([
     hubFetch<HubWorkspace>(`/workspaces/${workspaceId}`, { cookie: cookieHeader }),
-    hubFetch<HubTask>(`/tasks/${taskId}`, { cookie: cookieHeader }),
-    hubFetch<{ history: HubTaskHistory[] }>(`/tasks/${taskId}/history`, {
-      cookie: cookieHeader,
-    }),
+    hubFetch<HubTaskWithParent>(`/tasks/${taskId}`, { cookie: cookieHeader }),
+    hubFetch<{ history: HubTaskHistory[] }>(`/tasks/${taskId}/history`, { cookie: cookieHeader }),
+    hubFetch<{ comments: HubTaskComment[] }>(`/tasks/${taskId}/comments`, { cookie: cookieHeader }),
   ]);
 
   if (!wsRes.ok || !taskRes.ok) redirect(`/workspaces/${workspaceId}`);
@@ -86,11 +176,21 @@ export default async function TaskDetailPage({ params }: Props) {
   const workspace = wsRes.data;
   const task = taskRes.data;
   const history = historyRes.ok ? historyRes.data.history : [];
+  const allComments = commentsRes.ok ? commentsRes.data.comments : [];
+  const dispatcherComments = allComments.filter(c => c.authorType === 'dispatcher');
 
+  // Fetch linked goal if present
   const linkedGoal: HubGoal | null = task.goalId
     ? await hubFetch<HubGoal>(`/workspaces/${workspaceId}/goals/${task.goalId}`, {
         cookie: cookieHeader,
       }).then((r) => (r.ok ? r.data : null))
+    : null;
+
+  // Fetch parent task title if this is a subtask
+  const parentTask: { id: string; title: string } | null = task.parentId
+    ? await hubFetch<{ id: string; title: string }>(`/tasks/${task.parentId}`, {
+        cookie: cookieHeader,
+      }).then((r) => (r.ok ? { id: r.data.id, title: r.data.title } : null))
     : null;
 
   const isActive =
@@ -123,11 +223,37 @@ export default async function TaskDetailPage({ params }: Props) {
           {workspace.name}
         </Link>
         <span className="text-default-400">/</span>
+        {parentTask && (
+          <>
+            <Link
+              href={`/workspaces/${workspaceId}/tasks/${parentTask.id}`}
+              className="text-default-500 hover:text-foreground text-sm font-mono truncate max-w-[180px]"
+              title={parentTask.title}
+            >
+              {parentTask.id}
+            </Link>
+            <span className="text-default-400">/</span>
+          </>
+        )}
         <span className="font-mono text-sm text-default-500">{task.id}</span>
       </div>
 
       <Card>
         <CardBody className="flex flex-col gap-3">
+          {/* Parent task indicator */}
+          {parentTask && (
+            <div className="flex items-center gap-2 pb-2 border-b border-default-100">
+              <span className="text-xs text-default-400">Subtask of</span>
+              <Link
+                href={`/workspaces/${workspaceId}/tasks/${parentTask.id}`}
+                className="text-xs text-primary hover:underline font-mono"
+              >
+                {parentTask.id}
+              </Link>
+              <span className="text-xs text-default-400 truncate">{parentTask.title}</span>
+            </div>
+          )}
+
           <div className="flex items-start justify-between gap-4">
             <h1 className="text-xl font-bold">{task.title}</h1>
             <div className="flex items-center gap-2 shrink-0">
@@ -186,6 +312,20 @@ export default async function TaskDetailPage({ params }: Props) {
           </div>
         </CardBody>
       </Card>
+
+      {/* Dispatcher comments */}
+      {dispatcherComments.length > 0 && (
+        <div>
+          <h2 className="text-sm font-semibold text-white/50 uppercase tracking-wider mb-3">
+            🔱 Dispatcher Notes
+          </h2>
+          <div className="flex flex-col gap-2">
+            {dispatcherComments.map(comment => (
+              <DispatcherCommentCard key={comment.id} comment={comment} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {history.length > 0 && (
         <div>
