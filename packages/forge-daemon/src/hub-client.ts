@@ -2,6 +2,18 @@ import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
 import type { CreateTaskInput, EventEnvelope, Task } from '@forge-lab/core';
 
+export interface WorkspaceContext {
+  workspaceId: string;
+  docs: unknown[];
+  goals: unknown[];
+  agents: unknown[];
+  liveInstances: unknown[];
+  inboxTasks: Task[];
+  recentHistory: unknown[];
+  dispatcherHistory: unknown[];
+  queueDepth: Record<string, number>;
+}
+
 export interface HubClientOptions {
   hubUrl: string;
   deviceToken: string;
@@ -77,6 +89,49 @@ export class HubClient extends EventEmitter {
 
   async completeTask(id: string, result?: string): Promise<void> {
     await this.request<{ ok: boolean }>('POST', `/tasks/${id}/complete`, { result });
+  }
+
+  // ---------------------------------------------------------------------------
+  // FM / orchestrator methods
+  // ---------------------------------------------------------------------------
+
+  /** Assign a task to a specific agentId. Requires orchestrator device token. */
+  async assignTask(workspaceId: string, taskId: string, agentId: string): Promise<void> {
+    await this.request<{ ok: boolean }>(
+      'PATCH',
+      `/workspaces/${encodeURIComponent(workspaceId)}/tasks/${encodeURIComponent(taskId)}/assign`,
+      { agentId },
+    );
+  }
+
+  /** Fetch the Tier 0 context bundle for FM triage. Requires orchestrator device token. */
+  getWorkspaceContext(workspaceId: string): Promise<WorkspaceContext> {
+    return this.request<WorkspaceContext>(
+      'GET',
+      `/workspaces/${encodeURIComponent(workspaceId)}/context`,
+    );
+  }
+
+  /** List tasks in assigned status beyond ttlMinutes. Requires orchestrator device token. */
+  getStaleAssigned(
+    workspaceId: string,
+    ttlMinutes = 30,
+  ): Promise<{ tasks: Task[]; ttlMinutes: number; cutoff: string }> {
+    return this.request<{ tasks: Task[]; ttlMinutes: number; cutoff: string }>(
+      'GET',
+      `/workspaces/${encodeURIComponent(workspaceId)}/tasks/stale-assigned?ttlMinutes=${ttlMinutes}`,
+    );
+  }
+
+  /** Bulk-requeue stale assigned tasks back to pending_dispatcher_action. Requires orchestrator token. */
+  requeueStaleAssigned(
+    workspaceId: string,
+    ttlMinutes = 30,
+  ): Promise<{ requeued: number }> {
+    return this.request<{ requeued: number }>(
+      'POST',
+      `/workspaces/${encodeURIComponent(workspaceId)}/tasks/stale-assigned/requeue?ttlMinutes=${ttlMinutes}`,
+    );
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

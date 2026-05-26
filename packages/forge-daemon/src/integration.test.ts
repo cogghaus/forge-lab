@@ -559,3 +559,116 @@ describe('integration: composed personality via registry', () => {
     expect(echoedResult).toContain('Composition test task');
   });
 });
+
+// ---------------------------------------------------------------------------
+// HubClient FM orchestrator methods
+// ---------------------------------------------------------------------------
+
+describe('HubClient: FM orchestrator methods', () => {
+  let hub: Hub;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let orchestratorToken: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-fm-methods-test-xxxxxxxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    // Register an orchestrator device
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    orchestratorToken = ((await devRes.json()) as { token: string }).token;
+
+    // Create workspace
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'FM Test WS', slug: 'fm-test' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+  }, 15000);
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('getWorkspaceContext returns correct shape', async () => {
+    const { HubClient } = await import('./hub-client.js');
+    const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
+    const ctx = await client.getWorkspaceContext(workspaceId);
+
+    expect(ctx.workspaceId).toBe(workspaceId);
+    expect(Array.isArray(ctx.docs)).toBe(true);
+    expect(Array.isArray(ctx.goals)).toBe(true);
+    expect(Array.isArray(ctx.inboxTasks)).toBe(true);
+    expect(typeof ctx.queueDepth).toBe('object');
+  });
+
+  it('assignTask routes task to agentId', async () => {
+    const { HubClient } = await import('./hub-client.js');
+    const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
+
+    // Create a task in pending_dispatcher_action status
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'fm', title: 'FM assign test' }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+
+    // Manually set to pending_dispatcher_action via hub DB isn't possible through API,
+    // but pending_agent is assignable too per FM_ASSIGNABLE_STATUSES.
+    await client.assignTask(workspaceId, taskId, 'architect');
+
+    // Verify task is now assigned
+    const task = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+    const body = (await task.json()) as { status: string; assignedAgentId: string };
+    expect(body.status).toBe('assigned');
+    expect(body.assignedAgentId).toBe('architect');
+  });
+
+  it('getStaleAssigned returns tasks past ttl', async () => {
+    const { HubClient } = await import('./hub-client.js');
+    const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
+
+    const result = await client.getStaleAssigned(workspaceId, 30);
+    expect(Array.isArray(result.tasks)).toBe(true);
+    expect(result.ttlMinutes).toBe(30);
+    expect(typeof result.cutoff).toBe('string');
+  });
+
+  it('requeueStaleAssigned returns requeued count', async () => {
+    const { HubClient } = await import('./hub-client.js');
+    const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
+
+    const result = await client.requeueStaleAssigned(workspaceId, 30);
+    expect(typeof result.requeued).toBe('number');
+    expect(result.requeued).toBe(0); // nothing stale in fresh workspace
+  });
+});
