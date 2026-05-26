@@ -52,6 +52,12 @@ export const CreateTaskInputSchema = z.object({
    * Ignored by the workspace-scoped POST /workspaces/:id/tasks (workspace comes from route param).
    */
   workspaceId: z.string().nullable().optional(),
+  /**
+   * Logical agent that should handle this task. When set, the task is pre-assigned
+   * so only a daemon with a matching agentId will claim it. Used by reactive agents
+   * (e.g. Scribe) that self-create follow-up tasks and want guaranteed routing.
+   */
+  assignedAgentId: z.string().nullable().optional(),
 });
 export type CreateTaskInput = z.infer<typeof CreateTaskInputSchema>;
 

@@ -103,6 +103,9 @@ export function registerTaskRoutes(
       // Device tokens are provisioned by workspace owners and are semi-trusted
       // (same rationale as GET /tasks?workspaceId= above).
       workspaceId: body.workspaceId ?? null,
+      // Reactive agents (e.g. Scribe) self-create follow-up tasks pre-assigned
+      // to themselves so only their daemon claims them.
+      assignedAgentId: body.assignedAgentId ?? null,
       createdBy,
     });
     await db.insert(schema.taskHistory).values({
@@ -496,7 +499,9 @@ export function registerTaskRoutes(
         name: 'task.completed',
         occurredAt: new Date(),
         source: `device:${device.id}`,
-        payload: { taskId: id },
+        // Include result and workspaceId so reactive listeners (e.g. Scribe)
+        // can evaluate significance without extra round-trips.
+        payload: { taskId: id, result: body.result ?? null, workspaceId: task.workspaceId ?? null },
       });
       await reply.send({ ok: true });
     },
