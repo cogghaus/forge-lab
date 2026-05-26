@@ -735,7 +735,16 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign', () => {
     return { token: (res.json() as { token: string }).token };
   }
 
-  async function createWsTask(status = 'pending_dispatcher_action'): Promise<string> {
+  type TaskStatusLiteral =
+    | 'pending_agent'
+    | 'pending_dispatcher_action'
+    | 'in_progress'
+    | 'assigned'
+    | 'completed'
+    | 'cancelled'
+    | 'failed';
+
+  async function createWsTask(status: TaskStatusLiteral = 'pending_dispatcher_action'): Promise<string> {
     const res = await hub.fastify.inject({
       method: 'POST',
       url: `/workspaces/${workspaceId}/tasks`,

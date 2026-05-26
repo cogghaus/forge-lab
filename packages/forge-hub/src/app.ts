@@ -16,6 +16,7 @@ import { registerRuntimeConfigRoutes } from './routes/runtime-configs.js';
 import { registerInstructionRoutes } from './routes/instructions.js';
 import { registerCommentRoutes } from './routes/comments.js';
 import { registerWorkspaceRoutes } from './routes/workspaces.js';
+import { registerDocsRoutes } from './routes/docs.js';
 import { registerInviteRoutes } from './routes/invites.js';
 import { registerGoalRoutes } from './routes/goals.js';
 import { registerWsRoutes } from './routes/ws.js';
@@ -80,6 +81,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
     registerInstructionRoutes(scope, handle.db);
     registerCommentRoutes(scope, handle.db);
     registerWorkspaceRoutes(scope, handle.db);
+    registerDocsRoutes(scope, handle.db);
     registerInviteRoutes(scope, handle.db, config);
     registerGoalRoutes(scope, handle.db);
     registerWsRoutes(scope, handle.db, bus);
