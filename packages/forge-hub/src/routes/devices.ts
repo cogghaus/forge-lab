@@ -20,6 +20,8 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): void {
       hostname: body.hostname ?? null,
       platform: body.platform ?? null,
       tokenHash,
+      agentId: body.agentId ?? null,
+      deviceType: body.deviceType ?? 'worker',
     });
     await reply.code(201).send({ id, name: body.name, token });
   });
