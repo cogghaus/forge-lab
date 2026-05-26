@@ -57,6 +57,8 @@ export interface HubWorkspace {
   status: string;
   createdAt: string;
   role: string;
+  /** Monthly budget allocation in US cents (0 = unlimited / unset). */
+  budgetMonthlyCents: number;
 }
 
 export interface HubTask {
