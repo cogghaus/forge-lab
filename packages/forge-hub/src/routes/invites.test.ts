@@ -1,32 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createHub, type Hub } from '../app.js';
-import type { HubConfig } from '../config.js';
+import { TEST_HUB_CONFIG, setupAdmin, createWorkspace } from '../test-utils.js';
 
-const testConfig: HubConfig = {
-  port: 0,
-  host: '127.0.0.1',
-  databaseUrl: ':memory:',
-  sessionSecret: 'test-secret-with-at-least-32-characters-xxxx',
-  sessionTtlHours: 24,
-  bcryptCost: 10,
-  cookieSecure: false,
-};
-
-async function setupAdmin(hub: Hub): Promise<{ cookie: string }> {
-  await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload: { email: 'admin@example.com', password: 'password123' },
-  });
-  const loginRes = await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/login',
-    payload: { email: 'admin@example.com', password: 'password123' },
-  });
-  const setCookie = loginRes.headers['set-cookie'];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!;
-  return { cookie };
-}
 
 async function setupUser(hub: Hub, adminCookie: string, email = 'user@example.com'): Promise<{ cookie: string }> {
   const inviteRes = await hub.fastify.inject({
@@ -46,22 +21,12 @@ async function setupUser(hub: Hub, adminCookie: string, email = 'user@example.co
   return { cookie };
 }
 
-async function createWorkspace(hub: Hub, cookie: string): Promise<string> {
-  const res = await hub.fastify.inject({
-    method: 'POST',
-    url: '/workspaces',
-    headers: { cookie },
-    payload: { name: 'Test WS', slug: 'test-ws' },
-  });
-  return (res.json() as { id: string }).id;
-}
-
 describe('POST /admin/invites', () => {
   let hub: Hub;
   let adminCookie: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
     ({ cookie: adminCookie } = await setupAdmin(hub));
   });
   afterEach(async () => { await hub.close(); });
@@ -127,7 +92,7 @@ describe('GET /invites/:token', () => {
   let adminCookie: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
     ({ cookie: adminCookie } = await setupAdmin(hub));
   });
   afterEach(async () => { await hub.close(); });
@@ -177,7 +142,7 @@ describe('POST /invites/:token/accept', () => {
   let adminCookie: string;
 
   beforeEach(async () => {
-    hub = await createHub({ config: { ...testConfig } });
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
     ({ cookie: adminCookie } = await setupAdmin(hub));
   });
   afterEach(async () => { await hub.close(); });
