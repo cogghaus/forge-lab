@@ -3,6 +3,16 @@ import { hubFetch, type HubRuntimeConfig } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return 'unknown date';
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+// ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
 
@@ -52,11 +62,7 @@ function ConfigCard({ config }: { config: HubRuntimeConfig }) {
             className="font-mono text-[10px] mt-0.5"
             style={{ color: 'rgba(245,240,235,0.25)' }}
           >
-            {new Date(config.createdAt).toLocaleDateString(undefined, {
-              year: 'numeric',
-              month: 'short',
-              day: 'numeric',
-            })}
+            {formatDate(config.createdAt)}
             {keyCount > 0 && (
               <span className="ml-2">{keyCount} {keyCount === 1 ? 'key' : 'keys'}</span>
             )}
