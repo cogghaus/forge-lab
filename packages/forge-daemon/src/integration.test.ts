@@ -1851,3 +1851,357 @@ describe('integration: Scribe audit mode — auditThreshold', () => {
     }, 10000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Scribe — Crucible test matrix
+// Edge cases not covered by the primary reactive / audit describe blocks:
+//   1. Reactive daemon ignores completions from an out-of-scope workspace.
+//   2. Custom scribeAgentId is used when routing reactive doc tasks.
+//   3. Created Scribe task carries the daemon's workspaceId scope.
+//   4. auditThreshold unset → completing N tasks never creates an audit task.
+//   5. Non-significant completions still count toward the audit threshold.
+// ---------------------------------------------------------------------------
+
+describe('Scribe — Crucible test matrix: reactive scope + routing', () => {
+  let hub: Hub;
+  let workdir: string;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let workspaceA: string;
+  let workspaceB: string;
+  let workerToken: string;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-crucible-scope-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-crucible-scope-xxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'crucible@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'crucible@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    const workerRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'crucible-worker', deviceType: 'worker' }),
+    });
+    workerToken = ((await workerRes.json()) as { token: string }).token;
+
+    const wsARes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'Workspace A', slug: 'ws-a' }),
+    });
+    workspaceA = ((await wsARes.json()) as { id: string }).id;
+
+    const wsBRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'Workspace B', slug: 'ws-b' }),
+    });
+    workspaceB = ((await wsBRes.json()) as { id: string }).id;
+  }, 15000);
+
+  afterEach(async () => {
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('reactive daemon scoped to workspace A ignores completions from workspace B', { timeout: 15000 }, async () => {
+    // Register scribe observer device scoped to workspace A
+    const scribeDevRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'scribe-ws-a', deviceType: 'worker' }),
+    });
+    const scribeToken = ((await scribeDevRes.json()) as { token: string }).token;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime());
+    const daemon = new Daemon({
+      hubUrl,
+      deviceToken: scribeToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      workspaceId: workspaceA,          // scoped to A
+      listenCompletions: true,
+      scribeAgentId: 'scribe',
+      pollIntervalMs: 100,
+      logger: { info: () => {}, error: () => {} },
+    });
+    await daemon.start();
+
+    try {
+      // Complete a significant task in workspace B (not A).
+      const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceB}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+        body: JSON.stringify({ projectPrefix: 'eng', title: 'Add database migration for users table' }),
+      });
+      const { id: taskId } = (await taskRes.json()) as { id: string };
+      await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${workerToken}` },
+      });
+      await fetch(`${hubUrl}/tasks/${taskId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${workerToken}` },
+        body: JSON.stringify({ result: 'Migration applied to DB schema' }),
+      });
+
+      // Wait and verify NO Scribe task was created in workspace A.
+      await new Promise(r => setTimeout(r, 1000));
+
+      const tasksRes = await fetch(`${hubUrl}/workspaces/${workspaceA}/tasks`, {
+        headers: { cookie: sessionCookie },
+      });
+      const { tasks } = (await tasksRes.json()) as { tasks: Array<{ title: string }> };
+      expect(tasks.filter(t => t.title.startsWith('[Scribe]'))).toHaveLength(0);
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('uses custom scribeAgentId when routing reactive doc tasks', { timeout: 15000 }, async () => {
+    const scribeDevRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'scribe-custom', deviceType: 'worker' }),
+    });
+    const scribeToken = ((await scribeDevRes.json()) as { token: string }).token;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime());
+    const daemon = new Daemon({
+      hubUrl,
+      deviceToken: scribeToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      workspaceId: workspaceA,
+      listenCompletions: true,
+      scribeAgentId: 'scribe-v2',        // custom agent ID
+      pollIntervalMs: 100,
+      logger: { info: () => {}, error: () => {} },
+    });
+    await daemon.start();
+
+    try {
+      const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceA}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+        body: JSON.stringify({ projectPrefix: 'eng', title: 'Add GET /api/users endpoint' }),
+      });
+      const { id: taskId } = (await taskRes.json()) as { id: string };
+      await fetch(`${hubUrl}/tasks/${taskId}/claim`, { method: 'POST', headers: { authorization: `Bearer ${workerToken}` } });
+      await fetch(`${hubUrl}/tasks/${taskId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${workerToken}` },
+        body: JSON.stringify({ result: 'Endpoint implemented' }),
+      });
+
+      // Wait for a Scribe task scoped to workspace A with custom agentId.
+      await waitFor(async () => {
+        const res = await fetch(`${hubUrl}/workspaces/${workspaceA}/tasks`, {
+          headers: { cookie: sessionCookie },
+        });
+        const { tasks } = (await res.json()) as {
+          tasks: Array<{ title: string; assignedAgentId: string | null; description: string | null }>;
+        };
+        const scribeTask = tasks.find(
+          t => t.title.startsWith('[Scribe]') &&
+            t.assignedAgentId === 'scribe-v2' &&
+            (t.description?.includes(taskId) ?? false),
+        );
+        return scribeTask ? 'done' : null;
+      }, 10000);
+    } finally {
+      await daemon.stop();
+    }
+  });
+});
+
+describe('Scribe — Crucible test matrix: audit edge cases', () => {
+  let hub: Hub;
+  let workdir: string;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let workspaceId: string;
+  let workerToken: string;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-crucible-audit-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-crucible-audit-xxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'crucible2@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'crucible2@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    const workerRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'crucible-worker2', deviceType: 'worker' }),
+    });
+    workerToken = ((await workerRes.json()) as { token: string }).token;
+
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'Crucible Audit WS', slug: 'crucible-audit-ws' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+  }, 15000);
+
+  afterEach(async () => {
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  async function completeTask(prefix: string, title: string, wToken: string): Promise<string> {
+    const res = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: prefix, title }),
+    });
+    const { id: taskId } = (await res.json()) as { id: string };
+    await fetch(`${hubUrl}/tasks/${taskId}/claim`, { method: 'POST', headers: { authorization: `Bearer ${wToken}` } });
+    await fetch(`${hubUrl}/tasks/${taskId}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${wToken}` },
+      body: JSON.stringify({ result: 'done' }),
+    });
+    return taskId;
+  }
+
+  it('does not create audit task when auditThreshold is not set', { timeout: 10000 }, async () => {
+    const scribeDevRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'scribe-no-audit', deviceType: 'worker' }),
+    });
+    const scribeToken = ((await scribeDevRes.json()) as { token: string }).token;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime());
+    const daemon = new Daemon({
+      hubUrl,
+      deviceToken: scribeToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      workspaceId,
+      listenCompletions: true,
+      scribeAgentId: 'scribe',
+      // auditThreshold intentionally NOT set
+      pollIntervalMs: 100,
+      logger: { info: () => {}, error: () => {} },
+    });
+    await daemon.start();
+
+    try {
+      // Complete 10 tasks — well above any reasonable threshold.
+      for (let i = 0; i < 10; i++) {
+        await completeTask('chore', `Task ${i + 1}`, workerToken);
+      }
+
+      // Wait a bit and verify no audit task was created.
+      await new Promise(r => setTimeout(r, 1000));
+
+      const tasksRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+        headers: { cookie: sessionCookie },
+      });
+      const { tasks } = (await tasksRes.json()) as { tasks: Array<{ title: string }> };
+      const auditTasks = tasks.filter(t => t.title === '[Scribe Audit] Knowledge base audit');
+      expect(auditTasks).toHaveLength(0);
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  it('non-significant completions count toward audit threshold', { timeout: 15000 }, async () => {
+    // Tasks with no significance keywords still trigger the audit counter.
+    const scribeDevRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'scribe-nonsig-audit', deviceType: 'worker' }),
+    });
+    const scribeToken = ((await scribeDevRes.json()) as { token: string }).token;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime());
+    const daemon = new Daemon({
+      hubUrl,
+      deviceToken: scribeToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      workspaceId,
+      listenCompletions: true,
+      scribeAgentId: 'scribe',
+      auditThreshold: 2,               // trigger after 2 completions
+      pollIntervalMs: 100,
+      logger: { info: () => {}, error: () => {} },
+    });
+    await daemon.start();
+
+    try {
+      // Both tasks are non-significant (no keywords) but should still trigger audit.
+      await completeTask('chore', 'Bump dependency versions', workerToken);
+      await completeTask('chore', 'Format code with prettier', workerToken);
+
+      // Audit task should appear even though neither task was architecturally significant.
+      await waitFor(async () => {
+        const res = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+          headers: { cookie: sessionCookie },
+        });
+        const { tasks } = (await res.json()) as { tasks: Array<{ title: string; assignedAgentId: string | null }> };
+        const auditTask = tasks.find(
+          t => t.title === '[Scribe Audit] Knowledge base audit' && t.assignedAgentId === 'scribe',
+        );
+        return auditTask ? 'done' : null;
+      }, 10000);
+    } finally {
+      await daemon.stop();
+    }
+  });
+});
