@@ -590,6 +590,24 @@ describe('GET /workspaces/:workspaceId/context', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('returns 403 for worker-type device (non-orchestrator)', async () => {
+    const workerRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'architect-daemon', agentId: 'architect', deviceType: 'worker' },
+    });
+    const workerToken = (workerRes.json() as { token: string }).token;
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${workerToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+  });
+
   it('returns all context keys with empty data for a fresh workspace', async () => {
     const res = await hub.fastify.inject({
       method: 'GET',

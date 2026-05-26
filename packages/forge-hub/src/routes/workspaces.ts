@@ -216,14 +216,19 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
 
   // ---------------------------------------------------------------------------
   // FM Tier 0 context bundle — one call gives FM everything it needs to triage.
-  // Accessible to both workspace members (user) and device tokens (daemon/FM).
+  // Device-auth-only (orchestrator type required). FM daemons call this on startup
+  // and before each triage cycle.
   // ---------------------------------------------------------------------------
 
   fastify.get<{ Params: { workspaceId: string } }>(
     '/workspaces/:workspaceId/context',
     { preHandler: requireDevice },
-    async (req) => {
+    async (req, reply) => {
       const device = getDevice(req);
+      if (device.deviceType !== 'orchestrator') {
+        await reply.code(403).send({ error: 'orchestrator_required' });
+        return;
+      }
       const workspaceId = req.params.workspaceId;
 
       const [
