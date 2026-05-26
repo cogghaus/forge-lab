@@ -1497,3 +1497,129 @@ describe('POST /tasks/:id/fail', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+describe('GET /tasks/stats', () => {
+  let hub: Hub;
+  let cookie: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    ({ cookie } = await setupAdmin(hub));
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('returns zero counts when no tasks exist', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      total: number;
+      byStatus: Record<string, number>;
+      completionRate: number;
+      completedLast7Days: number;
+      summary: { completed: number; failed: number; inProgress: number; pending: number };
+    };
+    expect(body.total).toBe(0);
+    expect(body.completionRate).toBe(0);
+    expect(body.completedLast7Days).toBe(0);
+    expect(body.summary.completed).toBe(0);
+    expect(body.summary.failed).toBe(0);
+  });
+
+  it('counts tasks by status correctly', async () => {
+    // Create 3 tasks via API (they land as pending_agent by default)
+    for (let i = 0; i < 3; i++) {
+      await hub.fastify.inject({
+        method: 'POST',
+        url: '/tasks',
+        headers: { cookie },
+        payload: { projectPrefix: 'fl', title: `Task ${i}` },
+      });
+    }
+
+    // Manually set one to completed and one to failed via hub.db
+    const tasks = await hub.db.select({ id: schema.tasks.id }).from(schema.tasks);
+    const [t0, t1] = tasks;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'completed', completedAt: new Date() })
+      .where(eq(schema.tasks.id, t0!.id));
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'failed' })
+      .where(eq(schema.tasks.id, t1!.id));
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      total: number;
+      byStatus: Record<string, number>;
+      completionRate: number;
+      summary: { completed: number; failed: number };
+    };
+    expect(body.total).toBe(3);
+    expect(body.byStatus['completed']).toBe(1);
+    expect(body.byStatus['failed']).toBe(1);
+    expect(body.byStatus['pending_agent']).toBe(1);
+    expect(body.summary.completed).toBe(1);
+    expect(body.summary.failed).toBe(1);
+    // 1 of 3 = 33%
+    expect(body.completionRate).toBe(33);
+  });
+
+  it('completedLast7Days counts only recent completed tasks', async () => {
+    // Insert a task completed now and one completed >7 days ago
+    const nowMs = Date.now();
+    const oldMs = nowMs - 8 * 24 * 60 * 60 * 1000;
+    await hub.db.insert(schema.tasks).values([
+      {
+        id: 'stats-t1',
+        projectPrefix: 'fl',
+        title: 'Recent done',
+        status: 'completed',
+        completedAt: new Date(nowMs),
+        createdBy: 'test',
+        updatedAt: new Date(),
+        createdAt: new Date(),
+      },
+      {
+        id: 'stats-t2',
+        projectPrefix: 'fl',
+        title: 'Old done',
+        status: 'completed',
+        completedAt: new Date(oldMs),
+        createdBy: 'test',
+        updatedAt: new Date(),
+        createdAt: new Date(),
+      },
+    ]);
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { completedLast7Days: number; total: number };
+    expect(body.total).toBe(2);
+    expect(body.completedLast7Days).toBe(1);
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});

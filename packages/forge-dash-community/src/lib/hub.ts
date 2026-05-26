@@ -115,6 +115,19 @@ export interface HubRuntimeConfig {
   createdAt: string;
 }
 
+export interface HubTaskStats {
+  total: number;
+  byStatus: Record<string, number>;
+  completionRate: number;
+  completedLast7Days: number;
+  summary: {
+    completed: number;
+    failed: number;
+    inProgress: number;
+    pending: number;
+  };
+}
+
 export interface HubDevice {
   id: string;
   name: string;
