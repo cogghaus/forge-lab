@@ -1740,6 +1740,26 @@ describe('task parentId linking', () => {
     expect(child?.workspaceId).toBe(workspaceId);
   });
 
+  it('flat POST with workspaceId mirrors workspaceId onto taskHistory audit event', async () => {
+    const { token } = await registerDevice(hub, cookie, 'forge-fm-audit');
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { projectPrefix: 'aud', title: 'Audit task', workspaceId },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const history = await hub.db
+      .select({ workspaceId: schema.taskHistory.workspaceId })
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, id))
+      .get();
+    expect(history?.workspaceId).toBe(workspaceId);
+  });
+
   it('task created without parentId has null parentId', async () => {
     const res = await hub.fastify.inject({
       method: 'POST',

@@ -92,6 +92,8 @@ export function registerTaskRoutes(
       eventName: 'task.created',
       source: createdBy,
       payload: { title: body.title, ...maybeRunId(req) },
+      // Mirror the task's workspaceId so audit events are workspace-scoped.
+      workspaceId: body.workspaceId ?? null,
     });
     bus.emit({
       id: nanoid(),
