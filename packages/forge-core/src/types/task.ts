@@ -44,6 +44,14 @@ export const CreateTaskInputSchema = z.object({
   description: z.string().nullable().optional(),
   priority: TaskPrioritySchema.optional(),
   goalId: z.string().nullable().optional(),
+  /** Parent task ID — for FM decomposition. Parent must exist (validated at route level). */
+  parentId: z.string().nullable().optional(),
+  /**
+   * Workspace the task belongs to. Accepted by the flat POST /tasks endpoint when
+   * the caller is a device (device tokens are workspace-owner-provisioned and semi-trusted).
+   * Ignored by the workspace-scoped POST /workspaces/:id/tasks (workspace comes from route param).
+   */
+  workspaceId: z.string().nullable().optional(),
 });
 export type CreateTaskInput = z.infer<typeof CreateTaskInputSchema>;
 

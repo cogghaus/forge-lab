@@ -72,6 +72,25 @@ export function registerTaskRoutes(
     const id = formatTaskId(body.projectPrefix, maxSeq + 1);
     const createdBy = user ? `user:${user.id}` : `device:${device!.id}`;
 
+    // Validate parentId: parent must exist. When workspaceId is also provided
+    // (FM device path), parent must belong to that workspace.
+    const parentId = body.parentId ?? null;
+    if (parentId !== null) {
+      const whereParent =
+        body.workspaceId != null
+          ? and(eq(schema.tasks.id, parentId), eq(schema.tasks.workspaceId, body.workspaceId))
+          : eq(schema.tasks.id, parentId);
+      const parent = await db
+        .select({ id: schema.tasks.id })
+        .from(schema.tasks)
+        .where(whereParent)
+        .get();
+      if (!parent) {
+        await reply.code(404).send({ error: 'parent_task_not_found' });
+        return;
+      }
+    }
+
     await db.insert(schema.tasks).values({
       id,
       projectPrefix: body.projectPrefix,
@@ -79,6 +98,11 @@ export function registerTaskRoutes(
       description: body.description ?? null,
       priority: body.priority ?? 'normal',
       goalId: body.goalId || null,
+      parentId,
+      // Devices may supply workspaceId to associate subtasks with a workspace.
+      // Device tokens are provisioned by workspace owners and are semi-trusted
+      // (same rationale as GET /tasks?workspaceId= above).
+      workspaceId: body.workspaceId ?? null,
       createdBy,
     });
     await db.insert(schema.taskHistory).values({
@@ -87,6 +111,8 @@ export function registerTaskRoutes(
       eventName: 'task.created',
       source: createdBy,
       payload: { title: body.title, ...maybeRunId(req) },
+      // Mirror the task's workspaceId so audit events are workspace-scoped.
+      workspaceId: body.workspaceId ?? null,
     });
     bus.emit({
       id: nanoid(),
@@ -376,6 +402,20 @@ export function registerTaskRoutes(
         }
       }
 
+      // Validate parentId: the parent task must exist in the same workspace.
+      const parentId = body.parentId ?? null;
+      if (parentId !== null) {
+        const parent = await db
+          .select({ id: schema.tasks.id })
+          .from(schema.tasks)
+          .where(and(eq(schema.tasks.id, parentId), eq(schema.tasks.workspaceId, workspaceId)))
+          .get();
+        if (!parent) {
+          await reply.code(404).send({ error: 'parent_task_not_found' });
+          return;
+        }
+      }
+
       await db.insert(schema.tasks).values({
         id,
         projectPrefix: body.projectPrefix,
@@ -383,6 +423,7 @@ export function registerTaskRoutes(
         description: body.description ?? null,
         priority: body.priority ?? 'normal',
         goalId,
+        parentId,
         workspaceId,
         createdBy,
       });
