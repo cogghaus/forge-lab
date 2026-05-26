@@ -17,27 +17,98 @@ export interface WorkspaceContext {
 export interface HubClientOptions {
   hubUrl: string;
   deviceToken: string;
+  /**
+   * Maximum WebSocket reconnect attempts after an unexpected disconnect.
+   * 0 = no automatic reconnect (default: 10).
+   */
+  reconnectMaxAttempts?: number;
+  /**
+   * Base delay in ms for exponential back-off between reconnect attempts
+   * (default: 1000). Actual delay = min(base * 2^attempt, maxDelay).
+   */
+  reconnectBaseDelayMs?: number;
+  /**
+   * Upper cap for reconnect delay in ms (default: 30000).
+   */
+  reconnectMaxDelayMs?: number;
 }
 
+/**
+ * Hub event emitted when the WebSocket disconnects unexpectedly.
+ * Events: 'disconnect', 'reconnect', 'reconnect_failed', and all hub event names.
+ */
 export class HubClient extends EventEmitter {
   private ws: WebSocket | null = null;
-  private readonly opts: HubClientOptions;
+  private readonly opts: Required<HubClientOptions>;
+  /** True once close() is called — suppresses automatic reconnect. */
+  private _closed = false;
+  /** Number of reconnect attempts since the last successful open. */
+  private _reconnectAttempts = 0;
+  private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: HubClientOptions) {
     super();
-    this.opts = opts;
+    this.opts = {
+      reconnectMaxAttempts: 10,
+      reconnectBaseDelayMs: 1000,
+      reconnectMaxDelayMs: 30_000,
+      ...opts,
+    };
   }
 
   async connect(): Promise<void> {
+    this._closed = false;
+    this._reconnectAttempts = 0;
+    await this._openWebSocket(false);
+  }
+
+  close(): Promise<void> {
+    this._closed = true;
+    if (this._reconnectTimer !== null) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    return Promise.resolve();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal WebSocket lifecycle
+  // ---------------------------------------------------------------------------
+
+  private async _openWebSocket(isReconnect: boolean): Promise<void> {
     const base = new URL(this.opts.hubUrl);
     const wsProto = base.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProto}//${base.host}/ws?token=${encodeURIComponent(this.opts.deviceToken)}`;
     const ws = new WebSocket(wsUrl);
     this.ws = ws;
-    await new Promise<void>((resolve, reject) => {
-      ws.once('open', () => resolve());
-      ws.once('error', (err) => reject(err));
-    });
+
+    if (!isReconnect) {
+      // Initial connect: surface errors to the caller.
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => {
+          this._reconnectAttempts = 0;
+          resolve();
+        });
+        ws.once('error', (err) => reject(err));
+      });
+      this._attachHandlers(ws);
+    } else {
+      // Reconnect: don't expose the promise — let the close handler retry on failure.
+      // Must attach a no-op error listener to prevent unhandled error events.
+      ws.on('error', () => {});
+      ws.once('open', () => {
+        this._reconnectAttempts = 0;
+        this.emit('reconnect');
+      });
+      this._attachHandlers(ws);
+    }
+  }
+
+  private _attachHandlers(ws: WebSocket): void {
     ws.on('message', (data: WebSocket.RawData) => {
       try {
         const text =
@@ -52,21 +123,38 @@ export class HubClient extends EventEmitter {
           this.emit(msg.name, msg as EventEnvelope);
         }
       } catch {
-        // ignore
+        // ignore malformed messages
       }
     });
+
     ws.on('close', () => {
       this.emit('disconnect');
+      if (!this._closed && this.opts.reconnectMaxAttempts > 0) {
+        this._scheduleReconnect();
+      }
     });
   }
 
-  close(): Promise<void> {
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+  private _scheduleReconnect(): void {
+    if (this._reconnectAttempts >= this.opts.reconnectMaxAttempts) {
+      this.emit('reconnect_failed');
+      return;
     }
-    return Promise.resolve();
+    const delay = Math.min(
+      this.opts.reconnectBaseDelayMs * Math.pow(2, this._reconnectAttempts),
+      this.opts.reconnectMaxDelayMs,
+    );
+    this._reconnectAttempts++;
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      if (this._closed) return;
+      void this._openWebSocket(true);
+    }, delay);
   }
+
+  // ---------------------------------------------------------------------------
+  // HTTP API methods
+  // ---------------------------------------------------------------------------
 
   createTask(input: CreateTaskInput): Promise<{ id: string }> {
     return this.request<{ id: string }>('POST', '/tasks', input);
