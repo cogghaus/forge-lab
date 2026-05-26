@@ -45,6 +45,12 @@ export interface DaemonOptions {
    * Defaults to 30.
    */
   staleTtlMinutes?: number;
+  /**
+   * Maximum number of tasks running concurrently on this daemon instance.
+   * When activeInstances reaches this limit, incoming task events are skipped
+   * until a slot opens. Default: no limit (all tasks claimed immediately).
+   */
+  maxConcurrentTasks?: number;
 }
 
 export interface DaemonLogger {
@@ -252,6 +258,22 @@ export class Daemon {
     const taskId = (env.payload as { taskId?: string }).taskId;
     if (!taskId) return;
     if (this.activeInstances.has(taskId)) return;
+
+    // Concurrency cap: when maxConcurrentTasks is set, skip the claim attempt
+    // until a slot opens. The task remains in pending_agent and will be
+    // re-delivered when another daemon (or this daemon after a slot frees)
+    // picks it up via the poll loop.
+    if (
+      this.opts.maxConcurrentTasks !== undefined &&
+      this.activeInstances.size >= this.opts.maxConcurrentTasks
+    ) {
+      this.logger.info('concurrency cap reached, skipping task', {
+        taskId,
+        activeCount: this.activeInstances.size,
+        maxConcurrentTasks: this.opts.maxConcurrentTasks,
+      });
+      return;
+    }
 
     // Pre-claim checks — safe to fail silently.
     try {
