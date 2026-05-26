@@ -897,6 +897,20 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign', () => {
     const payload = assignEvent?.payload as Record<string, unknown> | undefined;
     expect(payload?.['agentId']).toBe('architect');
   });
+
+  it('assign to already-assigned task returns 422 not_assignable', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createWsTask('assigned');
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error).toBe('not_assignable');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1245,6 +1259,61 @@ describe('GET+POST /workspaces/:wsId/tasks/stale-assigned', () => {
       .where(eq(schema.tasks.id, ws2TaskId))
       .get();
     expect(task?.status).toBe('assigned'); // untouched
+  });
+
+  it('GET returns multiple stale tasks sorted by assignedAt asc (oldest first)', async () => {
+    const older = new Date(Date.now() - 120 * 60 * 1000); // 120 min ago
+    const newer = new Date(Date.now() - 60 * 60 * 1000);  // 60 min ago
+    const olderTaskId = await createAssignedTask(older);
+    const newerTaskId = await createAssignedTask(newer);
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned?ttlMinutes=30`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { tasks: { id: string }[] };
+    expect(body.tasks).toHaveLength(2);
+    expect(body.tasks[0]!.id).toBe(olderTaskId);
+    expect(body.tasks[1]!.id).toBe(newerTaskId);
+  });
+
+  it('POST requeue handles multiple stale tasks in one call', async () => {
+    const oldDate = new Date(Date.now() - 60 * 60 * 1000);
+    const taskId1 = await createAssignedTask(oldDate);
+    const taskId2 = await createAssignedTask(oldDate);
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned/requeue?ttlMinutes=30`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { requeued: number }).requeued).toBe(2);
+
+    for (const taskId of [taskId1, taskId2]) {
+      const task = await hub.db
+        .select({ status: schema.tasks.status })
+        .from(schema.tasks)
+        .where(eq(schema.tasks.id, taskId))
+        .get();
+      expect(task?.status).toBe('pending_dispatcher_action');
+
+      // Verify history event written for each task
+      const histRes = await hub.fastify.inject({
+        method: 'GET',
+        url: `/tasks/${taskId}/history`,
+        headers: { cookie },
+      });
+      expect(histRes.statusCode).toBe(200);
+      const { history } = histRes.json() as { history: { eventName: string; payload: unknown }[] };
+      const reqEvent = history.find((h) => h.eventName === 'task.requeued');
+      expect(reqEvent).toBeDefined();
+      const payload = reqEvent?.payload as Record<string, unknown> | undefined;
+      expect(payload?.['reason']).toBe('stale_assignment');
+      expect(payload?.['ttlMinutes']).toBe(30);
+    }
   });
 
   it('GET invalid ttlMinutes returns 400', async () => {
