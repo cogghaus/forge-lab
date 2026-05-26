@@ -215,7 +215,6 @@ export class Daemon {
 
     const fmAgentId = this.opts.fmAgentId ?? 'forge-master';
     const syntheticTaskId = `_fm_${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
 
     const contextJson = JSON.stringify(ctx, null, 2);
     const doneInstruction =
@@ -227,10 +226,12 @@ export class Daemon {
 
     try {
       this.fmRunning = true;
+      // runtime.get() inside the try block so a missing runtime ID logs gracefully.
+      const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
       const instance = await runtime.spawn(
         {
           agentId: fmAgentId,
-          personality: this.opts.defaultPersonality ?? 'default',
+          personality: this.opts.defaultPersonality || 'default',
           workdir: this.opts.workdir,
           taskId: syntheticTaskId,
           config: {},
