@@ -269,6 +269,39 @@ describe('/workspaces/:workspaceId/docs', () => {
     expect(docs[0]!.status).toBe('archived');
   });
 
+  it('GET ?status=all returns docs of every status', async () => {
+    // Create an active doc, archive it, and create a second active doc
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { key: 'all-a', title: 'Active One', content: 'Content.', category: 'adr' },
+    });
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/docs/all-a`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { status: 'archived' },
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { key: 'all-b', title: 'Active Two', content: 'Content.', category: 'adr' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/docs?status=all`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const { docs } = res.json() as { docs: { key: string; status: string }[] };
+    const keys = docs.map(d => d.key);
+    expect(keys).toContain('all-a');
+    expect(keys).toContain('all-b');
+  });
+
   // GET by key -----------------------------------------------------------------
 
   it('GET /:key returns the doc', async () => {
