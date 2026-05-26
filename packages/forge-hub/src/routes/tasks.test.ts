@@ -1306,8 +1306,13 @@ describe('GET+POST /workspaces/:wsId/tasks/stale-assigned', () => {
         url: `/tasks/${taskId}/history`,
         headers: { cookie },
       });
-      const { history } = histRes.json() as { history: { eventName: string }[] };
-      expect(history.some((h) => h.eventName === 'task.requeued')).toBe(true);
+      expect(histRes.statusCode).toBe(200);
+      const { history } = histRes.json() as { history: { eventName: string; payload: unknown }[] };
+      const reqEvent = history.find((h) => h.eventName === 'task.requeued');
+      expect(reqEvent).toBeDefined();
+      const payload = reqEvent?.payload as Record<string, unknown> | undefined;
+      expect(payload?.['reason']).toBe('stale_assignment');
+      expect(payload?.['ttlMinutes']).toBe(30);
     }
   });
 
