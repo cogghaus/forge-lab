@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { nanoid } from 'nanoid';
+import { eq } from 'drizzle-orm';
 import { schema } from '@forge-lab/core';
 import { createHub, type Hub } from '../app.js';
 import { createSession } from '../auth/sessions.js';
@@ -536,5 +537,230 @@ describe('/workspaces routes', () => {
     expect(actRes.statusCode).toBe(200);
     const { activity } = actRes.json() as { activity: unknown[] };
     expect(activity).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /workspaces/:workspaceId/context  — FM Tier 0 context bundle
+// ---------------------------------------------------------------------------
+
+type ContextResponse = {
+  workspaceId: string;
+  docs: unknown[];
+  goals: unknown[];
+  agents: unknown[];
+  liveInstances: unknown[];
+  inboxTasks: unknown[];
+  recentHistory: unknown[];
+  dispatcherHistory: unknown[];
+  queueDepth: Record<string, number>;
+};
+
+describe('GET /workspaces/:workspaceId/context', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+  let fmToken: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    ({ cookie } = await setupOwner(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+
+    // Register FM orchestrator device
+    const devRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' },
+    });
+    fmToken = (devRes.json() as { token: string }).token;
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('returns 401 without device auth', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns all context keys with empty data for a fresh workspace', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const ctx = res.json() as ContextResponse;
+    expect(ctx.workspaceId).toBe(workspaceId);
+    expect(Array.isArray(ctx.docs)).toBe(true);
+    expect(Array.isArray(ctx.goals)).toBe(true);
+    expect(Array.isArray(ctx.agents)).toBe(true);
+    expect(Array.isArray(ctx.liveInstances)).toBe(true);
+    expect(Array.isArray(ctx.inboxTasks)).toBe(true);
+    expect(Array.isArray(ctx.recentHistory)).toBe(true);
+    expect(Array.isArray(ctx.dispatcherHistory)).toBe(true);
+    expect(typeof ctx.queueDepth).toBe('object');
+  });
+
+  it('inboxTasks only includes pending_dispatcher_action tasks', async () => {
+    // Create one inbox task and one normal task
+    const inboxRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ctx', title: 'Inbox task' },
+    });
+    const inboxId = (inboxRes.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, inboxId));
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ctx', title: 'Normal task' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    const ctx = res.json() as ContextResponse;
+    expect(ctx.inboxTasks).toHaveLength(1);
+    const inboxTask = ctx.inboxTasks[0] as { id: string; status: string };
+    expect(inboxTask.id).toBe(inboxId);
+    expect(inboxTask.status).toBe('pending_dispatcher_action');
+  });
+
+  it('queueDepth counts tasks by status', async () => {
+    // Create 2 pending_agent + 1 in_progress tasks
+    for (let i = 0; i < 2; i++) {
+      await hub.fastify.inject({
+        method: 'POST',
+        url: `/workspaces/${workspaceId}/tasks`,
+        headers: { cookie },
+        payload: { projectPrefix: 'qd', title: `Task ${i}` },
+      });
+    }
+    const inProgressRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'qd', title: 'Running task' },
+    });
+    const inProgressId = (inProgressRes.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'in_progress' })
+      .where(eq(schema.tasks.id, inProgressId));
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    const ctx = res.json() as ContextResponse;
+    expect(ctx.queueDepth['pending_agent']).toBe(2);
+    expect(ctx.queueDepth['in_progress']).toBe(1);
+  });
+
+  it('docs only includes active docs in FM-critical categories', async () => {
+    // Insert one active architecture doc and one archived doc
+    await hub.db.insert(schema.workspaceDocs).values({
+      id: nanoid(),
+      workspaceId,
+      key: 'arch-overview',
+      title: 'Architecture Overview',
+      content: 'The system uses a hub-spoke model.',
+      category: 'architecture',
+      status: 'active',
+      updatedBy: 'scribe',
+    });
+    await hub.db.insert(schema.workspaceDocs).values({
+      id: nanoid(),
+      workspaceId,
+      key: 'old-pattern',
+      title: 'Old Pattern',
+      content: 'Deprecated approach.',
+      category: 'pattern',
+      status: 'archived',
+      updatedBy: 'scribe',
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    const ctx = res.json() as ContextResponse;
+    // architecture is in CONTEXT_DOC_CATEGORIES, archived status excluded
+    expect(ctx.docs).toHaveLength(1);
+    const doc = ctx.docs[0] as { key: string; status: string; category: string };
+    expect(doc.key).toBe('arch-overview');
+    expect(doc.status).toBe('active');
+    expect(doc.category).toBe('architecture');
+  });
+
+  it('docs excludes pattern and feature categories (not in Tier 0)', async () => {
+    await hub.db.insert(schema.workspaceDocs).values({
+      id: nanoid(),
+      workspaceId,
+      key: 'feature-x',
+      title: 'Feature X',
+      content: 'Details.',
+      category: 'feature',
+      status: 'active',
+      updatedBy: 'scribe',
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    const ctx = res.json() as ContextResponse;
+    expect(ctx.docs).toHaveLength(0);
+  });
+
+  it('context excludes data from other workspaces', async () => {
+    const ws2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'Other WS', slug: 'other-ws-ctx' },
+    });
+    const ws2Id = (ws2Res.json() as { id: string }).id;
+
+    // Add inbox task to ws2
+    const t2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${ws2Id}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'oth', title: 'WS2 task' },
+    });
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, (t2Res.json() as { id: string }).id));
+
+    // Context for workspaceId should not include ws2 data
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/context`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    const ctx = res.json() as ContextResponse;
+    expect(ctx.inboxTasks).toHaveLength(0);
+    expect(ctx.queueDepth['pending_dispatcher_action']).toBeUndefined();
   });
 });

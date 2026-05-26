@@ -1,12 +1,19 @@
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { CreateWorkspaceInputSchema, schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
-import { requireUser, requireWorkspaceMember, getUser, getWorkspace } from '../auth/middleware.js';
+import { requireUser, requireDevice, requireWorkspaceMember, getUser, getWorkspace, getDevice } from '../auth/middleware.js';
 
 const ACTIVITY_LIMIT = 50;
+
+/** How many recent task_history rows to include in FM Tier 0 context. */
+const CONTEXT_HISTORY_LIMIT = 30;
+/** How many dispatcher-comment events to surface separately. */
+const CONTEXT_DISPATCHER_LIMIT = 15;
+/** Categories Scribe writes that FM must always have. */
+const CONTEXT_DOC_CATEGORIES = ['architecture', 'adr', 'agent', 'runbook'] as const;
 
 const UpdateWorkspaceInputSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -204,6 +211,130 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
         .orderBy(desc(schema.taskHistory.createdAt))
         .limit(ACTIVITY_LIMIT);
       return { activity };
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // FM Tier 0 context bundle — one call gives FM everything it needs to triage.
+  // Accessible to both workspace members (user) and device tokens (daemon/FM).
+  // ---------------------------------------------------------------------------
+
+  fastify.get<{ Params: { workspaceId: string } }>(
+    '/workspaces/:workspaceId/context',
+    { preHandler: requireDevice },
+    async (req) => {
+      const device = getDevice(req);
+      const workspaceId = req.params.workspaceId;
+
+      const [
+        docs,
+        goals,
+        agents,
+        instances,
+        inboxTasks,
+        recentHistory,
+        dispatcherHistory,
+      ] = await Promise.all([
+        // Active docs in the FM-critical categories
+        db
+          .select()
+          .from(schema.workspaceDocs)
+          .where(
+            and(
+              eq(schema.workspaceDocs.workspaceId, workspaceId),
+              eq(schema.workspaceDocs.status, 'active'),
+              inArray(schema.workspaceDocs.category, [...CONTEXT_DOC_CATEGORIES]),
+            ),
+          )
+          .orderBy(asc(schema.workspaceDocs.updatedAt)),
+
+        // Active goals
+        db
+          .select()
+          .from(schema.goals)
+          .where(
+            and(
+              eq(schema.goals.workspaceId, workspaceId),
+              eq(schema.goals.status, 'active'),
+            ),
+          )
+          .orderBy(asc(schema.goals.createdAt)),
+
+        // Agents scoped to this workspace
+        db
+          .select()
+          .from(schema.agents)
+          .where(eq(schema.agents.workspaceId, workspaceId))
+          .orderBy(asc(schema.agents.name)),
+
+        // Live agent instances (spawning | running | idle)
+        db
+          .select()
+          .from(schema.agentInstances)
+          .where(
+            and(
+              eq(schema.agentInstances.workspaceId, workspaceId),
+              inArray(schema.agentInstances.status, ['spawning', 'running', 'idle']),
+            ),
+          )
+          .orderBy(desc(schema.agentInstances.startedAt)),
+
+        // FM inbox: tasks awaiting dispatcher action
+        db
+          .select()
+          .from(schema.tasks)
+          .where(
+            and(
+              eq(schema.tasks.workspaceId, workspaceId),
+              eq(schema.tasks.status, 'pending_dispatcher_action'),
+            ),
+          )
+          .orderBy(asc(schema.tasks.createdAt)),
+
+        // Last N history events for this workspace
+        db
+          .select()
+          .from(schema.taskHistory)
+          .where(eq(schema.taskHistory.workspaceId, workspaceId))
+          .orderBy(desc(schema.taskHistory.createdAt))
+          .limit(CONTEXT_HISTORY_LIMIT),
+
+        // Dispatcher-specific history (task.assigned, task.commented events from dispatcher)
+        db
+          .select()
+          .from(schema.taskHistory)
+          .where(
+            and(
+              eq(schema.taskHistory.workspaceId, workspaceId),
+              eq(schema.taskHistory.source, `device:${device.id}`),
+            ),
+          )
+          .orderBy(desc(schema.taskHistory.createdAt))
+          .limit(CONTEXT_DISPATCHER_LIMIT),
+      ]);
+
+      // Queue depth summary — count tasks by status for FM bottleneck detection
+      const allTasks = await db
+        .select({ status: schema.tasks.status })
+        .from(schema.tasks)
+        .where(eq(schema.tasks.workspaceId, workspaceId));
+
+      const queueDepth: Record<string, number> = {};
+      for (const t of allTasks) {
+        queueDepth[t.status] = (queueDepth[t.status] ?? 0) + 1;
+      }
+
+      return {
+        workspaceId,
+        docs,
+        goals,
+        agents,
+        liveInstances: instances,
+        inboxTasks,
+        recentHistory,
+        dispatcherHistory,
+        queueDepth,
+      };
     },
   );
 
