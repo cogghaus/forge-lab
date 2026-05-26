@@ -106,6 +106,15 @@ export interface HubActivityEvent {
   createdAt: string;
 }
 
+export interface HubRuntimeConfig {
+  id: string;
+  userId: string;
+  runtimeId: string;
+  name: string;
+  config: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface HubDevice {
   id: string;
   name: string;
