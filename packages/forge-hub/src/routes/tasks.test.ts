@@ -1370,3 +1370,130 @@ describe('GET+POST /workspaces/:wsId/tasks/stale-assigned', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /tasks/:id/fail
+// ---------------------------------------------------------------------------
+
+describe('POST /tasks/:id/fail', () => {
+  let hub: Hub;
+  let cookie: string;
+  let deviceToken: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: testConfig });
+    const admin = await setupAdmin(hub);
+    cookie = admin.cookie;
+    const dev = await registerDevice(hub, cookie, 'test-device');
+    deviceToken = dev.token;
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  /** Create and claim a task — returns the task in in_progress state. */
+  async function createAndClaimTask(): Promise<string> {
+    const taskId = await createTask(hub, cookie);
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    return taskId;
+  }
+
+  it('device can fail its own in_progress task', async () => {
+    const taskId = await createAndClaimTask();
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { reason: 'spawn failed: ENOENT' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('failed');
+  });
+
+  it('fail writes task.failed history event with reason', async () => {
+    const taskId = await createAndClaimTask();
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { reason: 'runtime crash' },
+    });
+
+    const history = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    const failEvents = history.filter((h) => h.eventName === 'task.failed');
+    // Exactly one task.failed event — guards against duplicate writes from race condition
+    expect(failEvents).toHaveLength(1);
+    const payload = failEvents[0]?.payload as Record<string, unknown> | undefined;
+    expect(payload?.['reason']).toBe('runtime crash');
+  });
+
+  it('fail with no reason still succeeds', async () => {
+    const taskId = await createAndClaimTask();
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('failed');
+  });
+
+  it('returns 409 when task is not in_progress', async () => {
+    const taskId = await createTask(hub, cookie);
+    // Task is in pending_agent, not in_progress
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('not_in_progress');
+  });
+
+  it('returns 403 when device did not claim the task', async () => {
+    const taskId = await createAndClaimTask();
+
+    // Register a different device
+    const other = await registerDevice(hub, cookie, 'other-device');
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${other.token}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('not_assigned_to_you');
+  });
+
+  it('returns 404 for unknown task', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/fl-9999/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 401 when no device token provided', async () => {
+    const taskId = await createAndClaimTask();
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { cookie }, // user session, not device token
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
