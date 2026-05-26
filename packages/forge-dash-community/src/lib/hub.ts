@@ -166,3 +166,21 @@ export interface HubDispatcherLog {
 export interface HubTaskWithParent extends HubTask {
   parentId: string | null;
 }
+
+export type DocCategory = 'architecture' | 'api' | 'pattern' | 'adr' | 'agent' | 'feature' | 'runbook';
+export type DocStatus = 'active' | 'archived' | 'superseded';
+
+export interface HubWorkspaceDoc {
+  id: string;
+  workspaceId: string;
+  key: string;
+  title: string;
+  content: string;
+  category: DocCategory;
+  status: DocStatus;
+  supersededById: string | null;
+  supersededReason: string | null;
+  updatedBy: string;
+  updatedAt: string;
+  createdAt: string;
+}
