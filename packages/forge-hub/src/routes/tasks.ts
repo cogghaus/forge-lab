@@ -504,7 +504,7 @@ export function registerTaskRoutes(
         return;
       }
       const { workspaceId } = req.params;
-      const { ttlMinutes } = StaleQuerySchema.parse(req.query ?? {});
+      const { ttlMinutes } = StaleQuerySchema.parse(req.query);
 
       const cutoff = new Date(Date.now() - ttlMinutes * 60 * 1000);
       const source = `device:${device.id}`;

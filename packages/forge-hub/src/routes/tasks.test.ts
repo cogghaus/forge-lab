@@ -1094,15 +1094,17 @@ describe('GET+POST /workspaces/:wsId/tasks/stale-assigned', () => {
     await hub.close();
   });
 
-  it('GET returns empty list when no stale tasks', async () => {
+  it('GET returns empty list when no stale tasks and includes ttlMinutes + cutoff', async () => {
     const res = await hub.fastify.inject({
       method: 'GET',
       url: `/workspaces/${workspaceId}/tasks/stale-assigned?ttlMinutes=30`,
       headers: { authorization: `Bearer ${fmToken}` },
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { tasks: unknown[] };
+    const body = res.json() as { tasks: unknown[]; ttlMinutes: number; cutoff: string };
     expect(body.tasks).toHaveLength(0);
+    expect(body.ttlMinutes).toBe(30);
+    expect(typeof body.cutoff).toBe('string'); // ISO date serialized
   });
 
   it('GET returns task assigned beyond ttl', async () => {
@@ -1243,6 +1245,24 @@ describe('GET+POST /workspaces/:wsId/tasks/stale-assigned', () => {
       .where(eq(schema.tasks.id, ws2TaskId))
       .get();
     expect(task?.status).toBe('assigned'); // untouched
+  });
+
+  it('GET invalid ttlMinutes returns 400', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned?ttlMinutes=0`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET ttlMinutes exceeding max returns 400', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned?ttlMinutes=1441`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('GET no token returns 401', async () => {
