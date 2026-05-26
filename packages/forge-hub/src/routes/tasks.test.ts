@@ -1195,6 +1195,7 @@ describe('GET+POST /workspaces/:wsId/tasks/stale-assigned', () => {
     expect(reqEvent).toBeDefined();
     const payload = reqEvent?.payload as Record<string, unknown> | undefined;
     expect(payload?.['reason']).toBe('stale_assignment');
+    expect(payload?.['ttlMinutes']).toBe(30);
   });
 
   it('POST requeue worker device returns 403', async () => {
@@ -1242,5 +1243,21 @@ describe('GET+POST /workspaces/:wsId/tasks/stale-assigned', () => {
       .where(eq(schema.tasks.id, ws2TaskId))
       .get();
     expect(task?.status).toBe('assigned'); // untouched
+  });
+
+  it('GET no token returns 401', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned`,
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('POST requeue no token returns 401', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/stale-assigned/requeue`,
+    });
+    expect(res.statusCode).toBe(401);
   });
 });
