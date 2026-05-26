@@ -31,6 +31,23 @@ const ConfigSchema = z.object({
   // PersonalityRegistry (see @forge-lab/agents built-in personalities).
   // Defaults to 'architect' — the most general built-in personality.
   defaultAgentId: z.string().default('architect'),
+  // When true, daemon operates as the FM orchestrator (dispatcher mode):
+  // polls pending_dispatcher_action tasks, spawns FM agent, does not claim
+  // worker tasks. Requires workspaceId to be set.
+  // Same boolean-preprocess pattern as skipPermissions (avoids Boolean('false')===true).
+  dispatcherMode: z.preprocess(
+    (val) => {
+      if (val === undefined || val === '') return false;
+      if (val === 'false' || val === '0') return false;
+      return Boolean(val);
+    },
+    z.boolean(),
+  ),
+  // Stale assignment TTL in minutes used by the dispatcher to requeue tasks
+  // that have been assigned but not claimed within this window. Default: 30.
+  staleTtlMinutes: z.coerce.number().int().min(1).optional(),
+  // Maximum concurrent task instances for worker daemons. Default: 1.
+  maxConcurrentTasks: z.coerce.number().int().min(1).optional(),
 });
 
 export type DaemonConfig = z.infer<typeof ConfigSchema>;
@@ -44,5 +61,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     skipPermissions: env['FORGE_DAEMON_SKIP_PERMISSIONS'],
     workspaceId: env['FORGE_DAEMON_WORKSPACE_ID'],
     defaultAgentId: env['FORGE_DAEMON_AGENT_ID'],
+    dispatcherMode: env['FORGE_DAEMON_DISPATCHER_MODE'],
+    staleTtlMinutes: env['FORGE_DAEMON_STALE_TTL_MINUTES'],
+    maxConcurrentTasks: env['FORGE_DAEMON_MAX_CONCURRENT_TASKS'],
   });
 }
