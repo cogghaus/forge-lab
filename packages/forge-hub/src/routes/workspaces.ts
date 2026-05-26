@@ -389,4 +389,57 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
       return { ok: true };
     },
   );
+
+  // ---------------------------------------------------------------------------
+  // GET /workspaces/:workspaceId/dispatcher-log
+  // Returns recent dispatcher comments + inbox count for the FM triage dashboard.
+  // Unlike GET /workspaces/:id/context (device-only), this endpoint accepts
+  // workspace member auth so the dash can surface FM decisions without a device token.
+  // ---------------------------------------------------------------------------
+
+  const DISPATCHER_LOG_LIMIT = 50;
+
+  fastify.get<{ Params: { workspaceId: string } }>(
+    '/workspaces/:workspaceId/dispatcher-log',
+    { preHandler: requireWorkspaceMember(db) },
+    async (req) => {
+      const { id: workspaceId } = getWorkspace(req);
+
+      const [comments, inboxTasks] = await Promise.all([
+        // Recent dispatcher comments with task title for context
+        db
+          .select({
+            id: schema.taskComments.id,
+            taskId: schema.taskComments.taskId,
+            taskTitle: schema.tasks.title,
+            body: schema.taskComments.body,
+            authorId: schema.taskComments.authorId,
+            createdAt: schema.taskComments.createdAt,
+          })
+          .from(schema.taskComments)
+          .innerJoin(schema.tasks, eq(schema.taskComments.taskId, schema.tasks.id))
+          .where(
+            and(
+              eq(schema.taskComments.workspaceId, workspaceId),
+              eq(schema.taskComments.authorType, 'dispatcher'),
+            ),
+          )
+          .orderBy(desc(schema.taskComments.createdAt))
+          .limit(DISPATCHER_LOG_LIMIT),
+
+        // Count pending_dispatcher_action tasks (FM inbox size)
+        db
+          .select({ id: schema.tasks.id })
+          .from(schema.tasks)
+          .where(
+            and(
+              eq(schema.tasks.workspaceId, workspaceId),
+              eq(schema.tasks.status, 'pending_dispatcher_action'),
+            ),
+          ),
+      ]);
+
+      return { comments, inboxCount: inboxTasks.length };
+    },
+  );
 }

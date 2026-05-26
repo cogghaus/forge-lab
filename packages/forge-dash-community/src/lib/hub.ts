@@ -146,3 +146,23 @@ export interface HubDevice {
   deviceType: 'worker' | 'orchestrator';
   agentId: string | null;
 }
+
+/** A single dispatcher decision comment from the FM triage log. */
+export interface HubDispatcherComment {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  body: string;
+  authorId: string;
+  createdAt: string;
+}
+
+export interface HubDispatcherLog {
+  comments: HubDispatcherComment[];
+  inboxCount: number;
+}
+
+/** Shape returned by HubTask with parentId field. */
+export interface HubTaskWithParent extends HubTask {
+  parentId: string | null;
+}
