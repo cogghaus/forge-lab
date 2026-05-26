@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import { createHub, type Hub } from '../app.js';
 import { schema } from '@forge-lab/core';
 import type { HubConfig } from '../config.js';
@@ -1634,5 +1635,59 @@ describe('GET /tasks/stats', () => {
       headers: { authorization: `Bearer ${deviceToken}` },
     });
     expect(res.statusCode).toBe(401);
+  });
+
+  it('excludes tasks in workspaces the user is not a member of', async () => {
+    // Create a task in a workspace the user owns (via API)
+    const wsRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'My WS', slug: 'my-ws' },
+    });
+    const { id: ownedWsId } = wsRes.json() as { id: string };
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'My task', workspaceId: ownedWsId },
+    });
+
+    // Insert a workspace the user is NOT a member of (owned by admin but no workspace_member row)
+    const userRow = await hub.db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .get();
+    const adminId = userRow!.id;
+    const alienWsId = nanoid();
+    await hub.db.insert(schema.workspaces).values({
+      id: alienWsId,
+      name: 'Alien WS',
+      slug: 'alien-ws',
+      ownerUserId: adminId,
+      updatedAt: new Date(),
+      createdAt: new Date(),
+    });
+    // Note: intentionally NOT inserting into workspace_members — stats must NOT include this task
+    await hub.db.insert(schema.tasks).values({
+      id: 'alien-task-1',
+      projectPrefix: 'al',
+      title: 'Alien task',
+      status: 'completed',
+      workspaceId: alienWsId,
+      createdBy: `user:${adminId}`,
+      updatedAt: new Date(),
+      createdAt: new Date(),
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { total: number };
+    // Should see only the 1 task in the owned workspace, NOT the alien task
+    expect(body.total).toBe(1);
   });
 });
