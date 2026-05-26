@@ -21,6 +21,14 @@ const PatchTaskBodySchema = z.object({
   status: z.enum(['cancelled', 'pending_agent']),
 });
 
+const AssignTaskBodySchema = z.object({
+  /** The agentId (agents.name) to route this task to. */
+  agentId: z.string().min(1).max(100),
+});
+
+/** Task statuses FM is allowed to route from. */
+const FM_ASSIGNABLE_STATUSES = ['pending_dispatcher_action', 'pending_agent'] as const;
+
 const USER_ALLOWED_TRANSITIONS: Record<string, string[]> = {
   pending_agent: ['cancelled'],
   pending_design: ['cancelled'],
@@ -153,6 +161,13 @@ export function registerTaskRoutes(
         return;
       }
 
+      // AgentId routing: if the device has a registered agentId, it can claim tasks
+      // assigned to that agentId OR unrouted tasks (assignedAgentId IS NULL).
+      // If the device has no agentId, it can only claim unrouted tasks.
+      const agentIdFilter = device.agentId
+        ? or(isNull(schema.tasks.assignedAgentId), eq(schema.tasks.assignedAgentId, device.agentId))
+        : isNull(schema.tasks.assignedAgentId);
+
       const claimed = await db
         .update(schema.tasks)
         .set({
@@ -165,6 +180,7 @@ export function registerTaskRoutes(
             eq(schema.tasks.id, id),
             inArray(schema.tasks.status, ['pending_agent', 'assigned']),
             or(isNull(schema.tasks.assignedDeviceId), eq(schema.tasks.assignedDeviceId, device.id)),
+            agentIdFilter,
           ),
         )
         .returning({ id: schema.tasks.id });
@@ -188,6 +204,69 @@ export function registerTaskRoutes(
         payload: { taskId: id, deviceId: device.id },
       });
       await reply.send({ ok: true });
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // FM orchestrator: assign a task to a specific agent
+  // Only orchestrator-type devices may call this endpoint.
+  // ---------------------------------------------------------------------------
+
+  fastify.patch<{ Params: { workspaceId: string; taskId: string } }>(
+    '/workspaces/:workspaceId/tasks/:taskId/assign',
+    { preHandler: requireDevice },
+    async (req, reply) => {
+      const device = getDevice(req);
+      if (device.deviceType !== 'orchestrator') {
+        await reply.code(403).send({ error: 'orchestrator_required' });
+        return;
+      }
+      const workspaceId = req.params.workspaceId;
+      const taskId = TaskIdSchema.parse(req.params.taskId);
+      const body = AssignTaskBodySchema.parse(req.body);
+
+      const task = await db
+        .select({ id: schema.tasks.id, status: schema.tasks.status })
+        .from(schema.tasks)
+        .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)))
+        .get();
+      if (!task) {
+        await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+      if (!(FM_ASSIGNABLE_STATUSES as readonly string[]).includes(task.status)) {
+        await reply.code(422).send({ error: 'not_assignable', status: task.status });
+        return;
+      }
+
+      const source = `device:${device.id}`;
+      await db
+        .update(schema.tasks)
+        .set({
+          assignedAgentId: body.agentId,
+          assignedAt: new Date(),
+          status: 'assigned',
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.tasks.id, taskId));
+
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId,
+        eventName: 'task.assigned',
+        source,
+        payload: { agentId: body.agentId, ...maybeRunId(req) },
+        workspaceId,
+      });
+      bus.emit({
+        id: nanoid(),
+        name: 'task.assigned',
+        occurredAt: new Date(),
+        source,
+        payload: { taskId, workspaceId, agentId: body.agentId },
+      });
+
+      return { ok: true };
     },
   );
 

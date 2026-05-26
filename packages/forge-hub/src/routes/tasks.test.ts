@@ -705,3 +705,324 @@ describe('task goalId linking', () => {
     expect((res.json() as { error: string }).error).toBe('goal_not_found');
   });
 });
+
+// ---------------------------------------------------------------------------
+// PATCH /workspaces/:workspaceId/tasks/:taskId/assign  (FM orchestrator endpoint)
+// ---------------------------------------------------------------------------
+
+describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  async function registerOrchestratorDevice(): Promise<{ token: string }> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' },
+    });
+    return { token: (res.json() as { token: string }).token };
+  }
+
+  async function registerWorkerDevice(agentId: string): Promise<{ token: string }> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: agentId, agentId, deviceType: 'worker' },
+    });
+    return { token: (res.json() as { token: string }).token };
+  }
+
+  async function createWsTask(status = 'pending_dispatcher_action'): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'fm', title: 'FM task' },
+    });
+    const id = (res.json() as { id: string }).id;
+    if (status !== 'pending_agent') {
+      await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
+    }
+    return id;
+  }
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('orchestrator can assign a pending_dispatcher_action task', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createWsTask('pending_dispatcher_action');
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+
+    const task = await hub.db
+      .select({
+        status: schema.tasks.status,
+        assignedAgentId: schema.tasks.assignedAgentId,
+        assignedAt: schema.tasks.assignedAt,
+      })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.status).toBe('assigned');
+    expect(task?.assignedAgentId).toBe('architect');
+    expect(task?.assignedAt).toBeInstanceOf(Date);
+  });
+
+  it('orchestrator can assign a pending_agent task', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createWsTask('pending_agent');
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'furnace' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const task = await hub.db
+      .select({ status: schema.tasks.status, assignedAgentId: schema.tasks.assignedAgentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.status).toBe('assigned');
+    expect(task?.assignedAgentId).toBe('furnace');
+  });
+
+  it('worker device (non-orchestrator) gets 403', async () => {
+    const { token: workerToken } = await registerWorkerDevice('architect');
+    const taskId = await createWsTask('pending_dispatcher_action');
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${workerToken}` },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+  });
+
+  it('returns 422 for task in non-assignable status (in_progress)', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createWsTask('in_progress');
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error).toBe('not_assignable');
+  });
+
+  it('returns 404 for task in wrong workspace', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const ws2Res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'WS2', slug: 'ws2-assign' },
+    });
+    const ws2Id = (ws2Res.json() as { id: string }).id;
+    const taskId = await createWsTask('pending_dispatcher_action');
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${ws2Id}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('requires device auth — user session returns 401', async () => {
+    const taskId = await createWsTask('pending_dispatcher_action');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('records task.assigned history event', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createWsTask('pending_dispatcher_action');
+
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'architect' },
+    });
+
+    const histRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks/${taskId}/history`,
+      headers: { cookie },
+    });
+    const { history } = histRes.json() as { history: { eventName: string; payload: unknown }[] };
+    const assignEvent = history.find((h) => h.eventName === 'task.assigned');
+    expect(assignEvent).toBeDefined();
+    const payload = assignEvent?.payload as Record<string, unknown> | undefined;
+    expect(payload?.['agentId']).toBe('architect');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claim agentId routing
+// ---------------------------------------------------------------------------
+
+describe('/tasks/:id/claim — agentId routing', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  async function registerDeviceWithAgent(
+    agentId: string | null,
+  ): Promise<{ token: string }> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: {
+        name: agentId ?? 'untyped',
+        ...(agentId !== null && { agentId }),
+      },
+    });
+    return { token: (res.json() as { token: string }).token };
+  }
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('device with matching agentId can claim assigned task', async () => {
+    const { token } = await registerDeviceWithAgent('architect');
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'fm', title: 'Architect task' },
+    });
+    const taskId = (taskRes.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'assigned', assignedAgentId: 'architect' })
+      .where(eq(schema.tasks.id, taskId));
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('device with mismatched agentId cannot claim task assigned to different agent', async () => {
+    const { token } = await registerDeviceWithAgent('furnace');
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'fm', title: 'Architect task' },
+    });
+    const taskId = (taskRes.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'assigned', assignedAgentId: 'architect' })
+      .where(eq(schema.tasks.id, taskId));
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('device with agentId can claim unrouted task (assignedAgentId=null)', async () => {
+    const { token } = await registerDeviceWithAgent('architect');
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Unrouted task' },
+    });
+    const taskId = (taskRes.json() as { id: string }).id;
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('device without agentId can claim unrouted task', async () => {
+    const { token } = await registerDeviceWithAgent(null);
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Unrouted task' },
+    });
+    const taskId = (taskRes.json() as { id: string }).id;
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('device without agentId cannot claim a routed task', async () => {
+    const { token } = await registerDeviceWithAgent(null);
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'fm', title: 'Routed task' },
+    });
+    const taskId = (taskRes.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'assigned', assignedAgentId: 'architect' })
+      .where(eq(schema.tasks.id, taskId));
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+});
