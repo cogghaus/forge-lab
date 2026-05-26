@@ -5,6 +5,7 @@ import os from 'node:os';
 import { createHub, type Hub } from '@forge-lab/hub';
 import { loadBuiltinRegistry } from '@forge-lab/agents';
 import { Daemon } from './daemon.js';
+import { HubClient } from './hub-client.js';
 import { MockRuntime } from './runtime/mock.js';
 import { RuntimeRegistry } from './runtime/registry.js';
 
@@ -619,7 +620,6 @@ describe('HubClient: FM orchestrator methods', () => {
   });
 
   it('getWorkspaceContext returns correct shape', async () => {
-    const { HubClient } = await import('./hub-client.js');
     const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
     const ctx = await client.getWorkspaceContext(workspaceId);
 
@@ -631,10 +631,9 @@ describe('HubClient: FM orchestrator methods', () => {
   });
 
   it('assignTask routes task to agentId', async () => {
-    const { HubClient } = await import('./hub-client.js');
     const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
 
-    // Create a task in pending_dispatcher_action status
+    // Task created in pending_agent status — pending_agent is in FM_ASSIGNABLE_STATUSES
     const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
@@ -642,19 +641,35 @@ describe('HubClient: FM orchestrator methods', () => {
     });
     const { id: taskId } = (await taskRes.json()) as { id: string };
 
-    // Manually set to pending_dispatcher_action via hub DB isn't possible through API,
-    // but pending_agent is assignable too per FM_ASSIGNABLE_STATUSES.
     await client.assignTask(workspaceId, taskId, 'architect');
 
-    // Verify task is now assigned
     const task = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
     const body = (await task.json()) as { status: string; assignedAgentId: string };
     expect(body.status).toBe('assigned');
     expect(body.assignedAgentId).toBe('architect');
   });
 
+  it('assignTask with worker token throws (orchestrator_required)', async () => {
+    // Register a worker device
+    const workerRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'worker', agentId: 'worker', deviceType: 'worker' }),
+    });
+    const workerToken = ((await workerRes.json()) as { token: string }).token;
+    const workerClient = new HubClient({ hubUrl, deviceToken: workerToken });
+
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'fw', title: 'Worker assign attempt' }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+
+    await expect(workerClient.assignTask(workspaceId, taskId, 'architect')).rejects.toThrow('403');
+  });
+
   it('getStaleAssigned returns tasks past ttl', async () => {
-    const { HubClient } = await import('./hub-client.js');
     const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
 
     const result = await client.getStaleAssigned(workspaceId, 30);
@@ -664,7 +679,6 @@ describe('HubClient: FM orchestrator methods', () => {
   });
 
   it('requeueStaleAssigned returns requeued count', async () => {
-    const { HubClient } = await import('./hub-client.js');
     const client = new HubClient({ hubUrl, deviceToken: orchestratorToken });
 
     const result = await client.requeueStaleAssigned(workspaceId, 30);
