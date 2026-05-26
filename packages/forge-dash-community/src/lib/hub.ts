@@ -167,6 +167,16 @@ export interface HubTaskWithParent extends HubTask {
   parentId: string | null;
 }
 
+/** A comment on a task — posted by a user, agent, dispatcher, or system. */
+export interface HubTaskComment {
+  id: string;
+  taskId: string;
+  authorId: string;
+  authorType: 'user' | 'agent' | 'dispatcher' | 'system';
+  body: string;
+  createdAt: string;
+}
+
 export type DocCategory = 'architecture' | 'api' | 'pattern' | 'adr' | 'agent' | 'feature' | 'runbook';
 export type DocStatus = 'active' | 'archived' | 'superseded';
 
