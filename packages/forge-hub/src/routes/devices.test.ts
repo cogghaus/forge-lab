@@ -5,32 +5,9 @@ import { nanoid } from 'nanoid';
 import { schema } from '@forge-lab/core';
 import { createSession } from '../auth/sessions.js';
 import { hashPassword } from '../auth/password.js';
+import { TEST_HUB_CONFIG, setupAdmin } from '../test-utils.js';
 
-const testConfig: HubConfig = {
-  port: 0,
-  host: '127.0.0.1',
-  databaseUrl: ':memory:',
-  sessionSecret: 'test-secret-with-at-least-32-characters-xxxx',
-  sessionTtlHours: 24,
-  bcryptCost: 10,
-  cookieSecure: false,
-};
-
-async function setupAdmin(hub: Hub): Promise<{ cookie: string }> {
-  await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload: { email: 'admin@example.com', password: 'password123' },
-  });
-  const loginRes = await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/login',
-    payload: { email: 'admin@example.com', password: 'password123' },
-  });
-  const setCookie = loginRes.headers['set-cookie'];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!;
-  return { cookie };
-}
+const testConfig: HubConfig = TEST_HUB_CONFIG;
 
 describe('POST /devices', () => {
   let hub: Hub;

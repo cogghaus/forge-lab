@@ -1,37 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createHub, type Hub } from '../app.js';
 import type { HubConfig } from '../config.js';
+import { TEST_HUB_CONFIG, setupAdmin } from '../test-utils.js';
 
-const testConfig: HubConfig = {
-  port: 0,
-  host: '127.0.0.1',
-  databaseUrl: ':memory:',
-  sessionSecret: 'test-secret-with-at-least-32-characters-xxxx',
-  sessionTtlHours: 24,
-  bcryptCost: 10,
-  cookieSecure: false,
-};
-
-async function registerAndLogin(
-  hub: Hub,
-  email = 'admin@example.com',
-  password = 'password123',
-): Promise<{ cookie: string; id: string }> {
-  const regRes = await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/register',
-    payload: { email, password },
-  });
-  const { id } = regRes.json() as { id: string };
-  const loginRes = await hub.fastify.inject({
-    method: 'POST',
-    url: '/auth/login',
-    payload: { email, password },
-  });
-  const setCookie = loginRes.headers['set-cookie'];
-  const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!;
-  return { cookie, id };
-}
+const testConfig: HubConfig = TEST_HUB_CONFIG;
 
 describe('POST /auth/register', () => {
   let hub: Hub;
@@ -153,7 +125,7 @@ describe('GET /auth/me', () => {
   });
 
   it('returns user id, email, and role when authenticated', async () => {
-    const { cookie, id } = await registerAndLogin(hub);
+    const { cookie, id } = await setupAdmin(hub);
     const res = await hub.fastify.inject({
       method: 'GET',
       url: '/auth/me',
@@ -196,7 +168,7 @@ describe('POST /auth/logout', () => {
   });
 
   it('clears session cookie and returns ok', async () => {
-    const { cookie } = await registerAndLogin(hub);
+    const { cookie } = await setupAdmin(hub);
     const logoutRes = await hub.fastify.inject({
       method: 'POST',
       url: '/auth/logout',

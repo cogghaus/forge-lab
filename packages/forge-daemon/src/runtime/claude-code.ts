@@ -33,7 +33,7 @@ export interface SpawnedProcess {
   readonly killed: boolean;
 }
 
-export const defaultSpawner: RuntimeSpawner = {
+const defaultSpawner: RuntimeSpawner = {
   spawn(command, args, options) {
     const child: ChildProcess = nodeSpawn(command, [...args], {
       cwd: options.cwd,
