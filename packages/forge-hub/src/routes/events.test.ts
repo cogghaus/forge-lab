@@ -130,6 +130,58 @@ describe('GET /events', () => {
     expect(body).toContain(workspaceId);
   });
 
+  it('delivers a task.cancelled event when a task is cancelled', async () => {
+    // Regression: task.cancelled was emitted by the hub but not included in the
+    // TASK_EVENTS subscription list in use-hub-events.ts, so the dashboard never
+    // refreshed after a cancel. This test verifies the hub correctly emits the event.
+    const controller = new AbortController();
+    const chunks: string[] = [];
+
+    // Create a task in the workspace so we have something to cancel.
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'evt', title: 'Cancel me' },
+    });
+    const { id: taskId } = taskRes.json() as { id: string };
+
+    const streamDone = fetch(`${address}/events?workspaceId=${workspaceId}`, {
+      headers: { cookie },
+      signal: controller.signal,
+    }).then(async (res) => {
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(decoder.decode(value, { stream: true }));
+        }
+      } catch { /* AbortError — connection closed intentionally */ }
+    });
+
+    // Wait for SSE connection to establish.
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Cancel the task via PATCH — hub should emit task.cancelled on the bus.
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+      headers: { cookie },
+      payload: { status: 'cancelled' },
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+    controller.abort();
+    await streamDone;
+
+    const body = chunks.join('');
+    expect(body).toContain('event: task.cancelled');
+    expect(body).toContain(taskId);
+  });
+
   it('does not deliver events for workspaces the user is not a member of', async () => {
     const controller = new AbortController();
     const chunks: string[] = [];
