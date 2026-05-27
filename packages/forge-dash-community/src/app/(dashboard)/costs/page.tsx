@@ -252,7 +252,7 @@ export default async function CostsPage() {
             className="font-mono text-[11px]"
             style={{ color: 'rgba(245,240,235,0.22)' }}
           >
-            Per-task LLM token usage and cost attribution will appear here once agent runtimes report usage data.
+            Per-task token usage and cost attribution appear here once agents report usage. Requires forge-daemon v2+ with token tracking enabled.
           </p>
         </div>
       </section>

@@ -161,7 +161,7 @@ export default async function SkillsPage() {
             className="font-mono text-[11px]"
             style={{ color: 'rgba(245,240,235,0.18)' }}
           >
-            Create a config via the API to define agent personality and skill parameters.
+            Runtime configs are created automatically when agents connect. No action needed — configs appear here once your first agent runs.
           </p>
         </div>
       ) : (

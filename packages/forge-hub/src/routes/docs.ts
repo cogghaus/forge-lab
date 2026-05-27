@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
+import { hasUniqueConstraint } from '../db/errors.js';
 import {
   getDevice,
   getUser,
@@ -101,7 +102,7 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
           updatedBy,
         });
       } catch (err) {
-        if (err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
+        if (hasUniqueConstraint(err)) {
           await reply.code(409).send({ error: 'key_taken' });
           return;
         }
