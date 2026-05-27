@@ -36,8 +36,18 @@ export async function GET(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: 'hub_unreachable' }, { status: 502 });
   }
 
-  if (!hubRes.ok || !hubRes.body) {
-    return new Response(null, { status: hubRes.status });
+  if (!hubRes.ok) {
+    // Preserve the hub error body (JSON) so the client gets a useful error
+    // message instead of an empty response. This also prevents EventSource
+    // from entering a reconnect loop on 403/4xx — it receives a body and can
+    // inspect the status rather than treating the empty response as a network error.
+    const body = hubRes.body ?? null;
+    const ct = hubRes.headers.get('content-type') ?? 'application/json';
+    return new Response(body, { status: hubRes.status, headers: { 'Content-Type': ct } });
+  }
+
+  if (!hubRes.body) {
+    return new Response(null, { status: 502 });
   }
 
   // Pipe the hub SSE stream directly to the browser.

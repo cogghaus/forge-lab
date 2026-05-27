@@ -168,6 +168,38 @@ describe('GET /events', () => {
     expect(chunks.join('')).not.toContain('event: task.created');
   });
 
+  it('unsubscribes from EventBus when the client disconnects', async () => {
+    const controller = new AbortController();
+
+    const streamDone = fetch(`${address}/events?workspaceId=${workspaceId}`, {
+      headers: { cookie },
+      signal: controller.signal,
+    }).then(async (res) => {
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      try {
+        for (;;) {
+          const { done } = await reader.read();
+          if (done) break;
+        }
+      } catch { /* AbortError — intentional */ }
+    });
+
+    // Wait for connection to establish (listener added to bus).
+    await new Promise((r) => setTimeout(r, 50));
+    const sizeBefore = hub.bus.size;
+    expect(sizeBefore).toBeGreaterThan(0);
+
+    // Disconnect the client.
+    controller.abort();
+    await streamDone;
+
+    // Give the 'close' event time to fire and the unsubscribe callback to run.
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(hub.bus.size).toBe(sizeBefore - 1);
+  });
+
   it('drops events with no workspaceId in payload', async () => {
     const controller = new AbortController();
     const chunks: string[] = [];

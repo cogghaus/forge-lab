@@ -31,6 +31,18 @@ const HEARTBEAT_MS = 25_000;
  * memberships are forwarded. Events without a workspace context (e.g. unscoped
  * task creation) are silently dropped — they carry no workspace identifier so
  * membership cannot be verified.
+ *
+ * **Known limitations:**
+ * - Workspace membership is resolved once at connection time. If a user is
+ *   added to or removed from a workspace while connected, the change takes
+ *   effect on their next reconnect.
+ * - No per-user connection count limit. In multi-process deployments, a
+ *   connection-flooding defence belongs at the load balancer or reverse proxy
+ *   layer.
+ * - No explicit max-lifetime timeout. Zombie connections (socket hung but
+ *   close event never fires) will accumulate EventBus listeners indefinitely.
+ *   Reverse-proxy read-timeouts (e.g. nginx proxy_read_timeout) are the
+ *   recommended mitigation.
  */
 export function registerEventsRoutes(
   fastify: FastifyInstance,
@@ -67,13 +79,31 @@ export function registerEventsRoutes(
       });
       reply.raw.flushHeaders?.();
 
+      // Swallow write errors after the socket closes; the 'close' handler cleans up.
+      reply.raw.on('error', () => { /* socket closed before write completed */ });
+
       function sendEvent(name: string, data: unknown): void {
-        reply.raw.write(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
+        let serialized: string;
+        try {
+          serialized = JSON.stringify(data);
+        } catch (err) {
+          fastify.log.warn({ err, eventName: name }, 'SSE: could not serialize event payload — skipping');
+          return;
+        }
+        // write() returns false when the internal buffer is full (backpressure).
+        // For SSE we accept this rather than implementing full drain/pause logic:
+        // slow clients will lag but not cause unbounded memory growth because the
+        // EventBus listener does not buffer — it simply drops the write result.
+        reply.raw.write(`event: ${name}\ndata: ${serialized}\n\n`);
       }
 
       // Heartbeat: prevents proxies from dropping the idle connection.
       const heartbeat = setInterval(() => {
-        reply.raw.write(': heartbeat\n\n');
+        try {
+          reply.raw.write(': heartbeat\n\n');
+        } catch {
+          // Socket may have closed between interval fires; cleanup handles it.
+        }
       }, HEARTBEAT_MS);
 
       // EventBus subscription — filter by workspace membership.
