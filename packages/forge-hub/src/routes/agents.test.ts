@@ -293,3 +293,199 @@ describe('/agents routes', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /agents/performance
+// ---------------------------------------------------------------------------
+
+interface AgentPerfAgent {
+  agentId: string;
+  completedCount: number;
+  failedCount: number;
+  inProgressCount: number;
+  totalCount: number;
+  failureRate: number;
+  avgCompletionTimeMs: number | null;
+  throughputPerDay: number;
+}
+
+interface AgentPerfResponse {
+  agents: AgentPerfAgent[];
+  windowDays: number;
+  generatedAt: string;
+}
+
+describe('GET /agents/performance', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...testConfig } });
+    ({ cookie } = await setup(hub));
+    workspaceId = await setupWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('requires auth', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/agents/performance',
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns empty agents array when no tasks have assignedAgentId', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/agents/performance',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as AgentPerfResponse;
+    expect(body.agents).toHaveLength(0);
+    expect(body.windowDays).toBe(30);
+  });
+
+  it('returns correct metrics for an agent with completed and failed tasks', async () => {
+    const now = Date.now();
+    await hub.db.insert(schema.tasks).values([
+      {
+        id: 'fl-001',
+        projectPrefix: 'fl',
+        title: 'Task 1',
+        assignedAgentId: 'architect',
+        assignedAt: new Date(now - 60_000),
+        status: 'completed',
+        completedAt: new Date(now - 30_000),
+        createdBy: 'user:test',
+        workspaceId,
+      },
+      {
+        id: 'fl-002',
+        projectPrefix: 'fl',
+        title: 'Task 2',
+        assignedAgentId: 'architect',
+        assignedAt: new Date(now - 120_000),
+        status: 'completed',
+        completedAt: new Date(now - 60_000),
+        createdBy: 'user:test',
+        workspaceId,
+      },
+      {
+        id: 'fl-003',
+        projectPrefix: 'fl',
+        title: 'Task 3',
+        assignedAgentId: 'architect',
+        status: 'failed',
+        createdBy: 'user:test',
+        workspaceId,
+      },
+    ]);
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/agents/performance',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as AgentPerfResponse;
+    expect(body.agents).toHaveLength(1);
+
+    const agent = body.agents[0]!;
+    expect(agent.agentId).toBe('architect');
+    expect(agent.completedCount).toBe(2);
+    expect(agent.failedCount).toBe(1);
+    expect(agent.inProgressCount).toBe(0);
+    expect(agent.totalCount).toBe(3);
+    // 1 failed out of 3 terminal = 33.33%
+    expect(agent.failureRate).toBe(33.33);
+    expect(agent.avgCompletionTimeMs).toBeGreaterThan(0);
+    expect(agent.throughputPerDay).toBeGreaterThan(0);
+  });
+
+  it('sorts agents by completedCount descending', async () => {
+    const now = Date.now();
+    await hub.db.insert(schema.tasks).values([
+      {
+        id: 'fl-001',
+        projectPrefix: 'fl',
+        title: 'A1',
+        assignedAgentId: 'crucible',
+        status: 'completed',
+        createdBy: 'user:test',
+        workspaceId,
+      },
+      {
+        id: 'fl-002',
+        projectPrefix: 'fl',
+        title: 'A2',
+        assignedAgentId: 'architect',
+        status: 'completed',
+        createdBy: 'user:test',
+        workspaceId,
+      },
+      {
+        id: 'fl-003',
+        projectPrefix: 'fl',
+        title: 'A3',
+        assignedAgentId: 'architect',
+        status: 'completed',
+        createdBy: 'user:test',
+        workspaceId,
+      },
+    ]);
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/agents/performance',
+      headers: { cookie },
+    });
+    const body = res.json() as AgentPerfResponse;
+    expect(body.agents[0]!.agentId).toBe('architect'); // 2 completed > 1
+    expect(body.agents[1]!.agentId).toBe('crucible');
+  });
+
+  it('excludes tasks older than the window', async () => {
+    const now = Date.now();
+    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const tenDaysAgo = now - 10 * 24 * 60 * 60 * 1000;
+
+    await hub.db.insert(schema.tasks).values([
+      {
+        id: 'fl-001',
+        projectPrefix: 'fl',
+        title: 'Recent',
+        assignedAgentId: 'architect',
+        status: 'completed',
+        createdAt: new Date(sevenDaysAgo + 60_000), // within 7d window
+        createdBy: 'user:test',
+        workspaceId,
+      },
+      {
+        id: 'fl-002',
+        projectPrefix: 'fl',
+        title: 'Old',
+        assignedAgentId: 'architect',
+        status: 'completed',
+        createdAt: new Date(tenDaysAgo), // outside 7d window
+        createdBy: 'user:test',
+        workspaceId,
+      },
+    ]);
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/agents/performance?window=7',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as AgentPerfResponse;
+    expect(body.agents).toHaveLength(1);
+    expect(body.agents[0]!.completedCount).toBe(1);
+    expect(body.windowDays).toBe(7);
+  });
+});

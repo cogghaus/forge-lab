@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { hubFetch, type HubTaskStats } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
@@ -143,8 +144,28 @@ export default async function AnalyticsPage() {
   return (
     <div className="max-w-2xl">
       {/* Page header */}
-      <div className="flex items-center gap-3 mb-8">
+      <div className="flex items-center gap-3 mb-6">
         <h1 className="font-mono text-[18px] font-bold">Analytics</h1>
+      </div>
+
+      {/* Tab nav */}
+      <div
+        className="flex gap-1 mb-6 p-1 rounded-lg"
+        style={{ background: 'rgba(255,255,255,0.04)', width: 'fit-content' }}
+      >
+        <span
+          className="font-mono text-[11px] px-3 py-1.5 rounded-md"
+          style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(245,240,235,0.85)' }}
+        >
+          Overview
+        </span>
+        <Link
+          href="/analytics/agents"
+          className="font-mono text-[11px] px-3 py-1.5 rounded-md transition-colors"
+          style={{ color: 'rgba(245,240,235,0.45)' }}
+        >
+          Agent Performance
+        </Link>
       </div>
 
       {/* Top stat cards */}
@@ -162,7 +183,7 @@ export default async function AnalyticsPage() {
           label="Completion rate"
           value={`${stats.completionRate}%`}
           sub={`${stats.completedLast7Days} last 7d`}
-          accent={stats.completionRate >= 75 ? '#2DD4A0' : stats.completionRate >= 40 ? '#F59E0B' : '#F87171'}
+          accent={stats.completionRate >= 50 ? '#2DD4A0' : stats.completionRate >= 20 ? '#F59E0B' : '#F87171'}
         />
         <StatCard
           label="Failed"

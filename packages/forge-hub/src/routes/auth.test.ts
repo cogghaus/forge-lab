@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHub, type Hub } from '../app.js';
 import { TEST_HUB_CONFIG, setupAdmin } from '../test-utils.js';
 
@@ -192,5 +192,95 @@ describe('POST /auth/logout', () => {
     });
     expect(res.statusCode).toBe(200);
     expect((res.json() as { ok: boolean }).ok).toBe(true);
+  });
+});
+
+describe('rate limiting on auth endpoints', () => {
+  let hub: Hub;
+
+  beforeEach(async () => {
+    // Do NOT enable fake timers here — faking setTimeout/setImmediate
+    // disrupts Fastify's internal async plumbing and hangs the hub startup.
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers(); // restore in case the refill test left fake timers active
+    await hub.close();
+  });
+
+  it('returns 429 after 10 POST /auth/login requests from the same IP', async () => {
+    // Exhaust the 10-request bucket. No user registered, so each returns 401.
+    for (let i = 0; i < 10; i++) {
+      const res = await hub.fastify.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { email: 'attacker@example.com', password: 'password123' },
+      });
+      expect(res.statusCode).toBe(401);
+    }
+    // 11th request must be rate-limited.
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'attacker@example.com', password: 'password123' },
+    });
+    expect(res.statusCode).toBe(429);
+    const body = res.json() as { error: string; retryAfterSeconds: number };
+    expect(body.error).toBe('too_many_requests');
+    expect(body.retryAfterSeconds).toBeGreaterThan(0);
+    expect(res.headers['retry-after']).toBeDefined();
+  });
+
+  it('returns 429 after 10 POST /auth/register requests from the same IP', async () => {
+    // Exhaust the bucket. First registration succeeds (201), rest return 403 or 429.
+    for (let i = 0; i < 10; i++) {
+      await hub.fastify.inject({
+        method: 'POST',
+        url: '/auth/register',
+        payload: { email: `user${i}@example.com`, password: 'password123' },
+      });
+    }
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/register',
+      payload: { email: 'user11@example.com', password: 'password123' },
+    });
+    expect(res.statusCode).toBe(429);
+  });
+
+  it('allows requests again after tokens refill', async () => {
+    // Drain the bucket.
+    for (let i = 0; i < 10; i++) {
+      await hub.fastify.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { email: 'attacker@example.com', password: 'password123' },
+      });
+    }
+    // Confirm bucket is exhausted.
+    const denied = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'attacker@example.com', password: 'password123' },
+    });
+    expect(denied.statusCode).toBe(429);
+
+    // Fake only Date (not setTimeout/setImmediate) so the token bucket sees
+    // advanced time without disrupting Fastify's async internals.
+    // One token refills every 60_000ms / 10 = 6_000ms.
+    const now = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now + 6001);
+
+    const allowed = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'attacker@example.com', password: 'password123' },
+    });
+    // Rate limit lifted; request reaches the route handler (returns 401 - no user).
+    expect(allowed.statusCode).toBe(401);
+
+    vi.useRealTimers();
   });
 });
