@@ -449,6 +449,22 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId', () => {
     expect(task?.status).toBe('pending_agent');
   });
 
+  it('cancels a pending_dispatcher_action task', async () => {
+    // Regression: pending_dispatcher_action was missing from USER_ALLOWED_TRANSITIONS,
+    // making FM-queued tasks impossible to cancel through the API.
+    const taskId = await createWsTask();
+    await hub.db.update(schema.tasks).set({ status: 'pending_dispatcher_action' }).where(eq(schema.tasks.id, taskId));
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}`,
+      headers: { cookie },
+      payload: { status: 'cancelled' },
+    });
+    expect(res.statusCode).toBe(200);
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('cancelled');
+  });
+
   it('returns 422 for invalid transition (pending_agent -> pending_agent)', async () => {
     const taskId = await createWsTask();
     const res = await hub.fastify.inject({
