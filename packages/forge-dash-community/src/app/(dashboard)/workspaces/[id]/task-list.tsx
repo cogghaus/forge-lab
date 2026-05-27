@@ -2,9 +2,9 @@
 
 import { Card, CardBody, Chip } from '@heroui/react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useEffect, useState, useTransition } from 'react';
+import { useEffect, useState } from 'react';
 import type { HubGoal, HubTask } from '@/lib/hub';
+import { useHubEvents } from '@/lib/use-hub-events';
 
 const STATUS_COLOR: Record<string, 'default' | 'primary' | 'warning' | 'success' | 'danger'> = {
   pending_agent: 'default',
@@ -42,21 +42,20 @@ interface Props {
 }
 
 export function TaskList({ tasks, workspaceId, goals = [], onTaskClick }: Props) {
-  const router = useRouter();
-  const [, startTransition] = useTransition();
   const [isLive, setIsLive] = useState(false);
 
   const goalMap = new Map(goals.map((g) => [g.id, g.title]));
 
+  // Track whether any active tasks exist (drives the live indicator).
   useEffect(() => {
     const hasActive = tasks.some(
       (t) => t.status === 'pending_agent' || t.status === 'assigned' || t.status === 'in_progress',
     );
     setIsLive(hasActive);
-    if (!hasActive) return;
-    const id = setInterval(() => startTransition(() => router.refresh()), 5000);
-    return () => clearInterval(id);
-  }, [tasks, router]);
+  }, [tasks]);
+
+  // SSE-driven refresh — replaces the 5 s polling interval.
+  useHubEvents(workspaceId);
 
   if (tasks.length === 0) {
     return (

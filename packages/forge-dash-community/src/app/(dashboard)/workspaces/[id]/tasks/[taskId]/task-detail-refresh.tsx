@@ -1,15 +1,17 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useHubEvents } from '@/lib/use-hub-events';
 
-export function TaskDetailRefresh() {
-  const router = useRouter();
+interface Props {
+  workspaceId: string;
+}
 
-  useEffect(() => {
-    const id = setInterval(() => router.refresh(), 5000);
-    return () => clearInterval(id);
-  }, [router]);
-
+/**
+ * Invisible component mounted in the task detail page.
+ * Subscribes to the hub SSE stream scoped to the task's workspace and triggers
+ * a server-component refresh whenever a task lifecycle event arrives.
+ */
+export function TaskDetailRefresh({ workspaceId }: Props) {
+  useHubEvents(workspaceId);
   return null;
 }
