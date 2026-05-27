@@ -2,9 +2,9 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useEffect, useState, useTransition } from 'react';
+import { useEffect, useState } from 'react';
 import type { HubGoal, HubTask } from '@/lib/hub';
+import { useHubEvents } from '@/lib/use-hub-events';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -229,19 +229,16 @@ function GoalRow({ goal, tasks, workspaceId, isLast }: GoalRowProps) {
  * Active tasks trigger a 5-second polling refresh.
  */
 export function GoalKanban({ goals, tasks, workspaceId }: GoalKanbanProps) {
-  const router = useRouter();
-  const [, startTransition] = useTransition();
   const [isLive, setIsLive] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
 
-  // Live refresh when active tasks exist
+  // Track live state for the indicator badge.
   useEffect(() => {
-    const live = hasActiveTasks(tasks);
-    setIsLive(live);
-    if (!live) return;
-    const id = setInterval(() => startTransition(() => router.refresh()), 5000);
-    return () => clearInterval(id);
-  }, [tasks, router]);
+    setIsLive(hasActiveTasks(tasks));
+  }, [tasks]);
+
+  // SSE-driven refresh — replaces the 5 s polling interval.
+  useHubEvents(workspaceId);
 
   // Build goalId -> tasks map
   const goalIdSet = new Set(goals.map((g) => g.id));

@@ -234,7 +234,7 @@ export default async function TaskDetailPage({ params }: Props) {
 
   return (
     <div className="flex flex-col gap-6">
-      {isActive && <TaskDetailRefresh />}
+      <TaskDetailRefresh workspaceId={workspaceId} />
 
       <div className="flex items-center gap-2 flex-wrap">
         <Link href="/workspaces" className="text-default-500 hover:text-foreground text-sm">

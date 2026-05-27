@@ -21,6 +21,7 @@ import { registerDocsRoutes } from './routes/docs.js';
 import { registerInviteRoutes } from './routes/invites.js';
 import { registerGoalRoutes } from './routes/goals.js';
 import { registerWsRoutes } from './routes/ws.js';
+import { registerEventsRoutes } from './routes/events.js';
 import { EventBus } from './events/bus.js';
 
 export interface Hub {
@@ -87,6 +88,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
     registerInviteRoutes(scope, handle.db, config);
     registerGoalRoutes(scope, handle.db);
     registerWsRoutes(scope, handle.db, bus);
+    registerEventsRoutes(scope, handle.db, bus);
     return Promise.resolve();
   });
 
