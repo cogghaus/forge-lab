@@ -197,7 +197,7 @@ function GoalRow({ goal, tasks, workspaceId, isLast }: GoalRowProps) {
                 <div className="flex gap-[3px] flex-1 min-w-0" style={{ height: 10 }}>
                   {Array.from({ length: count }).map((_, i) => (
                     <div
-                      key={i}
+                      key={`fill-${i}`}
                       className="flex-1 rounded-[1px]"
                       style={{
                         background: col.fill,

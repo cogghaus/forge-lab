@@ -197,7 +197,6 @@ export interface HubWorkspaceDoc {
 
 export interface HubAgentPerf {
   agentId: string;
-  agentName: string;
   completedCount: number;
   failedCount: number;
   inProgressCount: number;

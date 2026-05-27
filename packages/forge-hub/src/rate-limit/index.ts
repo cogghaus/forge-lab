@@ -30,6 +30,7 @@ export function createTokenBucketPreHandler(
         .code(429)
         .header('Retry-After', String(retryAfterSeconds))
         .send({ error: 'too_many_requests', retryAfterSeconds });
+      return;
     }
   };
 }

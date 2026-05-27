@@ -42,6 +42,10 @@ export class TokenBucketStore {
    * @param windowMs - Time in milliseconds to refill the bucket from 0 to capacity.
    */
   consume(key: string, capacity: number, windowMs: number): ConsumeResult {
+    if (capacity <= 0 || windowMs <= 0) {
+      // Guard against division by zero; treat as fully rate-limited.
+      return { allowed: false, retryAfterMs: windowMs > 0 ? windowMs : 60_000 };
+    }
     const now = Date.now();
     const refillRatePerMs = capacity / windowMs;
 

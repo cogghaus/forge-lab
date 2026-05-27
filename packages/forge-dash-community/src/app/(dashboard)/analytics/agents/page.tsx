@@ -55,7 +55,7 @@ function AgentCard({ agent }: { agent: HubAgentPerf }) {
           className="font-mono text-[10px] uppercase tracking-[0.1em] font-bold truncate"
           style={{ color: '#FF6B2B' }}
         >
-          {agent.agentName}
+          {agent.agentId}
         </span>
         {agent.inProgressCount > 0 && (
           <span className="relative flex h-1.5 w-1.5 flex-shrink-0">

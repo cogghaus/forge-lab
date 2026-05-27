@@ -300,7 +300,6 @@ describe('/agents routes', () => {
 
 interface AgentPerfAgent {
   agentId: string;
-  agentName: string;
   completedCount: number;
   failedCount: number;
   inProgressCount: number;
@@ -319,10 +318,12 @@ interface AgentPerfResponse {
 describe('GET /agents/performance', () => {
   let hub: Hub;
   let cookie: string;
+  let workspaceId: string;
 
   beforeEach(async () => {
     hub = await createHub({ config: { ...testConfig } });
     ({ cookie } = await setup(hub));
+    workspaceId = await setupWorkspace(hub, cookie);
   });
 
   afterEach(async () => {
@@ -361,6 +362,7 @@ describe('GET /agents/performance', () => {
         status: 'completed',
         completedAt: new Date(now - 30_000),
         createdBy: 'user:test',
+        workspaceId,
       },
       {
         id: 'fl-002',
@@ -371,6 +373,7 @@ describe('GET /agents/performance', () => {
         status: 'completed',
         completedAt: new Date(now - 60_000),
         createdBy: 'user:test',
+        workspaceId,
       },
       {
         id: 'fl-003',
@@ -379,6 +382,7 @@ describe('GET /agents/performance', () => {
         assignedAgentId: 'architect',
         status: 'failed',
         createdBy: 'user:test',
+        workspaceId,
       },
     ]);
 
@@ -393,9 +397,9 @@ describe('GET /agents/performance', () => {
 
     const agent = body.agents[0]!;
     expect(agent.agentId).toBe('architect');
-    expect(agent.agentName).toBe('architect');
     expect(agent.completedCount).toBe(2);
     expect(agent.failedCount).toBe(1);
+    expect(agent.inProgressCount).toBe(0);
     expect(agent.totalCount).toBe(3);
     // 1 failed out of 3 terminal = 33.33%
     expect(agent.failureRate).toBe(33.33);
@@ -413,6 +417,7 @@ describe('GET /agents/performance', () => {
         assignedAgentId: 'crucible',
         status: 'completed',
         createdBy: 'user:test',
+        workspaceId,
       },
       {
         id: 'fl-002',
@@ -421,6 +426,7 @@ describe('GET /agents/performance', () => {
         assignedAgentId: 'architect',
         status: 'completed',
         createdBy: 'user:test',
+        workspaceId,
       },
       {
         id: 'fl-003',
@@ -429,6 +435,7 @@ describe('GET /agents/performance', () => {
         assignedAgentId: 'architect',
         status: 'completed',
         createdBy: 'user:test',
+        workspaceId,
       },
     ]);
 
@@ -456,6 +463,7 @@ describe('GET /agents/performance', () => {
         status: 'completed',
         createdAt: new Date(sevenDaysAgo + 60_000), // within 7d window
         createdBy: 'user:test',
+        workspaceId,
       },
       {
         id: 'fl-002',
@@ -465,6 +473,7 @@ describe('GET /agents/performance', () => {
         status: 'completed',
         createdAt: new Date(tenDaysAgo), // outside 7d window
         createdBy: 'user:test',
+        workspaceId,
       },
     ]);
 
