@@ -34,6 +34,7 @@ const AssignTaskBodySchema = z.object({
 const FM_ASSIGNABLE_STATUSES = ['pending_dispatcher_action', 'pending_agent'] as const;
 
 const USER_ALLOWED_TRANSITIONS: Record<string, string[]> = {
+  pending_dispatcher_action: ['cancelled'],
   pending_agent: ['cancelled'],
   pending_design: ['cancelled'],
   design_review: ['cancelled'],

@@ -10,6 +10,7 @@ const TASK_EVENTS = [
   'task.claimed',
   'task.completed',
   'task.failed',
+  'task.cancelled',
   'task.requeued',
 ] as const;
 
