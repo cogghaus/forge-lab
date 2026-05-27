@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { CreateWorkspaceInputSchema, schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
+import { hasUniqueConstraint } from '../db/errors.js';
 import { requireUser, requireDevice, requireWorkspaceMember, getUser, getWorkspace, getDevice } from '../auth/middleware.js';
 
 const ACTIVITY_LIMIT = 50;
@@ -39,7 +40,7 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
         ownerUserId: user.id,
       });
     } catch (err) {
-      if (err instanceof Error && err.message.includes('UNIQUE constraint failed: workspaces.slug')) {
+      if (hasUniqueConstraint(err, 'workspaces.slug')) {
         await reply.code(409).send({ error: 'slug_taken' });
         return;
       }
