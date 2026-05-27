@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import type { HubActivityEvent } from '@/lib/hub';
 
 // ---------------------------------------------------------------------------
@@ -29,9 +30,14 @@ function relativeTime(ts: string): string {
   return `${Math.floor(diffS / 86400)}d ago`;
 }
 
-/** Strips the "user:" / "device:" prefix from a source string. */
-function shortSource(source: string): string {
-  return source.replace(/^(user|device):/, '');
+/** Strips the "user:" / "device:" prefix and shortens long IDs. */
+function shortSource(source: string, deviceNames?: Map<string, string>): string {
+  if (source.startsWith('device:')) {
+    const id = source.slice(7);
+    return deviceNames?.get(id) ?? id.slice(0, 8);
+  }
+  if (source.startsWith('user:')) return source.slice(5);
+  return source;
 }
 
 // ---------------------------------------------------------------------------
@@ -42,9 +48,13 @@ export interface ActivityStreamPanelProps {
   activity: HubActivityEvent[];
   /** Show pulsing live indicator when tasks are in_progress. */
   isLive?: boolean;
+  /** Workspace ID — when provided, activity items link to task detail. */
+  workspaceId?: string;
+  /** Map of device.id -> device.name for resolving source labels. */
+  deviceNames?: Map<string, string>;
 }
 
-export function ActivityStreamPanel({ activity, isLive = false }: ActivityStreamPanelProps) {
+export function ActivityStreamPanel({ activity, isLive = false, workspaceId, deviceNames }: ActivityStreamPanelProps) {
   return (
     <div
       className="flex flex-col rounded-lg border flex-1 min-w-0"
@@ -100,14 +110,8 @@ export function ActivityStreamPanel({ activity, isLive = false }: ActivityStream
             {activity.map((event, i) => {
               const meta = eventMeta(event.eventName);
               const isLast = i === activity.length - 1;
-              return (
-                <li
-                  key={event.id}
-                  className="flex items-start gap-3 px-4 py-2.5"
-                  style={{
-                    borderBottom: isLast ? 'none' : '1px solid rgba(255,255,255,0.035)',
-                  }}
-                >
+              const itemContent = (
+                <>
                   {/* Colour dot */}
                   <span
                     className="mt-1 flex-shrink-0 w-1.5 h-1.5 rounded-full"
@@ -145,13 +149,36 @@ export function ActivityStreamPanel({ activity, isLive = false }: ActivityStream
                       </span>
                       <span className="text-[10px]">·</span>
                       <span className="font-mono text-[10px] truncate">
-                        {shortSource(event.source)}
+                        {shortSource(event.source, deviceNames)}
                       </span>
                       <span className="text-[10px] ml-auto flex-shrink-0">
                         {relativeTime(event.createdAt)}
                       </span>
                     </div>
                   </div>
+                </>
+              );
+
+              const itemStyle = {
+                borderBottom: isLast ? 'none' : '1px solid rgba(255,255,255,0.035)',
+              };
+
+              return workspaceId ? (
+                <li key={event.id} style={itemStyle}>
+                  <Link
+                    href={`/workspaces/${workspaceId}/tasks/${event.taskId}`}
+                    className="flex items-start gap-3 px-4 py-2.5 hover:bg-white/[0.03] transition-colors w-full"
+                  >
+                    {itemContent}
+                  </Link>
+                </li>
+              ) : (
+                <li
+                  key={event.id}
+                  className="flex items-start gap-3 px-4 py-2.5"
+                  style={itemStyle}
+                >
+                  {itemContent}
                 </li>
               );
             })}

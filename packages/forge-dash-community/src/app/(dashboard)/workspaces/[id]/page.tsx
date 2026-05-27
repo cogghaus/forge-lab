@@ -66,6 +66,8 @@ export default async function WorkspaceTasksPage({ params }: Props) {
         <ActivityStreamPanel
           activity={activity}
           isLive={tasks.some((t) => t.status === 'in_progress')}
+          workspaceId={workspaceId}
+          deviceNames={new Map(devices.map((d) => [d.id, d.name]))}
         />
         <DevicesPanel
           devices={devices}

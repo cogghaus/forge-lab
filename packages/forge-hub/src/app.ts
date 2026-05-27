@@ -8,6 +8,7 @@ import { runMigrations } from './db/migrate.js';
 import type { HubConfig } from './config.js';
 import { populateAuth } from './auth/middleware.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { TokenBucketStore } from './rate-limit/index.js';
 import { registerDeviceRoutes } from './routes/devices.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerAgentRoutes } from './routes/agents.js';
@@ -32,6 +33,7 @@ export interface Hub {
 
 export async function createHub(options: { config: HubConfig }): Promise<Hub> {
   const { config } = options;
+  const authRateLimitStore = new TokenBucketStore();
   const handle: DbHandle = openDatabase(config.databaseUrl);
   await runMigrations(handle.raw);
 
@@ -72,7 +74,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
   fastify.get('/healthz', () => ({ status: 'ok' }));
 
   await fastify.register((scope) => {
-    registerAuthRoutes(scope, handle.db, config);
+    registerAuthRoutes(scope, handle.db, config, authRateLimitStore);
     registerDeviceRoutes(scope, handle.db);
     registerTaskRoutes(scope, handle.db, bus);
     registerAgentRoutes(scope, handle.db);
@@ -98,6 +100,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
     close: async () => {
       await fastify.close();
       handle.close();
+      authRateLimitStore.destroy();
     },
   };
 }

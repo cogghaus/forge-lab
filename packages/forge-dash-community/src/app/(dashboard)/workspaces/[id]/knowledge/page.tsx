@@ -46,8 +46,8 @@ function statusBadge(status: string): React.ReactElement {
 }
 
 function formatUpdatedBy(updatedBy: string): string {
-  if (updatedBy.startsWith('user:')) return 'user';
-  if (updatedBy.startsWith('device:')) return 'device';
+  if (updatedBy.startsWith('user:')) return updatedBy.slice(5);
+  if (updatedBy.startsWith('device:')) return updatedBy.slice(7);
   return updatedBy;
 }
 
@@ -234,12 +234,12 @@ function DocCard({ doc, workspaceId: _workspaceId }: { doc: HubWorkspaceDoc; wor
         <span className="text-white/20 text-xs shrink-0 pt-0.5 group-open:rotate-90 transition-transform">▶</span>
       </summary>
 
-      {/* Expanded: markdown content */}
+      {/* Expanded: doc content */}
       <div className="px-4 pb-4">
         <div className="border-t border-white/[0.06] pt-3">
-          <pre className="text-xs text-white/60 whitespace-pre-wrap leading-relaxed font-mono overflow-x-auto">
+          <div className="text-[13px] text-white/65 whitespace-pre-wrap leading-relaxed">
             {doc.content}
-          </pre>
+          </div>
         </div>
       </div>
     </details>

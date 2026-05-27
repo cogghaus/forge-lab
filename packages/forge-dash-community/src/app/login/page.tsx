@@ -30,10 +30,10 @@ export default function LoginPage() {
             {process.env.NODE_ENV === 'development' && (
               <button
                 type="button"
-                onClick={() => { setEmail('dev@forge-lab.local'); setPassword('devpassword123'); }}
+                onClick={() => { setEmail('dev@forge-lab.local'); setPassword('forgelab123'); }}
                 className="rounded-lg bg-default-100 px-3 py-2 text-left text-xs text-default-500 font-mono hover:bg-default-200 transition-colors cursor-pointer"
               >
-                dev: dev@forge-lab.local / devpassword123
+                dev: dev@forge-lab.local / forgelab123
               </button>
             )}
             <Input

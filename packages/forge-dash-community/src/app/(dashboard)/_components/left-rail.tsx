@@ -220,6 +220,7 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
                   role="menuitem"
                   aria-disabled="true"
                   tabIndex={-1}
+                  title="Member management coming soon"
                 >
                   Members
                 </span>
@@ -228,6 +229,7 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
                   role="menuitem"
                   aria-disabled="true"
                   tabIndex={-1}
+                  title="Workspace settings coming soon"
                 >
                   Settings
                 </span>
@@ -250,7 +252,10 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
 
       {/* ── TASKS ── */}
       <div className={sectionLabel()}>Tasks</div>
-      <Link href="/workspaces" className={railItem(isNavActive('/workspaces') && !activeWsId)}>
+      <Link
+        href={activeWsId ? `/workspaces/${activeWsId}/tasks` : '/workspaces'}
+        className={railItem(pathname.startsWith('/workspaces') && (pathname.includes('/tasks') || !activeWsId))}
+      >
         <span className="w-4 text-center text-[13px] flex-shrink-0">☰</span>
         <span>All tasks</span>
       </Link>
@@ -341,7 +346,6 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
       <Link href="/costs"     className={railItem(isNavActive('/costs'))}>
         <span className="w-4 text-center text-[13px] flex-shrink-0">$</span>
         <span>Costs</span>
-        <span className="ml-auto font-mono text-[10px] text-[#FFB547]/80">$4.20</span>
       </Link>
       <Link href="/settings"  className={railItem(isNavActive('/settings'))}>
         <span className="w-4 text-center text-[13px] flex-shrink-0">⚙</span>

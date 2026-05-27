@@ -8,18 +8,28 @@ import type { HubConfig } from '../config.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { createSession, deleteSession } from '../auth/sessions.js';
 import { requireUser, getUser } from '../auth/middleware.js';
+import { TokenBucketStore, createTokenBucketPreHandler } from '../rate-limit/index.js';
 
 const RegisterInputSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(200),
 });
 
+/** Requests per minute cap applied to login and register. */
+const AUTH_RATE_LIMIT_MAX = 10;
+const AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
+
 export function registerAuthRoutes(
   fastify: FastifyInstance,
   db: Db,
   config: HubConfig,
+  rateLimitStore?: TokenBucketStore,
 ): void {
-  fastify.post('/auth/register', async (req, reply) => {
+  const authPreHandlers = rateLimitStore
+    ? [createTokenBucketPreHandler(rateLimitStore, { max: AUTH_RATE_LIMIT_MAX, windowMs: AUTH_RATE_LIMIT_WINDOW_MS })]
+    : [];
+
+  fastify.post('/auth/register', { preHandler: authPreHandlers }, async (req, reply) => {
     const body = RegisterInputSchema.parse(req.body);
     const existing = await db.select({ c: count() }).from(schema.users).get();
     const isFirst = !existing || existing.c === 0;
@@ -38,7 +48,7 @@ export function registerAuthRoutes(
     await reply.code(201).send({ id, email: body.email, role: 'admin' });
   });
 
-  fastify.post('/auth/login', async (req, reply) => {
+  fastify.post('/auth/login', { preHandler: authPreHandlers }, async (req, reply) => {
     const body = LoginInputSchema.parse(req.body);
     const user = await db
       .select()

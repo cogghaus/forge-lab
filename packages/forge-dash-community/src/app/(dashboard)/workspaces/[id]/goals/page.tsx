@@ -76,7 +76,7 @@ function GoalTree({
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {taskCount > 0 && (
-                    <Link href={`/workspaces/${workspaceId}`} className="text-xs text-default-400 hover:text-foreground">
+                    <Link href={`/workspaces/${workspaceId}/tasks?goalId=${goal.id}`} className="text-xs text-default-400 hover:text-foreground">
                       {taskCount} task{taskCount !== 1 ? 's' : ''}
                     </Link>
                   )}
@@ -146,7 +146,7 @@ export default async function WorkspaceGoalsPage({ params }: Props) {
 
       <div className="flex items-center gap-4 border-b border-default-200">
         <Link
-          href={`/workspaces/${workspaceId}`}
+          href={`/workspaces/${workspaceId}/tasks`}
           className="pb-2 text-default-500 hover:text-foreground text-sm"
         >
           Tasks
