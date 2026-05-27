@@ -54,7 +54,7 @@ async function main(): Promise<void> {
   }
   const runtimes = new RuntimeRegistry();
   runtimes.register(new MockRuntime());
-  runtimes.register(new ClaudeCodeRuntime());
+  runtimes.register(new ClaudeCodeRuntime({ dangerouslySkipPermissions: config.skipPermissions }));
   // C3: dangerouslySkipPermissions driven by config (FORGE_DAEMON_SKIP_PERMISSIONS env).
   runtimes.register(new BackgroundRuntime({ dangerouslySkipPermissions: config.skipPermissions }));
 

@@ -126,6 +126,63 @@ describe('ClaudeCodeRuntime', () => {
     expect(call.options.detached).toBe(true);
   });
 
+  it('passes --dangerously-skip-permissions when dangerouslySkipPermissions is true (direct spawn)', async () => {
+    const { spawner, calls } = makeFakeSpawner();
+    const rt = new ClaudeCodeRuntime({
+      useWindowsTerminal: false,
+      dangerouslySkipPermissions: true,
+      spawner,
+    });
+
+    await rt.spawn(
+      {
+        agentId: 'anvil',
+        personality: 'You are Anvil.',
+        workdir,
+        taskId: 'fl-007',
+        config: {},
+      },
+      'build it',
+    );
+
+    const call = calls[0]!;
+    expect(call.args).toContain('--dangerously-skip-permissions');
+    // flag must appear between --system-prompt block and the initial prompt
+    const skipIdx = call.args.indexOf('--dangerously-skip-permissions');
+    const promptIdx = call.args.indexOf('build it');
+    expect(skipIdx).toBeLessThan(promptIdx);
+  });
+
+  it('omits --dangerously-skip-permissions by default', async () => {
+    const { spawner, calls } = makeFakeSpawner();
+    const rt = new ClaudeCodeRuntime({ useWindowsTerminal: false, spawner });
+
+    await rt.spawn(
+      { agentId: 'a', personality: 'sys', workdir, taskId: 'fl-008', config: {} },
+      'go',
+    );
+
+    expect(calls[0]!.args).not.toContain('--dangerously-skip-permissions');
+  });
+
+  it('passes --dangerously-skip-permissions in wt.exe args when useWindowsTerminal is true', async () => {
+    const { spawner, calls } = makeFakeSpawner();
+    const rt = new ClaudeCodeRuntime({
+      useWindowsTerminal: true,
+      dangerouslySkipPermissions: true,
+      spawner,
+    });
+
+    await rt.spawn(
+      { agentId: 'furnace', personality: 'You are Furnace.', workdir, taskId: 'fl-009', config: {} },
+      'run',
+    );
+
+    const call = calls[0]!;
+    expect(call.command).toBe('wt.exe');
+    expect(call.args).toContain('--dangerously-skip-permissions');
+  });
+
   it('isAlive reports true while task file exists and no done marker is present', async () => {
     const { spawner } = makeFakeSpawner();
     const rt = new ClaudeCodeRuntime({ useWindowsTerminal: false, spawner });
