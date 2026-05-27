@@ -10,7 +10,7 @@ import {
 } from './load-builtin.js';
 import { PersonalityRegistry } from './personality.js';
 
-const EXPECTED_IDS = ['aegis', 'architect', 'crucible', 'forge-master', 'loki', 'oracle', 'scribe'];
+const EXPECTED_IDS = ['aegis', 'architect', 'crucible', 'forge-master', 'herald', 'loki', 'oracle', 'scribe', 'temper'];
 
 describe('loadBuiltinPersonalities', () => {
   it('resolves to the packaged personalities directory', async () => {
@@ -19,9 +19,9 @@ describe('loadBuiltinPersonalities', () => {
     expect(stat.isDirectory()).toBe(true);
   });
 
-  it('returns exactly seven entries', async () => {
+  it('returns exactly nine entries', async () => {
     const all = await loadBuiltinPersonalities();
-    expect(all).toHaveLength(7);
+    expect(all).toHaveLength(9);
   });
 
   it('includes every expected id exactly once', async () => {
@@ -40,7 +40,7 @@ describe('loadBuiltinPersonalities', () => {
   it('populates a PersonalityRegistry with correct lookups', async () => {
     const reg = await loadBuiltinRegistry();
     expect(reg).toBeInstanceOf(PersonalityRegistry);
-    expect(reg.list()).toHaveLength(7);
+    expect(reg.list()).toHaveLength(9);
     for (const id of EXPECTED_IDS) {
       expect(reg.has(id)).toBe(true);
       expect(reg.get(id)?.id).toBe(id);
