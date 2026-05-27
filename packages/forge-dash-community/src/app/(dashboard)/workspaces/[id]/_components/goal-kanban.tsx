@@ -123,8 +123,7 @@ function GoalRow({ goal, tasks, workspaceId, isLast }: GoalRowProps) {
 
   return (
     <Link
-      href={isUngrouped ? '#' : `/workspaces/${workspaceId}/goals`}
-      onClick={isUngrouped ? (e) => e.preventDefault() : undefined}
+      href={isUngrouped ? `/workspaces/${workspaceId}/tasks` : `/workspaces/${workspaceId}/tasks?goalId=${goal.id}`}
       className="group transition-colors hover:bg-white/[0.025]"
       style={{
         display: 'grid',
