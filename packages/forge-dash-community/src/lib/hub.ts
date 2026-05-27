@@ -194,3 +194,23 @@ export interface HubWorkspaceDoc {
   updatedAt: string;
   createdAt: string;
 }
+
+export interface HubAgentPerf {
+  agentId: string;
+  completedCount: number;
+  failedCount: number;
+  inProgressCount: number;
+  totalCount: number;
+  /** Percentage 0-100, rounded to 2dp */
+  failureRate: number;
+  /** Milliseconds, or null if no completed tasks with timing data */
+  avgCompletionTimeMs: number | null;
+  /** Completed tasks per day over the window */
+  throughputPerDay: number;
+}
+
+export interface HubAgentPerfResponse {
+  agents: HubAgentPerf[];
+  windowDays: number;
+  generatedAt: string;
+}

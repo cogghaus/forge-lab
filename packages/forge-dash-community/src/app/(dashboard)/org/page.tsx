@@ -128,12 +128,6 @@ export default async function OrgPage() {
               >
                 {me.email}
               </div>
-              <div
-                className="font-mono text-[11px] mt-0.5"
-                style={{ color: 'rgba(245,240,235,0.3)' }}
-              >
-                ID: {me.id}
-              </div>
             </div>
 
             <RoleBadge role={me.role} />

@@ -173,17 +173,15 @@ export default async function TriagePage({ params }: Props) {
                 const confidenceColor = parsed.confidence ? (CONFIDENCE_COLOR[parsed.confidence] ?? 'text-white/40') : 'text-white/40';
 
                 return (
-                  <div
+                  <Link
                     key={comment.id}
-                    className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4"
+                    href={`/workspaces/${workspaceId}/tasks/${comment.taskId}`}
+                    className="block rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 hover:border-white/[0.12] hover:bg-white/[0.04] transition-all"
                   >
-                    {/* Task link */}
-                    <Link
-                      href={`/workspaces/${workspaceId}/tasks/${comment.taskId}`}
-                      className="text-[12px] text-white/50 hover:text-white/80 font-mono transition-colors"
-                    >
+                    {/* Task ID */}
+                    <span className="text-[12px] text-white/50 font-mono">
                       {comment.taskId}
-                    </Link>
+                    </span>
                     <p className="text-sm font-medium leading-tight mt-0.5 mb-2 truncate">
                       {comment.taskTitle}
                     </p>
@@ -219,7 +217,7 @@ export default async function TriagePage({ params }: Props) {
                     <p className="text-[10px] text-white/20 font-mono mt-2">
                       {new Date(comment.createdAt).toLocaleString()}
                     </p>
-                  </div>
+                  </Link>
                 );
               })}
             </div>

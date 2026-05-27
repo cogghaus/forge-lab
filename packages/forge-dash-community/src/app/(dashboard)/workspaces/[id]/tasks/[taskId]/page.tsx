@@ -79,9 +79,34 @@ function parseDecision(body: string) {
   };
 }
 
+const EVENT_LABELS: Record<string, string> = {
+  'task.created':    'Task created',
+  'task.assigned':   'Assigned to agent',
+  'task.claimed':    'Claimed by device',
+  'task.started':    'Work started',
+  'task.completed':  'Task completed',
+  'task.failed':     'Task failed',
+  'task.cancelled':  'Task cancelled',
+  'task.requeued':   'Requeued for retry',
+  'task.commented':  'Comment added',
+  'task.dispatched': 'Routed by dispatcher',
+};
+
+function friendlySource(source: string): string {
+  if (source.startsWith('device:')) return source.slice(7).slice(0, 12);
+  if (source.startsWith('user:'))   return source.slice(5);
+  return source;
+}
+
 function HistoryEvent({ event }: { event: HubTaskHistory }) {
   const payload = event.payload as Record<string, unknown> | null;
-  const payloadKeys = payload ? Object.keys(payload).filter((k) => k !== 'runId') : [];
+  const label = EVENT_LABELS[event.eventName] ?? event.eventName.replace(/^task\./, '').replace(/_/g, ' ');
+
+  // Show meaningful payload fields (skip runId and internal keys)
+  const skip = new Set(['runId', 'taskId']);
+  const payloadEntries = payload
+    ? Object.entries(payload).filter(([k]) => !skip.has(k))
+    : [];
 
   return (
     <div className="flex gap-3">
@@ -90,15 +115,15 @@ function HistoryEvent({ event }: { event: HubTaskHistory }) {
         <div className="w-px flex-1 bg-default-200 mt-1" />
       </div>
       <div className="pb-4 flex-1">
-        <p className="font-medium text-sm">{event.eventName}</p>
+        <p className="font-medium text-sm capitalize">{label}</p>
         <p className="text-xs text-default-500 mt-0.5">
-          {event.source} &middot; {formatTs(event.createdAt)}
+          {friendlySource(event.source)} &middot; {formatTs(event.createdAt)}
         </p>
-        {payloadKeys.length > 0 && (
-          <div className="mt-1 text-xs text-default-400 font-mono">
-            {payloadKeys.map((k) => (
-              <span key={k} className="mr-3">
-                {k}: {String(payload![k])}
+        {payloadEntries.length > 0 && (
+          <div className="mt-1 text-xs text-default-400 font-mono flex flex-wrap gap-x-3 gap-y-0.5">
+            {payloadEntries.map(([k, v]) => (
+              <span key={k}>
+                <span className="text-default-500">{k}:</span> {String(v)}
               </span>
             ))}
           </div>
@@ -294,7 +319,7 @@ export default async function TaskDetailPage({ params }: Props) {
           )}
 
           <div className="flex gap-4 text-xs text-default-400 pt-1 border-t border-default-100">
-            <span>Created by {task.createdBy}</span>
+            <span>Created by {task.createdBy.replace(/^(device:|user:)/, '')}</span>
             <span>&middot;</span>
             <span>{formatTs(task.createdAt)}</span>
             {task.assignedDeviceId && (
