@@ -1210,7 +1210,7 @@ class FMSimRuntime implements AgentRuntime {
   }
 
   spawn(config: AgentRuntimeSpawnConfig, initialPrompt: string): Promise<RuntimeInstance> {
-    const taskId = config.taskId;
+    const taskId = config.taskId ?? 'fm-synthetic';
     const workdir = config.workdir;
 
     setTimeout(() => {

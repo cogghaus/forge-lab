@@ -68,6 +68,13 @@ export interface ClaudeCodeRuntimeOptions {
    * `{taskId}` placeholders.
    */
   tabTitleTemplate?: string;
+  /**
+   * Pass `--dangerously-skip-permissions` to claude. Required for unattended
+   * runs where no human is present to approve tool calls. When using Windows
+   * Terminal tabs for developer observation, leave this false so tool calls
+   * require manual approval. Defaults to false.
+   */
+  dangerouslySkipPermissions?: boolean;
   /** Extra environment variables merged into the spawned process env. */
   env?: Record<string, string>;
   /** Injected spawner (tests). Defaults to {@link defaultSpawner}. */
@@ -101,6 +108,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   private readonly useWindowsTerminal: boolean;
   private readonly tabColor: string;
   private readonly tabTitleTemplate: string;
+  private readonly dangerouslySkipPermissions: boolean;
   private readonly extraEnv: Record<string, string>;
   private readonly spawner: RuntimeSpawner;
   private readonly instances = new Map<string, LiveInstance>();
@@ -110,6 +118,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     this.useWindowsTerminal = opts.useWindowsTerminal ?? process.platform === 'win32';
     this.tabColor = opts.tabColor ?? '#f97316';
     this.tabTitleTemplate = opts.tabTitleTemplate ?? 'forge-lab :: {agentId} :: {taskId}';
+    this.dangerouslySkipPermissions = opts.dangerouslySkipPermissions ?? false;
     this.extraEnv = opts.env ?? {};
     this.spawner = opts.spawner ?? defaultSpawner;
   }
@@ -123,7 +132,11 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       .replace('{agentId}', config.agentId)
       .replace('{taskId}', config.taskId ?? 'idle');
 
-    const claudeArgs: string[] = ['--system-prompt', systemPrompt, initialPrompt];
+    const claudeArgs: string[] = ['--system-prompt', systemPrompt];
+    if (this.dangerouslySkipPermissions) {
+      claudeArgs.push('--dangerously-skip-permissions');
+    }
+    claudeArgs.push(initialPrompt);
 
     const env: NodeJS.ProcessEnv = { ...process.env, ...this.extraEnv };
 
