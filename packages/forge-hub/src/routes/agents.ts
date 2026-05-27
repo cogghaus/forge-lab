@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { eq, isNull } from 'drizzle-orm';
+import { and, count, eq, gte, isNotNull, isNull, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
@@ -139,4 +139,77 @@ export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
       return { agents };
     },
   );
+
+  // ---------------------------------------------------------------------------
+  // Agent performance metrics — throughput, avg completion time, failure rate.
+  // Groups tasks by assignedAgentId over a rolling window (default 30 days).
+  // ---------------------------------------------------------------------------
+
+  const AgentPerformanceQuerySchema = z.object({
+    workspaceId: z.string().optional(),
+    window: z.coerce.number().int().min(1).max(365).default(30),
+  });
+
+  fastify.get('/agents/performance', { preHandler: requireUser }, async (req) => {
+    const query = AgentPerformanceQuerySchema.parse(req.query);
+    const windowStart = new Date(Date.now() - query.window * 24 * 60 * 60 * 1000);
+
+    const baseWhere =
+      query.workspaceId !== undefined
+        ? and(
+            isNotNull(schema.tasks.assignedAgentId),
+            gte(schema.tasks.createdAt, windowStart),
+            eq(schema.tasks.workspaceId, query.workspaceId),
+          )
+        : and(
+            isNotNull(schema.tasks.assignedAgentId),
+            gte(schema.tasks.createdAt, windowStart),
+          );
+
+    const rows = await db
+      .select({
+        agentId: schema.tasks.assignedAgentId,
+        total: count(),
+        completed: sql<number>`cast(sum(case when ${schema.tasks.status} = 'completed' then 1 else 0 end) as integer)`,
+        failed: sql<number>`cast(sum(case when ${schema.tasks.status} = 'failed' then 1 else 0 end) as integer)`,
+        inProgress: sql<number>`cast(sum(case when ${schema.tasks.status} = 'in_progress' then 1 else 0 end) as integer)`,
+        avgCompletionMs: sql<number | null>`avg(case when ${schema.tasks.status} = 'completed' and ${schema.tasks.completedAt} is not null and ${schema.tasks.assignedAt} is not null then ${schema.tasks.completedAt} - ${schema.tasks.assignedAt} else null end)`,
+      })
+      .from(schema.tasks)
+      .where(baseWhere)
+      .groupBy(schema.tasks.assignedAgentId);
+
+    const agents = rows
+      .filter((r): r is typeof r & { agentId: string } => r.agentId !== null)
+      .map((row) => {
+        const completed = Number(row.completed ?? 0);
+        const failed = Number(row.failed ?? 0);
+        const terminal = completed + failed;
+        const failureRate = terminal > 0 ? Math.round((failed / terminal) * 10000) / 100 : 0;
+        const throughputPerDay =
+          query.window > 0 ? Math.round((completed / query.window) * 100) / 100 : 0;
+        const rawAvg = row.avgCompletionMs;
+        const avgCompletionTimeMs =
+          rawAvg !== null && rawAvg !== undefined ? Math.round(Number(rawAvg)) : null;
+
+        return {
+          agentId: row.agentId,
+          agentName: row.agentId, // tasks.assignedAgentId stores the agent role name
+          completedCount: completed,
+          failedCount: failed,
+          inProgressCount: Number(row.inProgress ?? 0),
+          totalCount: Number(row.total),
+          failureRate,
+          avgCompletionTimeMs,
+          throughputPerDay,
+        };
+      })
+      .sort((a, b) => b.completedCount - a.completedCount);
+
+    return {
+      agents,
+      windowDays: query.window,
+      generatedAt: new Date().toISOString(),
+    };
+  });
 }
