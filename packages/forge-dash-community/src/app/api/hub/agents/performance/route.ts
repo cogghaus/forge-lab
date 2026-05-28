@@ -19,9 +19,14 @@ export async function GET(req: NextRequest): Promise<Response> {
   const window = searchParams.get('window');
   const workspaceId = searchParams.get('workspaceId');
 
+  const from = searchParams.get('from');
+  const to = searchParams.get('to');
+
   const params = new URLSearchParams();
   if (window) params.set('window', window);
   if (workspaceId) params.set('workspaceId', workspaceId);
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
   const qs = params.toString();
   const hubPath = `/agents/performance${qs ? `?${qs}` : ''}`;
 

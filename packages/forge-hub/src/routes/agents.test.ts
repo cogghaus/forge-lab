@@ -488,4 +488,85 @@ describe('GET /agents/performance', () => {
     expect(body.agents[0]!.completedCount).toBe(1);
     expect(body.windowDays).toBe(7);
   });
+
+  // -- from/to date range filtering --
+
+  it('filters to explicit from/to date range', async () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    await hub.db.insert(schema.tasks).values([
+      {
+        id: 'fl-001',
+        projectPrefix: 'fl',
+        title: 'Recent',
+        assignedAgentId: 'architect',
+        status: 'completed',
+        createdAt: new Date(now - 3 * dayMs),
+        createdBy: 'user:test',
+        workspaceId,
+      },
+      {
+        id: 'fl-002',
+        projectPrefix: 'fl',
+        title: 'Old',
+        assignedAgentId: 'architect',
+        status: 'completed',
+        createdAt: new Date(now - 20 * dayMs),
+        createdBy: 'user:test',
+        workspaceId,
+      },
+    ]);
+
+    const from = new Date(now - 7 * dayMs).toISOString();
+    const to = new Date(now + dayMs).toISOString();
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/agents/performance?workspaceId=${workspaceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as AgentPerfResponse;
+    expect(body.agents).toHaveLength(1);
+    expect(body.agents[0]!.completedCount).toBe(1);
+  });
+
+  it('returns 400 when from is after to', async () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const from = new Date(now + dayMs).toISOString();
+    const to = new Date(now - dayMs).toISOString();
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/agents/performance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 400 when date range exceeds 365 days', async () => {
+    const now = Date.now();
+    const from = new Date(now - 366 * 24 * 60 * 60 * 1000).toISOString();
+    const to = new Date(now).toISOString();
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/agents/performance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns empty agents array when no tasks in specified range', async () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const from = new Date(now - 7 * dayMs).toISOString();
+    const to = new Date(now + dayMs).toISOString();
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/agents/performance?workspaceId=${workspaceId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as AgentPerfResponse;
+    expect(body.agents).toHaveLength(0);
+  });
 });

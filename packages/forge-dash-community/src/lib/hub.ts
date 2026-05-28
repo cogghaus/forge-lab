@@ -225,6 +225,17 @@ export interface HubAgent {
   createdAt: string;
 }
 
+export interface HubAnalyticsOverview {
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  pendingTasks: number;
+  inProgressTasks: number;
+  completionRate: number;
+  avgCompletionTimeMs: number | null;
+  period: { from: string | null; to: string | null };
+}
+
 export type TaskStatus =
   | 'pending_dispatcher_action'
   | 'pending_design'

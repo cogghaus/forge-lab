@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { and, count, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, count, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { requireUser, requireWorkspaceMember, getWorkspace, getUser } from '../auth/middleware.js';
+import { parseDateRange } from '../utils/date-range.js';
 
 const CreateAgentInputSchema = z.object({
   name: z.string().min(1).max(100),
@@ -151,12 +152,20 @@ export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
   const AgentPerformanceQuerySchema = z.object({
     workspaceId: z.string().optional(),
     window: z.coerce.number().int().min(1).max(365).default(30),
+    from: z.string().optional(),
+    to: z.string().optional(),
   });
 
   fastify.get('/agents/performance', { preHandler: requireUser }, async (req, reply) => {
     const query = AgentPerformanceQuerySchema.parse(req.query);
-    const windowStart = new Date(Date.now() - query.window * 24 * 60 * 60 * 1000);
     const user = getUser(req);
+
+    // Validate from/to when present
+    const range = parseDateRange(query.from, query.to);
+    if (!range.ok) {
+      await reply.code(400).send({ error: range.error });
+      return;
+    }
 
     // Determine which workspaces this user is a member of.
     const memberships = await db
@@ -177,11 +186,20 @@ export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
         ? eq(schema.tasks.workspaceId, query.workspaceId)
         : allowedIds.length > 0
           ? inArray(schema.tasks.workspaceId, allowedIds)
-          : sql`1 = 0`; // user has no workspaces — return empty
+          : sql`1 = 0`; // user has no workspaces - return empty
+
+    // Date range filter: use explicit from/to when present, otherwise fall back to window.
+    const dateFilter =
+      range.fromMs !== undefined && range.toMs !== undefined
+        ? and(
+            gte(schema.tasks.createdAt, new Date(range.fromMs)),
+            lte(schema.tasks.createdAt, new Date(range.toMs)),
+          )
+        : gte(schema.tasks.createdAt, new Date(Date.now() - query.window * 24 * 60 * 60 * 1000));
 
     const baseWhere = and(
       isNotNull(schema.tasks.assignedAgentId),
-      gte(schema.tasks.createdAt, windowStart),
+      dateFilter,
       workspaceFilter,
     );
 
@@ -205,8 +223,12 @@ export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
         const failed = Number(row.failed ?? 0);
         const terminal = completed + failed;
         const failureRate = terminal > 0 ? Math.round((failed / terminal) * 10000) / 100 : 0;
-        // window is validated >= 1 by schema, no zero-check needed
-        const throughputPerDay = Math.round((completed / query.window) * 100) / 100;
+        // When from/to are used, compute window days from the explicit range.
+        const effectiveWindowDays =
+          range.fromMs !== undefined && range.toMs !== undefined
+            ? Math.max(1, Math.round((range.toMs - range.fromMs) / (24 * 60 * 60 * 1000)))
+            : query.window;
+        const throughputPerDay = Math.round((completed / effectiveWindowDays) * 100) / 100;
         const rawAvg = row.avgCompletionMs;
         const avgCompletionTimeMs =
           rawAvg !== null && rawAvg !== undefined ? Math.round(Number(rawAvg)) : null;
