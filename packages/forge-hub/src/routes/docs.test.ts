@@ -86,7 +86,8 @@ describe('/workspaces/:workspaceId/docs', () => {
     expect(res.statusCode).toBe(201);
   });
 
-  it('worker device (non-orchestrator) gets 403', async () => {
+  it('non-Scribe worker device gets policy_denied on POST /docs', async () => {
+    // After Heimdall: role:worker deny @ 100 fires; error body is policy_denied not orchestrator_required.
     const workerToken = await registerWorker(hub, cookie);
     const res = await hub.fastify.inject({
       method: 'POST',
@@ -100,7 +101,35 @@ describe('/workspaces/:workspaceId/docs', () => {
       },
     });
     expect(res.statusCode).toBe(403);
-    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+    const body = res.json() as { error: string; action?: string };
+    expect(body.error).toBe('policy_denied');
+    expect(body.action).toBe('doc:write');
+  });
+
+  it('scribe worker device (agentId=scribe, deviceType=worker) can create a doc', async () => {
+    // agent:scribe allow @ 200 beats role:worker deny @ 100.
+    const scribeRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'forge-scribe', agentId: 'scribe', deviceType: 'worker' },
+    });
+    const scribeToken = (scribeRes.json() as { token: string }).token;
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${scribeToken}` },
+      payload: {
+        key: 'scribe-doc',
+        title: 'Scribe Doc',
+        content: 'Written by Scribe.',
+        category: 'architecture',
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const { key } = res.json() as { id: string; key: string };
+    expect(key).toBe('scribe-doc');
   });
 
   it('duplicate key returns 409', async () => {

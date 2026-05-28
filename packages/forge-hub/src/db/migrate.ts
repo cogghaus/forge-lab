@@ -263,6 +263,29 @@ ALTER TABLE devices ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
 CREATE INDEX devices_status_idx ON devices(status);
 `,
   },
+  {
+    name: '0007_heimdall',
+    sql: `
+-- Heimdall policy engine audit log.
+-- Every policy decision (allow or deny) is written here asynchronously.
+-- rule_id is NULL when the decision was default-deny (no built-in rule matched).
+-- policy_rules table is Phase 2 (DB-backed rule overrides) — not added here.
+CREATE TABLE policy_decisions (
+  id           TEXT    PRIMARY KEY,
+  workspace_id TEXT,
+  principal    TEXT    NOT NULL,
+  action       TEXT    NOT NULL,
+  resource_id  TEXT,
+  effect       TEXT    NOT NULL CHECK (effect IN ('allow', 'deny')),
+  rule_id      TEXT,
+  decided_at   INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+
+CREATE INDEX policy_decisions_workspace_idx ON policy_decisions (workspace_id, decided_at DESC);
+CREATE INDEX policy_decisions_principal_idx ON policy_decisions (principal, decided_at DESC);
+CREATE INDEX policy_decisions_action_idx    ON policy_decisions (action, decided_at DESC);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {

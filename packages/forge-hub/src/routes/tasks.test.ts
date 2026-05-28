@@ -791,7 +791,8 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign', () => {
     expect(task?.assignedAgentId).toBe('furnace');
   });
 
-  it('worker device (non-orchestrator) gets 403', async () => {
+  it('worker device gets policy_denied on assign (role:worker deny @ 100)', async () => {
+    // After Heimdall: error body is policy_denied not orchestrator_required.
     const { token: workerToken } = await registerWorkerDevice('architect');
     const taskId = await createWsTask('pending_dispatcher_action');
 
@@ -802,7 +803,25 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign', () => {
       payload: { agentId: 'architect' },
     });
     expect(res.statusCode).toBe(403);
-    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+    const body = res.json() as { error: string; action?: string };
+    expect(body.error).toBe('policy_denied');
+    expect(body.action).toBe('task:assign');
+  });
+
+  it('orchestrator device gets policy_denied on task:claim (role:orchestrator deny)', async () => {
+    // FM should assign tasks, not claim them. Orchestrator claim is now blocked at policy layer.
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createWsTask('pending_agent');
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { error: string; action?: string };
+    expect(body.error).toBe('policy_denied');
+    expect(body.action).toBe('task:claim');
   });
 
   it('returns 422 for task in non-assignable status (in_progress)', async () => {
