@@ -79,6 +79,8 @@ cp .env.example.anvil     .env.anvil
 cp .env.example.crucible  .env.crucible
 cp .env.example.oracle    .env.oracle
 cp .env.example.scribe    .env.scribe
+cp .env.example.herald    .env.herald
+cp .env.example.temper    .env.temper
 ```
 
 For each file, set:
