@@ -70,7 +70,12 @@ export function populateAuth(db: Db): onRequestHookHandler {
           deviceType: schema.devices.deviceType,
         })
         .from(schema.devices)
-        .where(eq(schema.devices.tokenHash, tokenHash))
+        .where(
+          and(
+            eq(schema.devices.tokenHash, tokenHash),
+            eq(schema.devices.status, 'active'),
+          ),
+        )
         .get();
       if (device) {
         req.authDevice = {

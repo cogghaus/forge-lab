@@ -49,9 +49,14 @@ export const devices = sqliteTable(
     deviceType: text('device_type', { enum: ['worker', 'orchestrator'] })
       .notNull()
       .default('worker'),
+    /** Lifecycle status. Deregistered devices have their token invalidated. */
+    status: text('status', { enum: ['active', 'deregistered'] })
+      .notNull()
+      .default('active'),
   },
   (t) => ({
     userIdIdx: index('devices_user_id_idx').on(t.userId),
+    statusIdx: index('devices_status_idx').on(t.status),
   }),
 );
 
