@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import dynamic from 'next/dynamic';
 import { Card, CardBody, Chip } from '@heroui/react';
 import {
   hubFetch,
@@ -16,12 +15,7 @@ import {
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { TaskDetailRefresh } from './task-detail-refresh';
 import { TaskActionButton } from './task-action-button';
-
-// Client-only — avoids react-aria SSR ID mismatch (QA-007)
-const ReassignDropdown = dynamic(
-  () => import('./reassign-dropdown').then((m) => m.ReassignDropdown),
-  { ssr: false },
-);
+import { ReassignDropdown } from './reassign-dropdown-loader';
 
 interface Props {
   params: Promise<{ id: string; taskId: string }>;
