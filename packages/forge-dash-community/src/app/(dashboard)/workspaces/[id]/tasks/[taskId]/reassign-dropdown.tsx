@@ -24,6 +24,12 @@ export function ReassignDropdown({ workspaceId, taskId, currentAgentId, agents }
     ...agents.map((a) => ({ key: a.name, label: a.name })),
   ];
 
+  // Only pre-select if the currentAgentId matches an item key — personality IDs
+  // won't match registered agent names and would cause react-aria warnings.
+  const matchedKey = currentAgentId && items.some((i) => i.key === currentAgentId)
+    ? currentAgentId
+    : null;
+
   async function handleChange(key: string) {
     if (!key) return;
     const agentId = key === CLEAR_KEY ? null : key;
@@ -36,11 +42,14 @@ export function ReassignDropdown({ workspaceId, taskId, currentAgentId, agents }
 
   return (
     <div className="flex flex-col gap-1">
+      {currentAgentId && !matchedKey && (
+        <p className="text-xs text-default-400">Current: {currentAgentId}</p>
+      )}
       <Select
         size="sm"
         label="Reassign agent"
         placeholder="Choose agent or clear"
-        defaultSelectedKeys={currentAgentId ? [currentAgentId] : []}
+        defaultSelectedKeys={matchedKey ? [matchedKey] : []}
         isDisabled={loading}
         onSelectionChange={(keys) => {
           const val = Array.from(keys)[0];

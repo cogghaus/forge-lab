@@ -5,10 +5,7 @@ import { z } from 'zod';
 import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { hasUniqueConstraint } from '../db/errors.js';
-import {
-  getDevice,
-  getUser,
-} from '../auth/middleware.js';
+import { getDevice } from '../auth/middleware.js';
 import { checkPolicy } from '../policy/engine.js';
 import { buildDevicePrincipal } from '../policy/principals.js';
 

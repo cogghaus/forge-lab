@@ -8,8 +8,13 @@ WORKDIR /app
 # Copy lockfile + workspace manifests for layer caching
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
 COPY tsconfig.base.json ./
+# Packages we build
 COPY packages/forge-core/package.json  packages/forge-core/tsconfig.json  packages/forge-core/tsconfig.build.json  packages/forge-core/
 COPY packages/forge-hub/package.json   packages/forge-hub/tsconfig.json   packages/forge-hub/tsconfig.build.json   packages/forge-hub/
+# Other workspace members — package.json only (pnpm workspace resolution)
+COPY packages/forge-agents/package.json          packages/forge-agents/
+COPY packages/forge-daemon/package.json          packages/forge-daemon/
+COPY packages/forge-dash-community/package.json  packages/forge-dash-community/
 
 # Full install (dev deps needed for tsc)
 RUN pnpm install --frozen-lockfile
@@ -29,8 +34,11 @@ RUN corepack enable && corepack prepare pnpm@10.28.1 --activate
 WORKDIR /app
 
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-COPY packages/forge-core/package.json packages/forge-core/
-COPY packages/forge-hub/package.json  packages/forge-hub/
+COPY packages/forge-core/package.json          packages/forge-core/
+COPY packages/forge-hub/package.json           packages/forge-hub/
+COPY packages/forge-agents/package.json        packages/forge-agents/
+COPY packages/forge-daemon/package.json        packages/forge-daemon/
+COPY packages/forge-dash-community/package.json packages/forge-dash-community/
 
 RUN pnpm install --frozen-lockfile --prod
 
