@@ -29,9 +29,16 @@ services:
       FORGE_HUB_BCRYPT_COST: "12"
     volumes:
       - /datapool/docker/vibe-forge/data:/data
+    ports:
+      - "127.0.0.1:3000:3000"  # localhost-only; enables bootstrap curl from accserver host
     networks:
       - vibe-forge-internal
-    # Hub is internal-only — not exposed to Traefik
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 20s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
   forge-dash:
     build:
