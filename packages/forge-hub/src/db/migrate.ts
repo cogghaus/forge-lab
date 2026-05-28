@@ -256,6 +256,13 @@ CREATE INDEX workspace_docs_category_idx ON workspace_docs(workspace_id, categor
 CREATE UNIQUE INDEX workspace_docs_key_idx ON workspace_docs(workspace_id, key);
 `,
   },
+  {
+    name: '0006_device_status',
+    sql: `
+ALTER TABLE devices ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+CREATE INDEX devices_status_idx ON devices(status);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {
