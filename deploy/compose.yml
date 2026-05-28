@@ -70,5 +70,8 @@ services:
 networks:
   vibe-forge-internal:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.100.0/24
   apps-internal:
     external: true  # Traefik's discovery network — must exist on accserver
