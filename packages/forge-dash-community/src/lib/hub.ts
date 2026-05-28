@@ -30,7 +30,7 @@ export async function hubFetch<T>(
       signal: AbortSignal.timeout(HUB_FETCH_TIMEOUT_MS),
     });
   } catch {
-    // Network error or timeout — return a synthetic error response so callers
+    // Network error or timeout - return a synthetic error response so callers
     // can degrade gracefully instead of crashing the SSR render.
     return { ok: false, data: null, status: 0 };
   }
@@ -145,6 +145,8 @@ export interface HubDevice {
   createdAt: string;
   deviceType: 'worker' | 'orchestrator';
   agentId: string | null;
+  /** Lifecycle status - active devices have valid tokens; deregistered devices are soft-deleted. */
+  status: 'active' | 'deregistered';
 }
 
 /** A single dispatcher decision comment from the FM triage log. */
@@ -167,7 +169,7 @@ export interface HubTaskWithParent extends HubTask {
   parentId: string | null;
 }
 
-/** A comment on a task — posted by a user, agent, dispatcher, or system. */
+/** A comment on a task - posted by a user, agent, dispatcher, or system. */
 export interface HubTaskComment {
   id: string;
   taskId: string;

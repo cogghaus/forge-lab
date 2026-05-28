@@ -1,21 +1,21 @@
+import { NextRequest } from 'next/server';
 import { hubFetch, type HubDevice } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 
 /**
- * GET /api/hub/devices
+ * GET /api/hub/devices[?includeDeregistered=true]
  *
  * Proxies the hub's /devices endpoint using the caller's server-side session.
- * Reads the session token from the Next.js cookie store (not the raw browser
- * Cookie header, which contains multiple cookies separated by ";" — hubFetch
- * strips ";" as an injection guard, corrupting a multi-cookie header).
- * Returns { devices: HubDevice[] } or { devices: [] } on auth/network failure.
+ * Forwards the ?includeDeregistered=true query param when present.
  */
-export async function GET(): Promise<Response> {
+export async function GET(req: NextRequest): Promise<Response> {
   const session = await getSessionCookie();
   if (!session) {
     return Response.json({ devices: [] }, { status: 401 });
   }
-  const res = await hubFetch<{ devices: HubDevice[] }>('/devices', {
+  const includeDeregistered = req.nextUrl.searchParams.get('includeDeregistered');
+  const hubPath = includeDeregistered === 'true' ? '/devices?includeDeregistered=true' : '/devices';
+  const res = await hubFetch<{ devices: HubDevice[] }>(hubPath, {
     cookie: `${SESSION_COOKIE}=${session}`,
   });
   if (!res.ok) {
