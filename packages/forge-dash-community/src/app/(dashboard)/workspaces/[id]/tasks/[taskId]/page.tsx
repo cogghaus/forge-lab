@@ -113,7 +113,7 @@ const EVENT_LABELS: Record<string, string> = {
 
 function friendlySource(source: string): string {
   if (source.startsWith('device:')) return source.slice(7).slice(0, 12);
-  if (source.startsWith('user:'))   return source.slice(5);
+  if (source.startsWith('user:')) return 'user';
   return source;
 }
 

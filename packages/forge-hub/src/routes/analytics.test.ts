@@ -66,6 +66,7 @@ describe('GET /workspaces/:id/analytics/overview', () => {
     expect(body.failedTasks).toBe(0);
     expect(body.pendingTasks).toBe(0);
     expect(body.inProgressTasks).toBe(0);
+    expect(body.cancelledTasks).toBe(0);
     expect(body.completionRate).toBe(0);
     expect(body.avgCompletionTimeMs).toBeNull();
     expect(body.period.from).toBeNull();
@@ -125,6 +126,7 @@ describe('GET /workspaces/:id/analytics/overview', () => {
     expect(body.failedTasks).toBe(1);
     expect(body.inProgressTasks).toBe(1);
     expect(body.pendingTasks).toBe(0);
+    expect(body.cancelledTasks).toBe(0);
     // completionRate = 2/4 = 0.5
     expect(body.completionRate).toBe(0.5);
     // avg of 30s and 60s = 45000ms (timestamps stored as epoch ms integers)
