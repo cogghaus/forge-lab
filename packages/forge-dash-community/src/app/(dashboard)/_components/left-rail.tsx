@@ -46,7 +46,6 @@ function useAgentStatus(workspaceId: string | null): AgentStatusState {
 
   useEffect(() => {
     let alive = true;
-    let timer: ReturnType<typeof setInterval>;
 
     async function poll(): Promise<void> {
       try {
@@ -88,8 +87,9 @@ function useAgentStatus(workspaceId: string | null): AgentStatusState {
       }
     }
 
+    // Assign timer before first poll so the 401 handler's clearInterval is valid.
+    const timer = setInterval(() => void poll(), 5_000);
     void poll();
-    timer = setInterval(() => void poll(), 5_000);
     return () => {
       alive = false;
       clearInterval(timer);

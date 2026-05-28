@@ -71,6 +71,5 @@ export function useHubEvents(workspaceId?: string): void {
     };
     // workspaceId is the only dep that should trigger reconnect.
     // routerRef is excluded intentionally — it is always current via the ref.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 }

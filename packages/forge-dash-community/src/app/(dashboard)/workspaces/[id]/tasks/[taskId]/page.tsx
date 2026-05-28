@@ -243,11 +243,6 @@ export default async function TaskDetailPage({ params }: Props) {
       }).then((r) => (r.ok ? r.data.agents : []))
     : [];
 
-  const isActive =
-    task.status === 'pending_agent' ||
-    task.status === 'assigned' ||
-    task.status === 'in_progress';
-
   const canCancel =
     task.status === 'pending_dispatcher_action' ||
     task.status === 'pending_agent' ||
