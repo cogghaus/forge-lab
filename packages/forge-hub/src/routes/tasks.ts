@@ -47,10 +47,12 @@ const RetryTaskBodySchema = z.object({
 /** Task statuses FM is allowed to route from. */
 const FM_ASSIGNABLE_STATUSES = ['pending_dispatcher_action', 'pending_agent'] as const;
 
-/** Statuses a user may cancel via the dedicated cancel endpoint. */
+/** Statuses a user may cancel via the dedicated cancel endpoint.
+ * Matches USER_ALLOWED_TRANSITIONS cancel paths + pending_dispatcher_action gap. */
 const CANCELLABLE_STATUSES = [
   'pending_dispatcher_action',
   'pending_design',
+  'design_review',
   'pending_agent',
   'assigned',
   'in_progress',

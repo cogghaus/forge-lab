@@ -75,7 +75,7 @@ export async function cancelTaskAction(
     `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
     {
       method: 'POST',
-      body: reason ? { reason } : {},
+      body: reason ? { reason } : undefined,
       cookie: `${SESSION_COOKIE}=${session}`,
     },
   );
@@ -84,6 +84,7 @@ export async function cancelTaskAction(
     const errMsg = (res.data as { error?: string } | null)?.error;
     if (errMsg === 'already_terminal') return { error: 'Task is already in a terminal state.' };
     if (errMsg === 'status_changed') return { error: 'Task status changed. Refresh and try again.' };
+    if (errMsg === 'invalid_transition') return { error: 'This task cannot be cancelled in its current state.' };
     return { error: 'Failed to cancel task.' };
   }
 
@@ -104,7 +105,7 @@ export async function retryTaskAction(
     `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
     {
       method: 'POST',
-      body: priority ? { priority } : {},
+      body: priority ? { priority } : undefined,
       cookie: `${SESSION_COOKIE}=${session}`,
     },
   );
