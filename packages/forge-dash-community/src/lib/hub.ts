@@ -231,6 +231,7 @@ export interface HubAnalyticsOverview {
   failedTasks: number;
   pendingTasks: number;
   inProgressTasks: number;
+  cancelledTasks: number;
   completionRate: number;
   avgCompletionTimeMs: number | null;
   period: { from: string | null; to: string | null };

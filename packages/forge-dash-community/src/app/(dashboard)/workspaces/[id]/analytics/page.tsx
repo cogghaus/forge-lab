@@ -91,7 +91,7 @@ function StatusBar({ data, workspaceId }: StatusBarProps) {
     completed: data.completedTasks,
     in_progress: data.inProgressTasks,
     failed: data.failedTasks,
-    cancelled: 0, // not in overview response; omit
+    cancelled: data.cancelledTasks ?? 0,
     pending: data.pendingTasks,
   };
   const total = data.totalTasks;
@@ -180,6 +180,12 @@ export default function WorkspaceAnalyticsPage() {
   const rateAccent =
     completionRatePct >= 50 ? '#2DD4A0' : completionRatePct >= 20 ? '#F59E0B' : '#F87171';
 
+  const tabQs = new URLSearchParams();
+  if (from) tabQs.set('from', from);
+  if (to) tabQs.set('to', to);
+  const tabRange = tabQs.toString();
+  const agentsHref = `/workspaces/${workspaceId}/analytics/agents${tabRange ? `?${tabRange}` : ''}`;
+
   return (
     <div className="max-w-2xl">
       {/* Page header */}
@@ -187,34 +193,25 @@ export default function WorkspaceAnalyticsPage() {
         <h1 className="font-mono text-[18px] font-bold">Analytics</h1>
       </div>
 
-      {/* Tab nav - preserve from/to when switching tabs */}
-      {(() => {
-        const qs = new URLSearchParams();
-        if (from) qs.set('from', from);
-        if (to) qs.set('to', to);
-        const rangeQuery = qs.toString();
-        const agentsHref = `/workspaces/${workspaceId}/analytics/agents${rangeQuery ? `?${rangeQuery}` : ''}`;
-        return (
-          <div
-            className="flex gap-1 mb-5 p-1 rounded-lg"
-            style={{ background: 'rgba(255,255,255,0.04)', width: 'fit-content' }}
-          >
-            <span
-              className="font-mono text-[11px] px-3 py-1.5 rounded-md"
-              style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(245,240,235,0.85)' }}
-            >
-              Overview
-            </span>
-            <Link
-              href={agentsHref}
-              className="font-mono text-[11px] px-3 py-1.5 rounded-md transition-colors"
-              style={{ color: 'rgba(245,240,235,0.45)' }}
-            >
-              Agent Performance
-            </Link>
-          </div>
-        );
-      })()}
+      {/* Tab nav */}
+      <div
+        className="flex gap-1 mb-5 p-1 rounded-lg"
+        style={{ background: 'rgba(255,255,255,0.04)', width: 'fit-content' }}
+      >
+        <span
+          className="font-mono text-[11px] px-3 py-1.5 rounded-md"
+          style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(245,240,235,0.85)' }}
+        >
+          Overview
+        </span>
+        <Link
+          href={agentsHref}
+          className="font-mono text-[11px] px-3 py-1.5 rounded-md transition-colors"
+          style={{ color: 'rgba(245,240,235,0.45)' }}
+        >
+          Agent Performance
+        </Link>
+      </div>
 
       {/* Date range picker */}
       <DateRangePicker className="mb-5" />

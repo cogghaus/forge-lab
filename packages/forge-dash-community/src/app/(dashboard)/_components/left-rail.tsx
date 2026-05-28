@@ -58,6 +58,14 @@ function useAgentStatus(workspaceId: string | null): AgentStatusState {
 
         if (!alive) return;
 
+        // Session expired — stop polling and redirect to login
+        if (devRes.status === 401 || taskRes?.status === 401) {
+          alive = false;
+          clearInterval(timer);
+          window.location.href = '/login';
+          return;
+        }
+
         let devices: HubDevice[] = [];
         let activeTasks: HubTask[] = [];
 
@@ -79,8 +87,9 @@ function useAgentStatus(workspaceId: string | null): AgentStatusState {
       }
     }
 
-    void poll();
+    // Assign timer before first poll so the 401 handler's clearInterval is valid.
     const timer = setInterval(() => void poll(), 5_000);
+    void poll();
     return () => {
       alive = false;
       clearInterval(timer);

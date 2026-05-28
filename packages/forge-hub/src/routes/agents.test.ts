@@ -408,7 +408,6 @@ describe('GET /agents/performance', () => {
   });
 
   it('sorts agents by completedCount descending', async () => {
-    const now = Date.now();
     await hub.db.insert(schema.tasks).values([
       {
         id: 'fl-001',

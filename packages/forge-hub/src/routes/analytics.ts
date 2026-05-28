@@ -55,6 +55,7 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance, db: Db): void 
           pending: sql<number>`cast(sum(case when ${schema.tasks.status} in (
             'pending_dispatcher_action', 'pending_design', 'design_review', 'pending_agent', 'assigned'
           ) then 1 else 0 end) as integer)`,
+          cancelled: sql<number>`cast(sum(case when ${schema.tasks.status} = 'cancelled' then 1 else 0 end) as integer)`,
           avgCompletionMs: sql<number | null>`avg(
             case when ${schema.tasks.status} = 'completed'
               and ${schema.tasks.completedAt} is not null
@@ -72,6 +73,7 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance, db: Db): void 
       const failed = Number(row?.failed ?? 0);
       const inProgress = Number(row?.inProgress ?? 0);
       const pending = Number(row?.pending ?? 0);
+      const cancelled = Number(row?.cancelled ?? 0);
       const completionRate = total > 0 ? Math.round((completed / total) * 1000) / 1000 : 0;
       const rawAvg = row?.avgCompletionMs;
       const avgCompletionTimeMs =
@@ -83,6 +85,7 @@ export function registerAnalyticsRoutes(fastify: FastifyInstance, db: Db): void 
         failedTasks: failed,
         pendingTasks: pending,
         inProgressTasks: inProgress,
+        cancelledTasks: cancelled,
         completionRate,
         avgCompletionTimeMs,
         period: {

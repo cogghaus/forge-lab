@@ -13,6 +13,7 @@ interface OverviewResponse {
   failedTasks: number;
   pendingTasks: number;
   inProgressTasks: number;
+  cancelledTasks: number;
   completionRate: number;
   avgCompletionTimeMs: number | null;
   period: { from: string | null; to: string | null };
@@ -65,6 +66,7 @@ describe('GET /workspaces/:id/analytics/overview', () => {
     expect(body.failedTasks).toBe(0);
     expect(body.pendingTasks).toBe(0);
     expect(body.inProgressTasks).toBe(0);
+    expect(body.cancelledTasks).toBe(0);
     expect(body.completionRate).toBe(0);
     expect(body.avgCompletionTimeMs).toBeNull();
     expect(body.period.from).toBeNull();
@@ -124,6 +126,7 @@ describe('GET /workspaces/:id/analytics/overview', () => {
     expect(body.failedTasks).toBe(1);
     expect(body.inProgressTasks).toBe(1);
     expect(body.pendingTasks).toBe(0);
+    expect(body.cancelledTasks).toBe(0);
     // completionRate = 2/4 = 0.5
     expect(body.completionRate).toBe(0.5);
     // avg of 30s and 60s = 45000ms (timestamps stored as epoch ms integers)
@@ -160,6 +163,26 @@ describe('GET /workspaces/:id/analytics/overview', () => {
         createdBy: 'user:test',
         workspaceId,
       },
+      // Cancelled task inside range — should appear in cancelledTasks
+      {
+        id: 'fl-003',
+        projectPrefix: 'fl',
+        title: 'Cancelled recent',
+        status: 'cancelled',
+        createdAt: inRange,
+        createdBy: 'user:test',
+        workspaceId,
+      },
+      // Cancelled task outside range — must NOT appear in cancelledTasks
+      {
+        id: 'fl-004',
+        projectPrefix: 'fl',
+        title: 'Cancelled old',
+        status: 'cancelled',
+        createdAt: outOfRange,
+        createdBy: 'user:test',
+        workspaceId,
+      },
     ]);
 
     const from = new Date(now - 7 * dayMs).toISOString();
@@ -172,9 +195,10 @@ describe('GET /workspaces/:id/analytics/overview', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as OverviewResponse;
-    // Only the recent task should be counted
-    expect(body.totalTasks).toBe(1);
+    // Only in-range tasks: 1 completed + 1 cancelled
+    expect(body.totalTasks).toBe(2);
     expect(body.completedTasks).toBe(1);
+    expect(body.cancelledTasks).toBe(1);
     expect(body.period.from).toBe(from);
     expect(body.period.to).toBe(to);
   });
@@ -193,6 +217,7 @@ describe('GET /workspaces/:id/analytics/overview', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as OverviewResponse;
     expect(body.totalTasks).toBe(0);
+    expect(body.cancelledTasks).toBe(0);
     expect(body.completionRate).toBe(0);
     expect(body.avgCompletionTimeMs).toBeNull();
   });
@@ -222,6 +247,25 @@ describe('GET /workspaces/:id/analytics/overview', () => {
       headers: { cookie },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('includes cancelledTasks count in overview response', async () => {
+    await hub.db.insert(schema.tasks).values([
+      { id: 'fl-001', projectPrefix: 'fl', title: 'Done', status: 'completed', createdBy: 'user:test', workspaceId },
+      { id: 'fl-002', projectPrefix: 'fl', title: 'Zap1', status: 'cancelled', createdBy: 'user:test', workspaceId },
+      { id: 'fl-003', projectPrefix: 'fl', title: 'Zap2', status: 'cancelled', createdBy: 'user:test', workspaceId },
+    ]);
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/analytics/overview`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as OverviewResponse;
+    expect(body.totalTasks).toBe(3);
+    expect(body.cancelledTasks).toBe(2);
+    expect(body.completedTasks).toBe(1);
   });
 
   it('defaults to = now when only from is provided', async () => {

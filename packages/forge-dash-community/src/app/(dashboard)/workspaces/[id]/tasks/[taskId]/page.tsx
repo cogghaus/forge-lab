@@ -4,6 +4,7 @@ import { Card, CardBody, Chip } from '@heroui/react';
 import {
   hubFetch,
   type HubAgent,
+  type HubDevice,
   type HubGoal,
   type HubTaskComment,
   type HubTaskHistory,
@@ -14,7 +15,7 @@ import {
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { TaskDetailRefresh } from './task-detail-refresh';
 import { TaskActionButton } from './task-action-button';
-import { ReassignDropdown } from './reassign-dropdown';
+import { ReassignDropdown } from './reassign-dropdown-loader';
 
 interface Props {
   params: Promise<{ id: string; taskId: string }>;
@@ -60,6 +61,15 @@ function formatTs(ts: string): string {
   return new Date(ts).toLocaleString();
 }
 
+function resolveCreatedBy(createdBy: string, deviceMap: Map<string, string>): string {
+  if (createdBy.startsWith('device:')) {
+    const id = createdBy.slice(7);
+    return deviceMap.get(id) ?? id.slice(0, 12);
+  }
+  if (createdBy.startsWith('user:')) return 'user';
+  return createdBy;
+}
+
 /** Parse a dispatcher comment body into structured decision fields. */
 function parseDecision(body: string) {
   const lines = body.split('\n');
@@ -97,7 +107,7 @@ const EVENT_LABELS: Record<string, string> = {
 
 function friendlySource(source: string): string {
   if (source.startsWith('device:')) return source.slice(7).slice(0, 12);
-  if (source.startsWith('user:'))   return source.slice(5);
+  if (source.startsWith('user:')) return 'user';
   return source;
 }
 
@@ -192,11 +202,12 @@ export default async function TaskDetailPage({ params }: Props) {
 
   const cookieHeader = `${SESSION_COOKIE}=${session}`;
 
-  const [wsRes, taskRes, historyRes, commentsRes] = await Promise.all([
+  const [wsRes, taskRes, historyRes, commentsRes, devicesRes] = await Promise.all([
     hubFetch<HubWorkspace>(`/workspaces/${workspaceId}`, { cookie: cookieHeader }),
     hubFetch<HubTaskWithParent>(`/tasks/${taskId}`, { cookie: cookieHeader }),
     hubFetch<{ history: HubTaskHistory[] }>(`/tasks/${taskId}/history`, { cookie: cookieHeader }),
     hubFetch<{ comments: HubTaskComment[] }>(`/tasks/${taskId}/comments`, { cookie: cookieHeader }),
+    hubFetch<{ devices: HubDevice[] }>('/devices', { cookie: cookieHeader }),
   ]);
 
   if (!wsRes.ok || !taskRes.ok) redirect(`/workspaces/${workspaceId}`);
@@ -206,6 +217,9 @@ export default async function TaskDetailPage({ params }: Props) {
   const history = historyRes.ok ? historyRes.data.history : [];
   const allComments = commentsRes.ok ? commentsRes.data.comments : [];
   const dispatcherComments = allComments.filter(c => c.authorType === 'dispatcher');
+  const deviceMap = new Map<string, string>(
+    (devicesRes.ok ? devicesRes.data.devices : []).map((d: HubDevice) => [d.id, d.name]),
+  );
 
   // Fetch linked goal if present
   const linkedGoal: HubGoal | null = task.goalId
@@ -228,11 +242,6 @@ export default async function TaskDetailPage({ params }: Props) {
         cookie: cookieHeader,
       }).then((r) => (r.ok ? r.data.agents : []))
     : [];
-
-  const isActive =
-    task.status === 'pending_agent' ||
-    task.status === 'assigned' ||
-    task.status === 'in_progress';
 
   const canCancel =
     task.status === 'pending_dispatcher_action' ||
@@ -343,7 +352,7 @@ export default async function TaskDetailPage({ params }: Props) {
           )}
 
           <div className="flex gap-4 text-xs text-default-400 pt-1 border-t border-default-100">
-            <span>Created by {task.createdBy.replace(/^(device:|user:)/, '')}</span>
+            <span>Created by {resolveCreatedBy(task.createdBy, deviceMap)}</span>
             <span>&middot;</span>
             <span>{formatTs(task.createdAt)}</span>
             {task.assignedDeviceId && (
