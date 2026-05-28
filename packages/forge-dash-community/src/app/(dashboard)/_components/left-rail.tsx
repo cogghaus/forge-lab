@@ -46,6 +46,7 @@ function useAgentStatus(workspaceId: string | null): AgentStatusState {
 
   useEffect(() => {
     let alive = true;
+    let timer: ReturnType<typeof setInterval>;
 
     async function poll(): Promise<void> {
       try {
@@ -57,6 +58,14 @@ function useAgentStatus(workspaceId: string | null): AgentStatusState {
         ]);
 
         if (!alive) return;
+
+        // Session expired — stop polling and redirect to login
+        if (devRes.status === 401 || taskRes?.status === 401) {
+          alive = false;
+          clearInterval(timer);
+          window.location.href = '/login';
+          return;
+        }
 
         let devices: HubDevice[] = [];
         let activeTasks: HubTask[] = [];
@@ -80,7 +89,7 @@ function useAgentStatus(workspaceId: string | null): AgentStatusState {
     }
 
     void poll();
-    const timer = setInterval(() => void poll(), 5_000);
+    timer = setInterval(() => void poll(), 5_000);
     return () => {
       alive = false;
       clearInterval(timer);

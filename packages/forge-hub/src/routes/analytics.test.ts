@@ -13,6 +13,7 @@ interface OverviewResponse {
   failedTasks: number;
   pendingTasks: number;
   inProgressTasks: number;
+  cancelledTasks: number;
   completionRate: number;
   avgCompletionTimeMs: number | null;
   period: { from: string | null; to: string | null };
@@ -222,6 +223,25 @@ describe('GET /workspaces/:id/analytics/overview', () => {
       headers: { cookie },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('includes cancelledTasks count in overview response', async () => {
+    await hub.db.insert(schema.tasks).values([
+      { id: 'fl-001', projectPrefix: 'fl', title: 'Done', status: 'completed', createdBy: 'user:test', workspaceId },
+      { id: 'fl-002', projectPrefix: 'fl', title: 'Zap1', status: 'cancelled', createdBy: 'user:test', workspaceId },
+      { id: 'fl-003', projectPrefix: 'fl', title: 'Zap2', status: 'cancelled', createdBy: 'user:test', workspaceId },
+    ]);
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/analytics/overview`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as OverviewResponse;
+    expect(body.totalTasks).toBe(3);
+    expect(body.cancelledTasks).toBe(2);
+    expect(body.completedTasks).toBe(1);
   });
 
   it('defaults to = now when only from is provided', async () => {

@@ -36,7 +36,7 @@ function shortSource(source: string, deviceNames?: Map<string, string>): string 
     const id = source.slice(7);
     return deviceNames?.get(id) ?? id.slice(0, 8);
   }
-  if (source.startsWith('user:')) return source.slice(5);
+  if (source.startsWith('user:')) return 'user';
   return source;
 }
 
