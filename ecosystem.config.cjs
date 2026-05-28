@@ -19,7 +19,7 @@ const DAEMON_BIN = './packages/forge-daemon/dist/bin/forge-daemon.js';
 
 // Shared defaults applied to every daemon.
 const COMMON_ENV = {
-  FORGE_DAEMON_HUB_URL: 'http://localhost:3001',
+  FORGE_DAEMON_HUB_URL: 'http://localhost:3000',
   FORGE_DAEMON_WORKDIR: './forge-workdir',
   FORGE_DAEMON_DEFAULT_RUNTIME: 'background',
   FORGE_DAEMON_SKIP_PERMISSIONS: 'true',
@@ -123,6 +123,32 @@ const apps = [
     env: {
       ...WORKER_ENV,
       FORGE_DAEMON_AGENT_ID: 'scribe',
+    },
+    max_memory_restart: '512M',
+    restart_delay: 5000,
+  },
+
+  // Herald: notifications, status updates, external integrations.
+  {
+    name: 'forge-herald',
+    script: DAEMON_BIN,
+    env_file: '.env.herald',
+    env: {
+      ...WORKER_ENV,
+      FORGE_DAEMON_AGENT_ID: 'herald',
+    },
+    max_memory_restart: '512M',
+    restart_delay: 5000,
+  },
+
+  // Temper: code review, linting, style enforcement.
+  {
+    name: 'forge-temper',
+    script: DAEMON_BIN,
+    env_file: '.env.temper',
+    env: {
+      ...WORKER_ENV,
+      FORGE_DAEMON_AGENT_ID: 'temper',
     },
     max_memory_restart: '512M',
     restart_delay: 5000,
