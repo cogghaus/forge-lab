@@ -839,12 +839,11 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign', () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it('requires device auth — user session returns 401', async () => {
+  it('unauthenticated request returns 401', async () => {
     const taskId = await createWsTask('pending_dispatcher_action');
     const res = await hub.fastify.inject({
       method: 'PATCH',
       url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
-      headers: { cookie },
       payload: { agentId: 'architect' },
     });
     expect(res.statusCode).toBe(401);
@@ -1888,6 +1887,7 @@ describe('task assignedAgentId via flat POST', () => {
     expect(task?.assignedAgentId).toBeNull();
   });
 
+
   it('task.completed SSE event includes result and workspaceId in payload', async () => {
     const taskRes = await hub.fastify.inject({
       method: 'POST',
@@ -1923,5 +1923,777 @@ describe('task assignedAgentId via flat POST', () => {
     expect(completedEvent?.payload['taskId']).toBe(taskId);
     expect(completedEvent?.payload['result']).toBe('Added GET /api/auth endpoint with JWT validation');
     expect(completedEvent?.payload['workspaceId']).toBe(workspaceId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /workspaces/:workspaceId/tasks/:taskId/cancel
+// ---------------------------------------------------------------------------
+
+describe('POST /workspaces/:workspaceId/tasks/:taskId/cancel', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  type TaskStatusLiteral =
+    | 'pending_dispatcher_action'
+    | 'pending_agent'
+    | 'pending_design'
+    | 'design_review'
+    | 'assigned'
+    | 'in_progress'
+    | 'completed'
+    | 'failed'
+    | 'cancelled';
+
+  async function createWsTask(status: TaskStatusLiteral = 'pending_agent'): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'can', title: 'Cancellable task' },
+    });
+    const id = (res.json() as { id: string }).id;
+    if (status !== 'pending_agent') {
+      await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
+    }
+    return id;
+  }
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('cancels a pending_agent task', async () => {
+    const taskId = await createWsTask('pending_agent');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { id: string; status: string }).status).toBe('cancelled');
+    const task = await hub.db
+      .select({ status: schema.tasks.status })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.status).toBe('cancelled');
+  });
+
+  it('cancels a pending_dispatcher_action task (gap fix)', async () => {
+    const taskId = await createWsTask('pending_dispatcher_action');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const task = await hub.db
+      .select({ status: schema.tasks.status })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.status).toBe('cancelled');
+  });
+
+  it('cancels an in_progress task and inserts stop instruction', async () => {
+    const taskId = await createWsTask('in_progress');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const instr = await hub.db
+      .select()
+      .from(schema.taskInstructions)
+      .where(eq(schema.taskInstructions.taskId, taskId))
+      .get();
+    expect(instr).toBeDefined();
+    expect(instr?.priority).toBe('stop');
+  });
+
+  it('stop instruction body includes cancel reason', async () => {
+    const taskId = await createWsTask('in_progress');
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+      payload: { reason: 'wrong scope' },
+    });
+    const instr = await hub.db
+      .select({ body: schema.taskInstructions.body })
+      .from(schema.taskInstructions)
+      .where(eq(schema.taskInstructions.taskId, taskId))
+      .get();
+    expect(instr?.body).toContain('wrong scope');
+  });
+
+  it('no stop instruction inserted for non-in_progress cancel', async () => {
+    const taskId = await createWsTask('pending_agent');
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    const instr = await hub.db
+      .select()
+      .from(schema.taskInstructions)
+      .where(eq(schema.taskInstructions.taskId, taskId))
+      .get();
+    expect(instr).toBeUndefined();
+  });
+
+  it('returns 409 already_terminal for already-cancelled task', async () => {
+    const taskId = await createWsTask('cancelled');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('already_terminal');
+  });
+
+  it('returns 409 already_terminal for completed task', async () => {
+    const taskId = await createWsTask('completed');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('already_terminal');
+  });
+
+  it('returns 409 already_terminal for failed task', async () => {
+    const taskId = await createWsTask('failed');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('already_terminal');
+  });
+
+  it('returns 404 for non-existent task', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/can-999/cancel`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 403 for non-workspace-member', async () => {
+    const taskId = await createWsTask('pending_agent');
+    // Use invite flow — direct registration is admin-only
+    const inviteRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/admin/invites',
+      headers: { cookie },
+      payload: {},
+    });
+    const { token: inviteToken } = inviteRes.json() as { token: string };
+    const acceptRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/invites/${inviteToken}/accept`,
+      payload: { email: 'other@example.com', password: 'password123' },
+    });
+    const rawAcceptCookie = acceptRes.headers['set-cookie'];
+    const otherCookie = (Array.isArray(rawAcceptCookie) ? rawAcceptCookie[0] : rawAcceptCookie)!.split(';')[0]!;
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie: otherCookie },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('returns 401 for unauthenticated request', async () => {
+    const taskId = await createWsTask('pending_agent');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('records taskHistory with task.cancelled event', async () => {
+    const taskId = await createWsTask('pending_agent');
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    const rows = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    const history = rows.find((r) => r.eventName === 'task.cancelled');
+    expect(history).toBeDefined();
+    expect((history?.payload as Record<string, unknown>)['previousStatus']).toBe('pending_agent');
+  });
+
+  it('stores reason in taskHistory payload', async () => {
+    const taskId = await createWsTask('pending_agent');
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+      payload: { reason: 'test reason' },
+    });
+    const rows = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    const history = rows.find((r) => r.eventName === 'task.cancelled');
+    expect((history?.payload as Record<string, unknown>)['reason']).toBe('test reason');
+  });
+
+  it('stores null reason when body omitted', async () => {
+    const taskId = await createWsTask('pending_agent');
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    const rows = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    const history = rows.find((r) => r.eventName === 'task.cancelled');
+    expect((history?.payload as Record<string, unknown>)['reason']).toBeNull();
+  });
+
+  it('emits task.cancelled SSE event', async () => {
+    const taskId = await createWsTask('pending_agent');
+    const emitted: Array<{ name: string; payload: Record<string, unknown> }> = [];
+    const unsub = hub.bus.subscribe((ev) => {
+      emitted.push(ev as { name: string; payload: Record<string, unknown> });
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    unsub();
+    const ev = emitted.find((e) => e.name === 'task.cancelled');
+    expect(ev).toBeDefined();
+    expect(ev?.payload['taskId']).toBe(taskId);
+    expect(ev?.payload['workspaceId']).toBe(workspaceId);
+  });
+
+  it('concurrent cancel: second request returns 409 status_changed', async () => {
+    const taskId = await createWsTask('pending_agent');
+    // First cancel succeeds
+    const r1 = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    expect(r1.statusCode).toBe(200);
+    // Second cancel: task is now cancelled (terminal) → already_terminal
+    const r2 = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    expect(r2.statusCode).toBe(409);
+    expect((r2.json() as { error: string }).error).toBe('already_terminal');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /workspaces/:workspaceId/tasks/:taskId/retry
+// ---------------------------------------------------------------------------
+
+describe('POST /workspaces/:workspaceId/tasks/:taskId/retry', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  type TaskStatusLiteral =
+    | 'pending_dispatcher_action'
+    | 'pending_agent'
+    | 'in_progress'
+    | 'assigned'
+    | 'completed'
+    | 'cancelled'
+    | 'failed';
+
+  async function createWsTask(status: TaskStatusLiteral = 'failed'): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ret', title: 'Retriable task' },
+    });
+    const id = (res.json() as { id: string }).id;
+    if (status !== 'pending_agent') {
+      await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
+    }
+    return id;
+  }
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('retries a failed task to pending_dispatcher_action', async () => {
+    const taskId = await createWsTask('failed');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { id: string; status: string };
+    expect(body.status).toBe('pending_dispatcher_action');
+
+    const task = await hub.db
+      .select({
+        status: schema.tasks.status,
+        assignedAgentId: schema.tasks.assignedAgentId,
+        assignedAt: schema.tasks.assignedAt,
+        assignedDeviceId: schema.tasks.assignedDeviceId,
+      })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.status).toBe('pending_dispatcher_action');
+    expect(task?.assignedAgentId).toBeNull();
+    expect(task?.assignedAt).toBeNull();
+    expect(task?.assignedDeviceId).toBeNull();
+  });
+
+  it('applies priority override', async () => {
+    const taskId = await createWsTask('failed');
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
+      headers: { cookie },
+      payload: { priority: 'urgent' },
+    });
+    const task = await hub.db
+      .select({ priority: schema.tasks.priority })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.priority).toBe('urgent');
+  });
+
+  it('keeps existing priority when not provided', async () => {
+    const taskId = await createWsTask('failed');
+    await hub.db
+      .update(schema.tasks)
+      .set({ priority: 'high' })
+      .where(eq(schema.tasks.id, taskId));
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
+      headers: { cookie },
+    });
+    const task = await hub.db
+      .select({ priority: schema.tasks.priority })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.priority).toBe('high');
+  });
+
+  it('returns 409 not_failed when task is in_progress', async () => {
+    const taskId = await createWsTask('in_progress');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('not_failed');
+  });
+
+  it('returns 409 not_failed when task is pending_agent', async () => {
+    const taskId = await createWsTask('pending_agent');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('not_failed');
+  });
+
+  it('returns 404 for non-existent task', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/ret-999/retry`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 403 for non-workspace-member', async () => {
+    const taskId = await createWsTask('failed');
+    const inviteRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/admin/invites',
+      headers: { cookie },
+      payload: {},
+    });
+    const { token: inviteToken } = inviteRes.json() as { token: string };
+    const acceptRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/invites/${inviteToken}/accept`,
+      payload: { email: 'other2@example.com', password: 'password123' },
+    });
+    const rawAcceptCookie = acceptRes.headers['set-cookie'];
+    const otherCookie = (Array.isArray(rawAcceptCookie) ? rawAcceptCookie[0] : rawAcceptCookie)!.split(';')[0]!;
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
+      headers: { cookie: otherCookie },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('returns 401 for unauthenticated request', async () => {
+    const taskId = await createWsTask('failed');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('records task.requeued taskHistory event', async () => {
+    const taskId = await createWsTask('failed');
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
+      headers: { cookie },
+    });
+    const rows = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    const requeuedRow = rows.find((r) => r.eventName === 'task.requeued');
+    expect(requeuedRow).toBeDefined();
+    expect((requeuedRow?.payload as Record<string, unknown>)['previousStatus']).toBe('failed');
+  });
+
+  it('emits task.requeued SSE event', async () => {
+    const taskId = await createWsTask('failed');
+    const emitted: Array<{ name: string; payload: Record<string, unknown> }> = [];
+    const unsub = hub.bus.subscribe((ev) => {
+      emitted.push(ev as { name: string; payload: Record<string, unknown> });
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
+      headers: { cookie },
+    });
+    unsub();
+    const ev = emitted.find((e) => e.name === 'task.requeued');
+    expect(ev).toBeDefined();
+    expect(ev?.payload['taskId']).toBe(taskId);
+    expect(ev?.payload['workspaceId']).toBe(workspaceId);
+  });
+
+  it('clears assignedDeviceId on retry', async () => {
+    const taskId = await createWsTask('failed');
+    // Simulate a task that had a device assigned
+    const deviceRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'temp-worker', deviceType: 'worker' },
+    });
+    const { id: deviceId } = deviceRes.json() as { id: string; token: string };
+    await hub.db
+      .update(schema.tasks)
+      .set({ assignedDeviceId: deviceId })
+      .where(eq(schema.tasks.id, taskId));
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/retry`,
+      headers: { cookie },
+    });
+    const task = await hub.db
+      .select({ assignedDeviceId: schema.tasks.assignedDeviceId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.assignedDeviceId).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /workspaces/:workspaceId/tasks/:taskId/assign — user session path
+// ---------------------------------------------------------------------------
+
+describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign — user session', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  type TaskStatusLiteral =
+    | 'pending_dispatcher_action'
+    | 'pending_agent'
+    | 'in_progress'
+    | 'assigned'
+    | 'completed'
+    | 'cancelled'
+    | 'failed';
+
+  async function createWsTask(status: TaskStatusLiteral = 'pending_agent'): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ras', title: 'Reassignable task' },
+    });
+    const id = (res.json() as { id: string }).id;
+    if (status !== 'pending_agent') {
+      await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
+    }
+    return id;
+  }
+
+  async function registerOrchestratorDevice(): Promise<{ token: string }> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' },
+    });
+    return { token: (res.json() as { token: string }).token };
+  }
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('user can reassign a pending_agent task to a specific agent', async () => {
+    const taskId = await createWsTask('pending_agent');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: 'furnace' },
+    });
+    expect(res.statusCode).toBe(200);
+    const task = await hub.db
+      .select({ status: schema.tasks.status, assignedAgentId: schema.tasks.assignedAgentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.status).toBe('assigned');
+    expect(task?.assignedAgentId).toBe('furnace');
+  });
+
+  it('user can reassign an assigned task', async () => {
+    const taskId = await createWsTask('assigned');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('user can clear assignment with agentId: null', async () => {
+    const taskId = await createWsTask('pending_agent');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: null },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; status?: string };
+    expect(body.status).toBe('pending_dispatcher_action');
+
+    const task = await hub.db
+      .select({
+        status: schema.tasks.status,
+        assignedAgentId: schema.tasks.assignedAgentId,
+        assignedAt: schema.tasks.assignedAt,
+      })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.status).toBe('pending_dispatcher_action');
+    expect(task?.assignedAgentId).toBeNull();
+    expect(task?.assignedAt).toBeNull();
+  });
+
+  it('user cannot reassign an in_progress task', async () => {
+    const taskId = await createWsTask('in_progress');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('not_assignable');
+  });
+
+  it('user cannot reassign a completed task', async () => {
+    const taskId = await createWsTask('completed');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('not_assignable');
+  });
+
+  it('user without workspace membership returns 403', async () => {
+    const taskId = await createWsTask('pending_agent');
+    const inviteRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/admin/invites',
+      headers: { cookie },
+      payload: {},
+    });
+    const { token: inviteToken } = inviteRes.json() as { token: string };
+    const acceptRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/invites/${inviteToken}/accept`,
+      payload: { email: 'outsider@example.com', password: 'password123' },
+    });
+    const rawAcceptCookie = acceptRes.headers['set-cookie'];
+    const outsiderCookie = (Array.isArray(rawAcceptCookie) ? rawAcceptCookie[0] : rawAcceptCookie)!.split(';')[0]!;
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie: outsiderCookie },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('unauthenticated returns 401', async () => {
+    const taskId = await createWsTask('pending_agent');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('orchestrator device path still works (regression guard)', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createWsTask('pending_dispatcher_action');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { ok: boolean }).ok).toBe(true);
+  });
+
+  it('orchestrator cannot pass null agentId (validation error)', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createWsTask('pending_dispatcher_action');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: null },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('records task.assigned history when user reassigns', async () => {
+    const taskId = await createWsTask('pending_agent');
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: 'scribe' },
+    });
+    const rows = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    const assignRow = rows.find((r) => r.eventName === 'task.assigned');
+    expect(assignRow).toBeDefined();
+    expect(assignRow?.source).toMatch(/^user:/);
+  });
+
+  it('records task.requeued history when user clears assignment', async () => {
+    const taskId = await createWsTask('pending_agent');
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: null },
+    });
+    const rows = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    const requeuedRow = rows.find((r) => r.eventName === 'task.requeued');
+    expect(requeuedRow).toBeDefined();
+    expect(
+      (requeuedRow?.payload as Record<string, unknown>)['reason'],
+    ).toBe('manual_reassign_cleared');
+  });
+
+  it('emits task.assigned SSE when user reassigns', async () => {
+    const taskId = await createWsTask('pending_agent');
+    const emitted: Array<{ name: string }> = [];
+    const unsub = hub.bus.subscribe((ev) => emitted.push(ev as { name: string }));
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: 'furnace' },
+    });
+    unsub();
+    expect(emitted.find((e) => e.name === 'task.assigned')).toBeDefined();
+  });
+
+  it('emits task.requeued SSE when user clears assignment', async () => {
+    const taskId = await createWsTask('pending_agent');
+    const emitted: Array<{ name: string }> = [];
+    const unsub = hub.bus.subscribe((ev) => emitted.push(ev as { name: string }));
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: null },
+    });
+    unsub();
+    expect(emitted.find((e) => e.name === 'task.requeued')).toBeDefined();
   });
 });

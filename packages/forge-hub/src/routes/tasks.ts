@@ -7,6 +7,7 @@ import {
   TaskIdSchema,
   formatTaskId,
   parseTaskId,
+  rankAtLeast,
   schema,
 } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
@@ -30,8 +31,36 @@ const AssignTaskBodySchema = z.object({
   agentId: z.string().min(1).max(100),
 });
 
+/** User session path: agentId may be null to clear assignment. */
+const UserAssignTaskBodySchema = z.object({
+  agentId: z.string().min(1).max(100).nullable(),
+});
+
+const CancelTaskBodySchema = z.object({
+  reason: z.string().max(500).optional(),
+});
+
+const RetryTaskBodySchema = z.object({
+  priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
+});
+
 /** Task statuses FM is allowed to route from. */
 const FM_ASSIGNABLE_STATUSES = ['pending_dispatcher_action', 'pending_agent'] as const;
+
+/** Statuses a user may cancel via the dedicated cancel endpoint. */
+const CANCELLABLE_STATUSES = [
+  'pending_dispatcher_action',
+  'pending_design',
+  'pending_agent',
+  'assigned',
+  'in_progress',
+] as const;
+
+/** Terminal statuses — cancel/retry are not allowed from these. */
+const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'] as const;
+
+/** Statuses a user may reassign/clear via the user-session assign path. */
+const USER_ASSIGNABLE_STATUSES = ['pending_agent', 'assigned'] as const;
 
 const USER_ALLOWED_TRANSITIONS: Record<string, string[]> = {
   pending_dispatcher_action: ['cancelled'],
@@ -313,22 +342,110 @@ export function registerTaskRoutes(
   );
 
   // ---------------------------------------------------------------------------
-  // FM orchestrator: assign a task to a specific agent
-  // Only orchestrator-type devices may call this endpoint.
+  // Assign task: accepts orchestrator device OR workspace member (user session).
+  // Orchestrator path: non-nullable agentId, FM_ASSIGNABLE_STATUSES, 422 on guard fail.
+  // User path: nullable agentId (null = clear → pending_dispatcher_action),
+  //            USER_ASSIGNABLE_STATUSES, 409 on guard fail.
   // ---------------------------------------------------------------------------
 
   fastify.patch<{ Params: { workspaceId: string; taskId: string } }>(
     '/workspaces/:workspaceId/tasks/:taskId/assign',
-    { preHandler: requireDevice },
     async (req, reply) => {
-      const device = getDevice(req);
-      if (device.deviceType !== 'orchestrator') {
-        await reply.code(403).send({ error: 'orchestrator_required' });
-        return;
-      }
       const workspaceId = req.params.workspaceId;
       const taskId = TaskIdSchema.parse(req.params.taskId);
-      const body = AssignTaskBodySchema.parse(req.body);
+
+      const isDevice = !!req.authDevice;
+      const isUser = !!req.authUser;
+
+      if (!isDevice && !isUser) {
+        await reply.code(401).send({ error: 'unauthorized' });
+        return;
+      }
+
+      if (isDevice) {
+        // Orchestrator path (existing FM behaviour, unchanged)
+        const device = req.authDevice!;
+        if (device.deviceType !== 'orchestrator') {
+          await reply.code(403).send({ error: 'orchestrator_required' });
+          return;
+        }
+
+        const body = AssignTaskBodySchema.parse(req.body);
+
+        const task = await db
+          .select({ id: schema.tasks.id, status: schema.tasks.status })
+          .from(schema.tasks)
+          .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)))
+          .get();
+        if (!task) {
+          await reply.code(404).send({ error: 'not_found' });
+          return;
+        }
+        if (!(FM_ASSIGNABLE_STATUSES as readonly string[]).includes(task.status)) {
+          await reply.code(422).send({ error: 'not_assignable', status: task.status });
+          return;
+        }
+
+        const source = `device:${device.id}`;
+        await db
+          .update(schema.tasks)
+          .set({
+            assignedAgentId: body.agentId,
+            assignedAt: new Date(),
+            status: 'assigned',
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.tasks.id, taskId));
+
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId,
+          eventName: 'task.assigned',
+          source,
+          payload: { agentId: body.agentId, ...maybeRunId(req) },
+          workspaceId,
+        });
+        bus.emit({
+          id: nanoid(),
+          name: 'task.assigned',
+          occurredAt: new Date(),
+          source,
+          payload: { taskId, workspaceId, agentId: body.agentId },
+        });
+
+        return { ok: true };
+      }
+
+      // User session path: verify workspace membership at collaborator level
+      const user = req.authUser!;
+      const membership = await db
+        .select({
+          role: schema.workspaceMembers.role,
+          workspaceStatus: schema.workspaces.status,
+        })
+        .from(schema.workspaceMembers)
+        .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.workspaceMembers.workspaceId))
+        .where(
+          and(
+            eq(schema.workspaceMembers.workspaceId, workspaceId),
+            eq(schema.workspaceMembers.userId, user.id),
+          ),
+        )
+        .get();
+      if (!membership) {
+        await reply.code(403).send({ error: 'forbidden' });
+        return;
+      }
+      if (membership.workspaceStatus === 'deleted') {
+        await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+      if (!rankAtLeast(membership.role, 'collaborator')) {
+        await reply.code(403).send({ error: 'insufficient_role' });
+        return;
+      }
+
+      const body = UserAssignTaskBodySchema.parse(req.body);
 
       const task = await db
         .select({ id: schema.tasks.id, status: schema.tasks.status })
@@ -339,18 +456,51 @@ export function registerTaskRoutes(
         await reply.code(404).send({ error: 'not_found' });
         return;
       }
-      if (!(FM_ASSIGNABLE_STATUSES as readonly string[]).includes(task.status)) {
-        await reply.code(422).send({ error: 'not_assignable', status: task.status });
+      if (!(USER_ASSIGNABLE_STATUSES as readonly string[]).includes(task.status)) {
+        await reply.code(409).send({ error: 'not_assignable', status: task.status });
         return;
       }
 
-      const source = `device:${device.id}`;
+      const source = `user:${user.id}`;
+
+      if (body.agentId !== null) {
+        // Reassign to a specific agent
+        await db
+          .update(schema.tasks)
+          .set({
+            assignedAgentId: body.agentId,
+            assignedAt: new Date(),
+            status: 'assigned',
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.tasks.id, taskId));
+
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId,
+          eventName: 'task.assigned',
+          source,
+          payload: { agentId: body.agentId, ...maybeRunId(req) },
+          workspaceId,
+        });
+        bus.emit({
+          id: nanoid(),
+          name: 'task.assigned',
+          occurredAt: new Date(),
+          source,
+          payload: { taskId, workspaceId, agentId: body.agentId },
+        });
+
+        return { ok: true };
+      }
+
+      // Clear assignment: return task to FM queue
       await db
         .update(schema.tasks)
         .set({
-          assignedAgentId: body.agentId,
-          assignedAt: new Date(),
-          status: 'assigned',
+          assignedAgentId: null,
+          assignedAt: null,
+          status: 'pending_dispatcher_action',
           updatedAt: new Date(),
         })
         .where(eq(schema.tasks.id, taskId));
@@ -358,20 +508,188 @@ export function registerTaskRoutes(
       await db.insert(schema.taskHistory).values({
         id: nanoid(),
         taskId,
-        eventName: 'task.assigned',
+        eventName: 'task.requeued',
         source,
-        payload: { agentId: body.agentId, ...maybeRunId(req) },
+        payload: { reason: 'manual_reassign_cleared' },
         workspaceId,
       });
       bus.emit({
         id: nanoid(),
-        name: 'task.assigned',
+        name: 'task.requeued',
         occurredAt: new Date(),
         source,
-        payload: { taskId, workspaceId, agentId: body.agentId },
+        payload: { taskId, workspaceId },
       });
 
-      return { ok: true };
+      return { ok: true, status: 'pending_dispatcher_action' };
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Cancel: dedicated endpoint for cancelling tasks with optional reason and
+  // in-progress stop signal. Covers pending_dispatcher_action (gap vs general
+  // PATCH). Any workspace member at collaborator level or above may cancel.
+  // ---------------------------------------------------------------------------
+
+  fastify.post<{ Params: { workspaceId: string; taskId: string } }>(
+    '/workspaces/:workspaceId/tasks/:taskId/cancel',
+    { preHandler: requireWorkspaceMember(db, 'collaborator') },
+    async (req, reply) => {
+      const { id: workspaceId } = getWorkspace(req);
+      const user = getUser(req);
+      const taskId = TaskIdSchema.parse(req.params.taskId);
+      const body = CancelTaskBodySchema.parse(req.body ?? {});
+
+      const task = await db
+        .select({ id: schema.tasks.id, status: schema.tasks.status })
+        .from(schema.tasks)
+        .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)))
+        .get();
+      if (!task) {
+        await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+
+      if ((TERMINAL_STATUSES as readonly string[]).includes(task.status)) {
+        await reply.code(409).send({ error: 'already_terminal', status: task.status });
+        return;
+      }
+
+      if (!(CANCELLABLE_STATUSES as readonly string[]).includes(task.status)) {
+        await reply.code(422).send({ error: 'invalid_transition', from: task.status, to: 'cancelled' });
+        return;
+      }
+
+      const previousStatus = task.status;
+      const source = `user:${user.id}`;
+
+      const updated = await db
+        .update(schema.tasks)
+        .set({ status: 'cancelled', updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.tasks.id, taskId),
+            eq(schema.tasks.workspaceId, workspaceId),
+            eq(schema.tasks.status, previousStatus),
+          ),
+        )
+        .returning({ id: schema.tasks.id });
+
+      if (updated.length === 0) {
+        await reply.code(409).send({ error: 'status_changed' });
+        return;
+      }
+
+      // Insert stop instruction for in-progress tasks so daemon can abort
+      if (previousStatus === 'in_progress') {
+        await db.insert(schema.taskInstructions).values({
+          id: nanoid(),
+          taskId,
+          workspaceId,
+          priority: 'stop',
+          body: body.reason
+            ? `Task cancelled by user: ${body.reason}`
+            : 'Task cancelled by user.',
+          createdBy: source,
+        });
+      }
+
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId,
+        eventName: 'task.cancelled',
+        source,
+        payload: { previousStatus, reason: body.reason ?? null },
+        workspaceId,
+      });
+      bus.emit({
+        id: nanoid(),
+        name: 'task.cancelled',
+        occurredAt: new Date(),
+        source,
+        payload: { taskId, workspaceId },
+      });
+
+      await reply.send({ id: taskId, status: 'cancelled' });
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Retry: resets a failed task to pending_dispatcher_action so FM can
+  // re-triage (rather than bypassing FM via pending_agent). Clears all
+  // assignment fields. Any workspace member at collaborator level may retry.
+  // ---------------------------------------------------------------------------
+
+  fastify.post<{ Params: { workspaceId: string; taskId: string } }>(
+    '/workspaces/:workspaceId/tasks/:taskId/retry',
+    { preHandler: requireWorkspaceMember(db, 'collaborator') },
+    async (req, reply) => {
+      const { id: workspaceId } = getWorkspace(req);
+      const user = getUser(req);
+      const taskId = TaskIdSchema.parse(req.params.taskId);
+      const body = RetryTaskBodySchema.parse(req.body ?? {});
+
+      const task = await db
+        .select({
+          id: schema.tasks.id,
+          status: schema.tasks.status,
+          priority: schema.tasks.priority,
+        })
+        .from(schema.tasks)
+        .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)))
+        .get();
+      if (!task) {
+        await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+
+      if (task.status !== 'failed') {
+        await reply.code(409).send({ error: 'not_failed', status: task.status });
+        return;
+      }
+
+      const updated = await db
+        .update(schema.tasks)
+        .set({
+          status: 'pending_dispatcher_action',
+          assignedAgentId: null,
+          assignedAt: null,
+          assignedDeviceId: null,
+          priority: body.priority ?? task.priority,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.tasks.id, taskId),
+            eq(schema.tasks.workspaceId, workspaceId),
+            eq(schema.tasks.status, 'failed'),
+          ),
+        )
+        .returning({ id: schema.tasks.id });
+
+      if (updated.length === 0) {
+        await reply.code(409).send({ error: 'status_changed' });
+        return;
+      }
+
+      const source = `user:${user.id}`;
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId,
+        eventName: 'task.requeued',
+        source,
+        payload: { previousStatus: 'failed', priorityOverride: body.priority ?? null },
+        workspaceId,
+      });
+      bus.emit({
+        id: nanoid(),
+        name: 'task.requeued',
+        occurredAt: new Date(),
+        source,
+        payload: { taskId, workspaceId },
+      });
+
+      await reply.send({ id: taskId, status: 'pending_dispatcher_action' });
     },
   );
 
