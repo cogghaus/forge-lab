@@ -9,6 +9,8 @@ import {
   getDevice,
   getUser,
 } from '../auth/middleware.js';
+import { checkPolicy } from '../policy/engine.js';
+import { buildDevicePrincipal } from '../policy/principals.js';
 
 // ---------------------------------------------------------------------------
 // Input schemas
@@ -61,8 +63,19 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
 
       if (req.authDevice) {
         const device = getDevice(req);
-        if (device.deviceType !== 'orchestrator') {
-          await reply.code(403).send({ error: 'orchestrator_required' });
+        const principal = buildDevicePrincipal(device);
+        const decision = await checkPolicy(
+          principal,
+          'doc:write',
+          { type: 'doc', workspaceId },
+          { db, workspaceId },
+        );
+        if (!decision.allowed) {
+          await reply.code(403).send({
+            error: 'policy_denied',
+            action: 'doc:write',
+            principal: decision.principal,
+          });
           return;
         }
         updatedBy = device.agentId ?? `device:${device.id}`;

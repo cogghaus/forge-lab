@@ -13,6 +13,8 @@ import {
 import type { Db } from '../db/index.js';
 import { requireDevice, getDevice, requireWorkspaceMember, getWorkspace, getUser } from '../auth/middleware.js';
 import type { EventBus } from '../events/bus.js';
+import { checkPolicy } from '../policy/engine.js';
+import { buildDevicePrincipal } from '../policy/principals.js';
 
 const CompleteTaskBodySchema = z.object({
   result: z.string().optional(),
@@ -287,6 +289,25 @@ export function registerTaskRoutes(
       const device = getDevice(req);
       const id = TaskIdSchema.parse(req.params.id);
 
+      // Heimdall pre-flight: policy check for task:claim.
+      // The SQL agentId filter below is defense-in-depth; this check is authoritative
+      // and produces an audit log record for every claim attempt.
+      const principal = buildDevicePrincipal(device);
+      const claimDecision = await checkPolicy(
+        principal,
+        'task:claim',
+        { type: 'task', id },
+        { db },
+      );
+      if (!claimDecision.allowed) {
+        await reply.code(403).send({
+          error: 'policy_denied',
+          action: 'task:claim',
+          principal: claimDecision.principal,
+        });
+        return;
+      }
+
       const existing = await db
         .select({ id: schema.tasks.id })
         .from(schema.tasks)
@@ -365,10 +386,21 @@ export function registerTaskRoutes(
       }
 
       if (isDevice) {
-        // Orchestrator path (existing FM behaviour, unchanged)
+        // Device path — policy check replaces the hardcoded orchestrator gate.
         const device = req.authDevice!;
-        if (device.deviceType !== 'orchestrator') {
-          await reply.code(403).send({ error: 'orchestrator_required' });
+        const principal = buildDevicePrincipal(device);
+        const decision = await checkPolicy(
+          principal,
+          'task:assign',
+          { type: 'task', workspaceId },
+          { db, workspaceId },
+        );
+        if (!decision.allowed) {
+          await reply.code(403).send({
+            error: 'policy_denied',
+            action: 'task:assign',
+            principal: decision.principal,
+          });
           return;
         }
 
