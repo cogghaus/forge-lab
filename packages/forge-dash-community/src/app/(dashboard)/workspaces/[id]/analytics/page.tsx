@@ -91,7 +91,7 @@ function StatusBar({ data, workspaceId }: StatusBarProps) {
     completed: data.completedTasks,
     in_progress: data.inProgressTasks,
     failed: data.failedTasks,
-    cancelled: data.cancelledTasks,
+    cancelled: data.cancelledTasks ?? 0,
     pending: data.pendingTasks,
   };
   const total = data.totalTasks;

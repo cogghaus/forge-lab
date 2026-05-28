@@ -163,6 +163,26 @@ describe('GET /workspaces/:id/analytics/overview', () => {
         createdBy: 'user:test',
         workspaceId,
       },
+      // Cancelled task inside range — should appear in cancelledTasks
+      {
+        id: 'fl-003',
+        projectPrefix: 'fl',
+        title: 'Cancelled recent',
+        status: 'cancelled',
+        createdAt: inRange,
+        createdBy: 'user:test',
+        workspaceId,
+      },
+      // Cancelled task outside range — must NOT appear in cancelledTasks
+      {
+        id: 'fl-004',
+        projectPrefix: 'fl',
+        title: 'Cancelled old',
+        status: 'cancelled',
+        createdAt: outOfRange,
+        createdBy: 'user:test',
+        workspaceId,
+      },
     ]);
 
     const from = new Date(now - 7 * dayMs).toISOString();
@@ -175,9 +195,10 @@ describe('GET /workspaces/:id/analytics/overview', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as OverviewResponse;
-    // Only the recent task should be counted
-    expect(body.totalTasks).toBe(1);
+    // Only in-range tasks: 1 completed + 1 cancelled
+    expect(body.totalTasks).toBe(2);
     expect(body.completedTasks).toBe(1);
+    expect(body.cancelledTasks).toBe(1);
     expect(body.period.from).toBe(from);
     expect(body.period.to).toBe(to);
   });
@@ -196,6 +217,7 @@ describe('GET /workspaces/:id/analytics/overview', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as OverviewResponse;
     expect(body.totalTasks).toBe(0);
+    expect(body.cancelledTasks).toBe(0);
     expect(body.completionRate).toBe(0);
     expect(body.avgCompletionTimeMs).toBeNull();
   });
