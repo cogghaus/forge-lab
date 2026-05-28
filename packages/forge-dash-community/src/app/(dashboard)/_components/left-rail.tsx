@@ -168,7 +168,8 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
         !pathname.startsWith(base + '/goals') &&
         !pathname.startsWith(base + '/triage') &&
         !pathname.startsWith(base + '/knowledge') &&
-        !pathname.startsWith(base + '/analytics'))
+        !pathname.startsWith(base + '/analytics') &&
+        !pathname.startsWith(base + '/settings'))
     );
   }
 
@@ -226,15 +227,7 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
                 >
                   Members
                 </span>
-                <span
-                  className={subItem(false, true)}
-                  role="menuitem"
-                  aria-disabled="true"
-                  tabIndex={-1}
-                  title="Workspace settings coming soon"
-                >
-                  Settings
-                </span>
+                <Link href={`${base}/settings`} className={subItem(pathname.startsWith(`${base}/settings`))}>Settings ⚙</Link>
               </div>
             )}
           </div>
