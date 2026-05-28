@@ -214,3 +214,38 @@ export interface HubAgentPerfResponse {
   windowDays: number;
   generatedAt: string;
 }
+
+export interface HubAgent {
+  id: string;
+  name: string;
+  workspaceId: string | null;
+  runtimeId: string;
+  createdAt: string;
+}
+
+export type TaskStatus =
+  | 'pending_dispatcher_action'
+  | 'pending_design'
+  | 'pending_agent'
+  | 'assigned'
+  | 'in_progress'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
+
+/** Statuses from which a user may trigger Cancel (via POST /cancel endpoint). */
+export const CANCELLABLE_STATUSES: TaskStatus[] = [
+  'pending_dispatcher_action',
+  'pending_design',
+  'pending_agent',
+  'assigned',
+  'in_progress',
+];
+
+/** Statuses from which a user may retry via the dedicated /retry endpoint (→ pending_dispatcher_action). */
+export const RETRIABLE_STATUSES: TaskStatus[] = ['failed'];
+
+/** Statuses from which a user may reassign the agent (user session path). */
+export const REASSIGNABLE_STATUSES: TaskStatus[] = ['pending_agent', 'assigned'];

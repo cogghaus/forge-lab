@@ -3,15 +3,18 @@ import { redirect } from 'next/navigation';
 import { Card, CardBody, Chip } from '@heroui/react';
 import {
   hubFetch,
+  type HubAgent,
   type HubGoal,
   type HubTaskComment,
   type HubTaskHistory,
   type HubTaskWithParent,
   type HubWorkspace,
+  REASSIGNABLE_STATUSES,
 } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { TaskDetailRefresh } from './task-detail-refresh';
 import { TaskActionButton } from './task-action-button';
+import { ReassignDropdown } from './reassign-dropdown';
 
 interface Props {
   params: Promise<{ id: string; taskId: string }>;
@@ -218,12 +221,21 @@ export default async function TaskDetailPage({ params }: Props) {
       }).then((r) => (r.ok ? { id: r.data.id, title: r.data.title } : null))
     : null;
 
+  // Fetch workspace agents for reassign dropdown (only when task is reassignable)
+  const canReassign = (REASSIGNABLE_STATUSES as string[]).includes(task.status);
+  const agents: HubAgent[] = canReassign
+    ? await hubFetch<{ agents: HubAgent[] }>(`/workspaces/${workspaceId}/agents`, {
+        cookie: cookieHeader,
+      }).then((r) => (r.ok ? r.data.agents : []))
+    : [];
+
   const isActive =
     task.status === 'pending_agent' ||
     task.status === 'assigned' ||
     task.status === 'in_progress';
 
   const canCancel =
+    task.status === 'pending_dispatcher_action' ||
     task.status === 'pending_agent' ||
     task.status === 'pending_design' ||
     task.status === 'design_review' ||
@@ -291,10 +303,22 @@ export default async function TaskDetailPage({ params }: Props) {
                 {statusLabel(task.status)}
               </Chip>
               {canCancel && (
-                <TaskActionButton workspaceId={workspaceId} taskId={task.id} action="cancel" />
+                <TaskActionButton
+                  workspaceId={workspaceId}
+                  taskId={task.id}
+                  taskTitle={task.title}
+                  taskStatus={task.status}
+                  action="cancel"
+                />
               )}
               {canRetry && (
-                <TaskActionButton workspaceId={workspaceId} taskId={task.id} action="retry" />
+                <TaskActionButton
+                  workspaceId={workspaceId}
+                  taskId={task.id}
+                  taskTitle={task.title}
+                  taskStatus={task.status}
+                  action="retry"
+                />
               )}
             </div>
           </div>
@@ -335,6 +359,17 @@ export default async function TaskDetailPage({ params }: Props) {
               </>
             )}
           </div>
+
+          {canReassign && (
+            <div className="pt-1 border-t border-default-100">
+              <ReassignDropdown
+                workspaceId={workspaceId}
+                taskId={task.id}
+                currentAgentId={task.assignedAgentId}
+                agents={agents}
+              />
+            </div>
+          )}
         </CardBody>
       </Card>
 
