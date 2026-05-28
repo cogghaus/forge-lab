@@ -9,7 +9,7 @@ import type { HubConfig } from './config.js';
 import { populateAuth } from './auth/middleware.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { TokenBucketStore } from './rate-limit/index.js';
-import { registerDeviceRoutes } from './routes/devices.js';
+import { registerDeviceRoutes, type DeviceRouteHandles } from './routes/devices.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerAgentRoutes } from './routes/agents.js';
 import { registerAgentInstanceRoutes } from './routes/agent-instances.js';
@@ -35,6 +35,7 @@ export interface Hub {
 export async function createHub(options: { config: HubConfig }): Promise<Hub> {
   const { config } = options;
   const authRateLimitStore = new TokenBucketStore();
+  let deviceRouteHandles: DeviceRouteHandles | undefined;
   const handle: DbHandle = openDatabase(config.databaseUrl);
   await runMigrations(handle.raw);
 
@@ -76,7 +77,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
 
   await fastify.register((scope) => {
     registerAuthRoutes(scope, handle.db, config, authRateLimitStore);
-    registerDeviceRoutes(scope, handle.db);
+    deviceRouteHandles = registerDeviceRoutes(scope, handle.db);
     registerTaskRoutes(scope, handle.db, bus);
     registerAgentRoutes(scope, handle.db);
     registerAgentInstanceRoutes(scope, handle.db);
@@ -103,6 +104,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
       await fastify.close();
       handle.close();
       authRateLimitStore.destroy();
+      deviceRouteHandles?.destroy();
     },
   };
 }
