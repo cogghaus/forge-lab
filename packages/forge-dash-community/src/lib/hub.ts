@@ -226,6 +226,7 @@ export interface HubAgent {
 export type TaskStatus =
   | 'pending_dispatcher_action'
   | 'pending_design'
+  | 'design_review'
   | 'pending_agent'
   | 'assigned'
   | 'in_progress'
@@ -239,6 +240,7 @@ export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 export const CANCELLABLE_STATUSES: TaskStatus[] = [
   'pending_dispatcher_action',
   'pending_design',
+  'design_review',
   'pending_agent',
   'assigned',
   'in_progress',
