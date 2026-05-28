@@ -49,7 +49,7 @@ export class TokenBucketStore {
     const now = Date.now();
     const refillRatePerMs = capacity / windowMs;
 
-    let entry = this.buckets.get(key);
+    const entry = this.buckets.get(key);
     if (entry === undefined) {
       // First request: start with a full bucket minus the consumed token.
       this.buckets.set(key, { tokens: capacity - 1, lastRefillMs: now });

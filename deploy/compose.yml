@@ -1,58 +1,67 @@
+# forge-lab deploy compose
+#
+# Usage (from repo root on accserver):
+#   docker compose -f deploy/compose.yml up -d --build
+#
+# Secrets via env file (never commit):
+#   Copy deploy/.env.example → /datapool/docker/vibe-forge/.env, fill it in, then:
+#   docker compose -f deploy/compose.yml --env-file /datapool/docker/vibe-forge/.env up -d --build
+#
+# Data volume:   /datapool/docker/vibe-forge/data/   (SQLite DB)
+# Workdir volume: /datapool/docker/vibe-forge/workdir/ (agent logs, future daemon use)
+
 services:
   forge-hub:
-    image: forge-hub:latest
     build:
       context: ..
       dockerfile: packages/forge-hub/Dockerfile
+    image: vibe-forge-hub:latest
     container_name: forge-hub
     restart: unless-stopped
-    read_only: true
-    tmpfs:
-      - /tmp
     environment:
+      NODE_ENV: production
       FORGE_HUB_PORT: "3000"
       FORGE_HUB_HOST: "0.0.0.0"
       FORGE_HUB_DATABASE_URL: "file:/data/forge-hub.db"
-      FORGE_HUB_SESSION_SECRET_FILE: /run/secrets/session_secret
+      FORGE_HUB_SESSION_SECRET: "${FORGE_HUB_SESSION_SECRET:?Set FORGE_HUB_SESSION_SECRET in env file}"
       FORGE_HUB_COOKIE_SECURE: "true"
-    secrets:
-      - session_secret
+      FORGE_HUB_SESSION_TTL_HOURS: "336"
+      FORGE_HUB_BCRYPT_COST: "12"
     volumes:
-      - hub-data:/data
-    ports:
-      - "4276:3000"
+      - /datapool/docker/vibe-forge/data:/data
     networks:
-      - forge
+      - vibe-forge-internal
+    # Hub is internal-only — not exposed to Traefik
+
+  forge-dash:
+    build:
+      context: ..
+      dockerfile: packages/forge-dash-community/Dockerfile
+    image: vibe-forge-dash:latest
+    container_name: forge-dash
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      FORGE_HUB_URL: "http://forge-hub:3000"
+      FORGE_WORKDIR: "/workdir"
+    volumes:
+      - /datapool/docker/vibe-forge/workdir:/workdir:ro
+    depends_on:
+      forge-hub:
+        condition: service_healthy
+    networks:
+      - vibe-forge-internal
       - apps-internal
-    mem_limit: 512m
-    cpus: 1.0
-    pids_limit: 200
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
     labels:
-      traefik.enable: "true"
-      traefik.http.routers.forge-hub.rule: "Host(`hub.local.cogg.haus`)"
-      traefik.http.routers.forge-hub.entrypoints: "websecure"
-      traefik.http.routers.forge-hub.tls: "true"
-      traefik.http.routers.forge-hub.tls.certresolver: "cloudflare"
-      traefik.http.services.forge-hub.loadbalancer.server.port: "3000"
-
-  # forge-dash-pro will bind to port 4275 once scaffolded
-  # Cloudflare tunnel: forge.cogg.haus -> accserver:4275
-  # Cloudflare tunnel: forgeapi.cogg.haus -> accserver:4276
-
-secrets:
-  session_secret:
-    file: /datapool/docker/forge-lab/secrets/session_secret
-
-volumes:
-  hub-data:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lab.rule=Host(`lab.local.cogg.haus`)"
+      - "traefik.http.routers.lab.entrypoints=websecure"
+      - "traefik.http.routers.lab.tls=true"
+      - "traefik.http.services.lab.loadbalancer.server.port=3001"
+      - "traefik.docker.network=apps-internal"
 
 networks:
-  forge:
+  vibe-forge-internal:
+    driver: bridge
   apps-internal:
-    external: true
+    external: true  # Traefik's discovery network — must exist on accserver
