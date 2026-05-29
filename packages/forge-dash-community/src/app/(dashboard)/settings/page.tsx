@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { hubFetch, type HubDevice, type HubMe } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { PasswordChangeForm } from './password-change-form';
+import { EmailChangeForm } from './email-change-form';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -166,6 +167,19 @@ export default async function SettingsPage() {
                 </p>
               </div>
             )}
+
+            {/* Email change */}
+            <div>
+              <p
+                className="font-mono text-[11px]"
+                style={{ color: 'rgba(245,240,235,0.4)', marginBottom: '12px' }}
+              >
+                Change email
+              </p>
+              <EmailChangeForm />
+            </div>
+
+            <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)', margin: '16px 0' }} />
 
             {/* Password change */}
             <div>

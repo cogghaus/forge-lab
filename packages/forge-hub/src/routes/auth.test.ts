@@ -269,6 +269,81 @@ describe('PATCH /auth/password', () => {
   });
 });
 
+describe('PATCH /auth/email', () => {
+  let hub: Hub;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: '/auth/email',
+      payload: { newEmail: 'new@example.com' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 400 for invalid email format', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: '/auth/email',
+      headers: { cookie },
+      payload: { newEmail: 'not-a-valid-email' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 409 when email already taken', async () => {
+    const { cookie } = await setupAdmin(hub);
+    // Try to change to the same email already registered
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: '/auth/email',
+      headers: { cookie },
+      payload: { newEmail: 'admin@example.com' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('email_taken');
+  });
+
+  it('successfully changes email — new email works at login, old does not', async () => {
+    const { cookie } = await setupAdmin(hub);
+
+    // Change the email
+    const changeRes = await hub.fastify.inject({
+      method: 'PATCH',
+      url: '/auth/email',
+      headers: { cookie },
+      payload: { newEmail: 'newemail@example.com' },
+    });
+    expect(changeRes.statusCode).toBe(200);
+    expect((changeRes.json() as { ok: boolean }).ok).toBe(true);
+
+    // Old email should no longer work for login
+    const oldLoginRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'admin@example.com', password: 'password123' },
+    });
+    expect(oldLoginRes.statusCode).toBe(401);
+
+    // New email should work
+    const newLoginRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'newemail@example.com', password: 'password123' },
+    });
+    expect(newLoginRes.statusCode).toBe(200);
+  });
+});
+
 describe('rate limiting on auth endpoints', () => {
   let hub: Hub;
 
