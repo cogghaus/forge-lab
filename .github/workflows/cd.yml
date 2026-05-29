@@ -17,13 +17,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t forge-hub:latest -f packages/forge-hub/Dockerfile .
+      - name: Pull latest code
+        run: git pull origin main
 
-      - name: Deploy
-        run: docker compose -f deploy/compose.yml up -d --remove-orphans --wait
+      - name: Build and deploy all services
+        run: |
+          docker compose \
+            -f deploy/compose.yml \
+            --env-file <data-root>/.env \
+            up -d --build --remove-orphans
 
       - name: Verify health
         run: |
-          sleep 5
-          docker inspect --format='{{.State.Health.Status}}' forge-hub
+          sleep 15
+          docker inspect --format='{{.Names}} {{.State.Health.Status}}' forge-hub forge-dash forge-mcp
