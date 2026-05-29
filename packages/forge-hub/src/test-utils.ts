@@ -13,6 +13,7 @@ export const TEST_HUB_CONFIG = {
   sessionTtlHours: 24,
   bcryptCost: 10,
   cookieSecure: false,
+  appBaseUrl: 'http://localhost:3001',
 } as const;
 
 /** Register the first (admin) user and log in. Returns session cookie. */
