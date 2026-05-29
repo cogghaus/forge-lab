@@ -17,9 +17,10 @@ FROM node:20-slim AS runner
 RUN addgroup --system --gid 1001 forge && adduser --system --uid 1001 forge
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=builder --chown=forge:forge /repo/packages/forge-mcp/dist ./dist
-COPY --from=builder --chown=forge:forge /repo/packages/forge-mcp/package.json ./package.json
-COPY --from=builder --chown=forge:forge /repo/packages/forge-mcp/node_modules ./node_modules
+# Copy built output and package.json, then npm-install prod deps without pnpm symlinks
+COPY --from=builder /repo/packages/forge-mcp/dist ./dist
+COPY --from=builder /repo/packages/forge-mcp/package.json ./package.json
+RUN npm install --omit=dev --no-fund --no-audit && chown -R forge:forge /app
 USER forge
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
