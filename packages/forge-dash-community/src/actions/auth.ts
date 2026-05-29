@@ -71,7 +71,7 @@ export async function changePasswordAction(
   return { error: undefined, success: true };
 }
 
-type ChangeEmailState = { error: string | undefined; success: boolean };
+type ChangeEmailState = { error: string | undefined; success: boolean; verificationSent?: boolean };
 
 export async function changeEmailAction(
   _prev: ChangeEmailState,
@@ -83,7 +83,7 @@ export async function changeEmailAction(
   }
   const session = await getSessionCookie();
   if (!session) return { error: 'Not authenticated.', success: false };
-  const res = await hubFetch<{ ok: boolean }>('/auth/email', {
+  const res = await hubFetch<{ ok: boolean; verificationSent: boolean }>('/auth/email', {
     method: 'PATCH',
     body: { newEmail },
     cookie: `${SESSION_COOKIE}=${session}`,
@@ -92,7 +92,8 @@ export async function changeEmailAction(
     if (res.status === 409) return { error: 'That email is already in use.', success: false };
     return { error: 'Failed to update email. Try again.', success: false };
   }
-  return { error: undefined, success: true };
+  const data = res.data as { ok: boolean; verificationSent: boolean };
+  return { error: undefined, success: true, verificationSent: data.verificationSent };
 }
 
 export async function logoutAction(): Promise<void> {

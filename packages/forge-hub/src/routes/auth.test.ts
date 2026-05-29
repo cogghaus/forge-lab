@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { nanoid } from 'nanoid';
+import { schema } from '@forge-lab/core';
 import { createHub, type Hub } from '../app.js';
 import { TEST_HUB_CONFIG, setupAdmin } from '../test-utils.js';
 
@@ -341,6 +343,86 @@ describe('PATCH /auth/email', () => {
       payload: { email: 'newemail@example.com', password: 'password123' },
     });
     expect(newLoginRes.statusCode).toBe(200);
+  });
+});
+
+describe('GET /auth/email/verify', () => {
+  let hub: Hub;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('returns 400 when token is missing', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/auth/email/verify',
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toBe('token_required');
+  });
+
+  it('returns 404 for unknown token', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/auth/email/verify?token=nonexistenttoken12345678901234567890',
+    });
+    expect(res.statusCode).toBe(404);
+    expect((res.json() as { error: string }).error).toBe('invalid_token');
+  });
+
+  it('returns 410 for expired token', async () => {
+    const { id } = await setupAdmin(hub);
+    const token = nanoid(40);
+    const expiredAt = new Date(Date.now() - 1000); // already expired
+
+    await hub.db.insert(schema.emailVerifications).values({
+      id: nanoid(),
+      userId: id,
+      newEmail: 'new@example.com',
+      token,
+      expiresAt: expiredAt,
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/auth/email/verify?token=${token}`,
+    });
+    expect(res.statusCode).toBe(410);
+    expect((res.json() as { error: string }).error).toBe('token_expired');
+  });
+
+  it('successfully verifies token and updates email', async () => {
+    const { id } = await setupAdmin(hub);
+    const token = nanoid(40);
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await hub.db.insert(schema.emailVerifications).values({
+      id: nanoid(),
+      userId: id,
+      newEmail: 'verified@example.com',
+      token,
+      expiresAt,
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/auth/email/verify?token=${token}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { ok: boolean }).ok).toBe(true);
+
+    // Confirm the email was actually changed in the DB
+    const loginRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'verified@example.com', password: 'password123' },
+    });
+    expect(loginRes.statusCode).toBe(200);
   });
 });
 

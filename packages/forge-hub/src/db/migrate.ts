@@ -286,6 +286,21 @@ CREATE INDEX policy_decisions_principal_idx ON policy_decisions (principal, deci
 CREATE INDEX policy_decisions_action_idx    ON policy_decisions (action, decided_at DESC);
 `,
   },
+  {
+    name: '0008_email_verifications',
+    sql: `
+CREATE TABLE email_verifications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  new_email TEXT NOT NULL,
+  token TEXT NOT NULL UNIQUE,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+CREATE INDEX email_verifications_user_idx ON email_verifications(user_id);
+CREATE UNIQUE INDEX email_verifications_token_idx ON email_verifications(token);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {

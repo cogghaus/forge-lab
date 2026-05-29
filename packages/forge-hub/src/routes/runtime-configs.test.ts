@@ -11,6 +11,7 @@ const testConfig: HubConfig = {
   sessionTtlHours: 24,
   bcryptCost: 10,
   cookieSecure: false,
+  appBaseUrl: 'http://localhost:3001',
 };
 
 
