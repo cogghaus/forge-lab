@@ -71,6 +71,30 @@ export async function changePasswordAction(
   return { error: undefined, success: true };
 }
 
+type ChangeEmailState = { error: string | undefined; success: boolean };
+
+export async function changeEmailAction(
+  _prev: ChangeEmailState,
+  formData: FormData,
+): Promise<ChangeEmailState> {
+  const newEmail = (formData.get('newEmail') as string)?.trim();
+  if (!newEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+    return { error: 'Valid email address required.', success: false };
+  }
+  const session = await getSessionCookie();
+  if (!session) return { error: 'Not authenticated.', success: false };
+  const res = await hubFetch<{ ok: boolean }>('/auth/email', {
+    method: 'PATCH',
+    body: { newEmail },
+    cookie: `${SESSION_COOKIE}=${session}`,
+  });
+  if (!res.ok) {
+    if (res.status === 409) return { error: 'That email is already in use.', success: false };
+    return { error: 'Failed to update email. Try again.', success: false };
+  }
+  return { error: undefined, success: true };
+}
+
 export async function logoutAction(): Promise<void> {
   const cookieStore = await cookies();
   const session = cookieStore.get(SESSION_COOKIE)?.value;

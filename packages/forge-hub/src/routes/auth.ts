@@ -15,6 +15,10 @@ const ChangePasswordSchema = z.object({
   newPassword: z.string().min(8).max(200),
 });
 
+const ChangeEmailSchema = z.object({
+  newEmail: z.string().email(),
+});
+
 const RegisterInputSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(200),
@@ -112,6 +116,22 @@ export function registerAuthRoutes(
     }
     const newHash = await hashPassword(body.newPassword, config.bcryptCost);
     await db.update(schema.users).set({ passwordHash: newHash }).where(eq(schema.users.id, user.id));
+    await reply.code(200).send({ ok: true });
+  });
+
+  fastify.patch('/auth/email', { preHandler: [...authPreHandlers, requireUser] }, async (req, reply) => {
+    const body = ChangeEmailSchema.parse(req.body);
+    const user = getUser(req);
+    const existing = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.email, body.newEmail))
+      .get();
+    if (existing) {
+      await reply.code(409).send({ error: 'email_taken' });
+      return;
+    }
+    await db.update(schema.users).set({ email: body.newEmail }).where(eq(schema.users.id, user.id));
     await reply.code(200).send({ ok: true });
   });
 
