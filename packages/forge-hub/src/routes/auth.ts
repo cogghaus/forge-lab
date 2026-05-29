@@ -10,6 +10,11 @@ import { createSession, deleteSession } from '../auth/sessions.js';
 import { requireUser, getUser } from '../auth/middleware.js';
 import { TokenBucketStore, createTokenBucketPreHandler } from '../rate-limit/index.js';
 
+const ChangePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8).max(200),
+});
+
 const RegisterInputSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(200),
@@ -86,6 +91,28 @@ export function registerAuthRoutes(
       .where(eq(schema.users.id, user.id))
       .get();
     return row ?? { id: user.id, email: user.email, role: user.role };
+  });
+
+  fastify.patch('/auth/password', { preHandler: [...authPreHandlers, requireUser] }, async (req, reply) => {
+    const body = ChangePasswordSchema.parse(req.body);
+    const user = getUser(req);
+    const row = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.id, user.id))
+      .get();
+    if (!row) {
+      await reply.code(401).send({ error: 'invalid_password' });
+      return;
+    }
+    const ok = await verifyPassword(body.currentPassword, row.passwordHash);
+    if (!ok) {
+      await reply.code(401).send({ error: 'invalid_password' });
+      return;
+    }
+    const newHash = await hashPassword(body.newPassword, config.bcryptCost);
+    await db.update(schema.users).set({ passwordHash: newHash }).where(eq(schema.users.id, user.id));
+    await reply.code(200).send({ ok: true });
   });
 
   fastify.post('/auth/logout', async (req, reply) => {

@@ -3,7 +3,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { hubFetch } from '@/lib/hub';
-import { SESSION_COOKIE } from '@/lib/session';
+import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 
 type LoginState = { error: string | undefined };
 
@@ -36,6 +36,39 @@ export async function loginAction(_prevState: LoginState, formData: FormData): P
   }
 
   redirect('/workspaces');
+}
+
+type ChangePasswordState = { error: string | undefined; success: boolean };
+
+export async function changePasswordAction(
+  _prev: ChangePasswordState,
+  formData: FormData,
+): Promise<ChangePasswordState> {
+  const currentPassword = formData.get('currentPassword') as string;
+  const newPassword = formData.get('newPassword') as string;
+  const confirmPassword = formData.get('confirmPassword') as string;
+
+  if (newPassword !== confirmPassword) {
+    return { error: 'New passwords do not match.', success: false };
+  }
+  if (newPassword.length < 8) {
+    return { error: 'New password must be at least 8 characters.', success: false };
+  }
+
+  const session = await getSessionCookie();
+  if (!session) return { error: 'Not authenticated.', success: false };
+
+  const res = await hubFetch<{ ok: boolean }>('/auth/password', {
+    method: 'PATCH',
+    body: { currentPassword, newPassword },
+    cookie: `${SESSION_COOKIE}=${session}`,
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) return { error: 'Current password is incorrect.', success: false };
+    return { error: 'Failed to change password. Try again.', success: false };
+  }
+  return { error: undefined, success: true };
 }
 
 export async function logoutAction(): Promise<void> {
