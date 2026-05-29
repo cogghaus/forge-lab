@@ -12,14 +12,14 @@ COPY packages/forge-mcp/package.json packages/forge-mcp/tsconfig.json packages/f
 RUN pnpm install --frozen-lockfile
 COPY packages/forge-mcp/src packages/forge-mcp/src
 RUN pnpm --filter @forge-lab/mcp build
-RUN pnpm deploy --filter @forge-lab/mcp --prod /mcp-deploy
 
 FROM node:20-slim AS runner
 RUN addgroup --system --gid 1001 forge && adduser --system --uid 1001 forge
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=builder --chown=forge:forge /mcp-deploy .
 COPY --from=builder --chown=forge:forge /repo/packages/forge-mcp/dist ./dist
+COPY --from=builder --chown=forge:forge /repo/packages/forge-mcp/package.json ./package.json
+COPY --from=builder --chown=forge:forge /repo/packages/forge-mcp/node_modules ./node_modules
 USER forge
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
