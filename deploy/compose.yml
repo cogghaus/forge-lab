@@ -69,6 +69,34 @@ services:
       - "traefik.http.services.lab.loadbalancer.server.port=3001"
       - "traefik.docker.network=apps-internal"
 
+  forge-mcp:
+    build:
+      context: ..
+      dockerfile: packages/forge-mcp/Dockerfile
+    image: vibe-forge-mcp:latest
+    container_name: forge-mcp
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      FORGE_HUB_URL: "http://forge-hub:3000"
+      FORGE_MCP_EMAIL: "${FORGE_MCP_EMAIL}"
+      FORGE_MCP_PASSWORD: "${FORGE_MCP_PASSWORD}"
+      FORGE_MCP_API_KEY: "${FORGE_MCP_API_KEY}"
+      PORT: "4000"
+    depends_on:
+      forge-hub:
+        condition: service_healthy
+    networks:
+      - vibe-forge-internal
+      - apps-internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.forge-mcp.rule=Host(`mcp.forge.example.com`)"
+      - "traefik.http.routers.forge-mcp.entrypoints=websecure"
+      - "traefik.http.routers.forge-mcp.tls=true"
+      - "traefik.http.services.forge-mcp.loadbalancer.server.port=4000"
+      - "traefik.docker.network=apps-internal"
+
 networks:
   vibe-forge-internal:
     driver: bridge
