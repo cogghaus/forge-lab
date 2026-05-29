@@ -9,6 +9,8 @@ const ConfigSchema = z.object({
   sessionTtlHours: z.coerce.number().int().positive().default(24 * 14),
   bcryptCost: z.coerce.number().int().min(10).max(15).default(12),
   cookieSecure: z.coerce.boolean().default(false),
+  resendApiKey: z.string().optional(),
+  appBaseUrl: z.string().default('http://localhost:3001'),
 });
 
 export type HubConfig = z.infer<typeof ConfigSchema>;
@@ -32,5 +34,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HubConfig {
     sessionTtlHours: env['FORGE_HUB_SESSION_TTL_HOURS'],
     bcryptCost: env['FORGE_HUB_BCRYPT_COST'],
     cookieSecure: env['FORGE_HUB_COOKIE_SECURE'],
+    resendApiKey: env['RESEND_API_KEY'],
+    appBaseUrl: env['APP_BASE_URL'],
   });
 }

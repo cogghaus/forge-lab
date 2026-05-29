@@ -47,6 +47,7 @@ describe('integration: create -> assign -> complete', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -168,6 +169,7 @@ describe('integration: workspace-scoped task flow', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -296,6 +298,7 @@ describe('integration: description truncation + empty personality fallback', () 
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -453,6 +456,7 @@ describe('integration: composed personality via registry', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -585,6 +589,7 @@ describe('HubClient: FM orchestrator methods', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -716,6 +721,7 @@ describe('integration: dispatcher mode', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -875,6 +881,7 @@ describe('integration: dispatcher mode — personality registry', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -1089,6 +1096,7 @@ describe('integration: spawn failure recovery', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -1331,6 +1339,7 @@ describe('integration: FM triage — full assign cycle', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -1542,6 +1551,7 @@ describe('integration: Scribe reactive mode — listenCompletions', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -1707,6 +1717,7 @@ describe('integration: Scribe audit mode — auditThreshold', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -1883,6 +1894,7 @@ describe('Scribe — Crucible test matrix: reactive scope + routing', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
@@ -2061,6 +2073,7 @@ describe('Scribe — Crucible test matrix: audit edge cases', () => {
         sessionTtlHours: 24,
         bcryptCost: 10,
         cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
       },
     });
     hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });

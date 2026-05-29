@@ -9,6 +9,7 @@ import { hashPassword, verifyPassword } from '../auth/password.js';
 import { createSession, deleteSession } from '../auth/sessions.js';
 import { requireUser, getUser } from '../auth/middleware.js';
 import { TokenBucketStore, createTokenBucketPreHandler } from '../rate-limit/index.js';
+import type { EmailService } from '../email/index.js';
 
 const ChangePasswordSchema = z.object({
   currentPassword: z.string().min(1),
@@ -33,6 +34,7 @@ export function registerAuthRoutes(
   db: Db,
   config: HubConfig,
   rateLimitStore?: TokenBucketStore,
+  emailService?: EmailService,
 ): void {
   const authPreHandlers = rateLimitStore
     ? [createTokenBucketPreHandler(rateLimitStore, { max: AUTH_RATE_LIMIT_MAX, windowMs: AUTH_RATE_LIMIT_WINDOW_MS })]
@@ -131,8 +133,87 @@ export function registerAuthRoutes(
       await reply.code(409).send({ error: 'email_taken' });
       return;
     }
-    await db.update(schema.users).set({ email: body.newEmail }).where(eq(schema.users.id, user.id));
-    await reply.code(200).send({ ok: true });
+
+    if (emailService) {
+      // Delete any existing pending verification for this user (lazy cleanup)
+      await db.delete(schema.emailVerifications)
+        .where(eq(schema.emailVerifications.userId, user.id));
+
+      const token = nanoid(40);
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
+
+      await db.insert(schema.emailVerifications).values({
+        id: nanoid(),
+        userId: user.id,
+        newEmail: body.newEmail,
+        token,
+        expiresAt,
+      });
+
+      const verifyUrl = `${config.appBaseUrl}/verify-email?token=${token}`;
+
+      // Fetch current email for the email body
+      const currentUser = await db.select({ email: schema.users.email })
+        .from(schema.users).where(eq(schema.users.id, user.id)).get();
+
+      await emailService.sendEmailVerification({
+        to: body.newEmail,
+        verifyUrl,
+        currentEmail: currentUser?.email ?? 'unknown',
+      });
+
+      return { ok: true, verificationSent: true };
+    }
+
+    // Fallback: no email service — update immediately (dev mode)
+    await db.update(schema.users)
+      .set({ email: body.newEmail })
+      .where(eq(schema.users.id, user.id));
+    return { ok: true, verificationSent: false };
+  });
+
+  fastify.get('/auth/email/verify', async (req, reply) => {
+    const { token } = (req.query ?? {}) as { token?: string };
+    if (!token) {
+      await reply.code(400).send({ error: 'token_required' });
+      return;
+    }
+
+    const verification = await db.select()
+      .from(schema.emailVerifications)
+      .where(eq(schema.emailVerifications.token, token))
+      .get();
+
+    if (!verification) {
+      await reply.code(404).send({ error: 'invalid_token' });
+      return;
+    }
+
+    if (verification.expiresAt < new Date()) {
+      await db.delete(schema.emailVerifications)
+        .where(eq(schema.emailVerifications.id, verification.id));
+      await reply.code(410).send({ error: 'token_expired' });
+      return;
+    }
+
+    // Check email still available for someone else
+    const existingUser = await db.select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.email, verification.newEmail))
+      .get();
+    if (existingUser && existingUser.id !== verification.userId) {
+      await reply.code(409).send({ error: 'email_taken' });
+      return;
+    }
+
+    await db.update(schema.users)
+      .set({ email: verification.newEmail })
+      .where(eq(schema.users.id, verification.userId));
+
+    await db.delete(schema.emailVerifications)
+      .where(eq(schema.emailVerifications.id, verification.id));
+
+    return { ok: true };
   });
 
   fastify.post('/auth/logout', async (req, reply) => {

@@ -14,6 +14,23 @@ export const users = sqliteTable('users', {
   createdAt: timestampMs('created_at').notNull().default(nowDefault),
 });
 
+export const emailVerifications = sqliteTable(
+  'email_verifications',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    newEmail: text('new_email').notNull(),
+    token: text('token').notNull().unique(),
+    expiresAt: timestampMs('expires_at').notNull(),
+    createdAt: timestampMs('created_at').notNull().default(nowDefault),
+  },
+  (t) => ({
+    userIdIdx: index('email_verifications_user_idx').on(t.userId),
+  }),
+);
+
 export const sessions = sqliteTable(
   'sessions',
   {
