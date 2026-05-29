@@ -39,6 +39,13 @@ registerDeviceTools(server, hub);
 
 // HTTP server — one transport instance per request (stateless mode)
 const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  // Healthz — unauthenticated, must be first
+  if (req.url === '/healthz') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok' }));
+    return;
+  }
+
   // Auth check
   if (MCP_API_KEY) {
     const authHeader = (req.headers['authorization'] as string | undefined) ?? '';
@@ -55,12 +62,6 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
     const transport = new StreamableHTTPServerTransport({}) as any;
     await server.connect(transport);
     await transport.handleRequest(req, res);
-    return;
-  }
-
-  if (req.url === '/healthz') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
     return;
   }
 
