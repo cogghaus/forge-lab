@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
-import { hubFetch, type HubDevice } from '@/lib/hub';
+import { hubFetch, type HubDevice, type HubMe } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
+import { PasswordChangeForm } from './password-change-form';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -108,11 +109,15 @@ export default async function SettingsPage() {
   if (!session) redirect('/login');
 
   const cookieHeader = `${SESSION_COOKIE}=${session}`;
-  const devicesRes = await hubFetch<{ devices: HubDevice[] }>('/devices', {
-    cookie: cookieHeader,
-  });
+
+  const [devicesRes, meRes] = await Promise.all([
+    hubFetch<{ devices: HubDevice[] }>('/devices', { cookie: cookieHeader }),
+    hubFetch<HubMe>('/auth/me', { cookie: cookieHeader }),
+  ]);
+
   const devicesFetchFailed = !devicesRes.ok;
   const devices = devicesRes.ok ? devicesRes.data.devices : [];
+  const userEmail = meRes.ok ? meRes.data.email : null;
 
   const onlineCount = devices.filter((d) => isOnline(d.lastSeen)).length;
   const orchCount = devices.filter((d) => d.deviceType === 'orchestrator').length;
@@ -124,6 +129,57 @@ export default async function SettingsPage() {
       <div className="flex items-center gap-3 mb-8">
         <h1 className="font-mono text-[18px] font-bold">Settings</h1>
       </div>
+
+      {/* Account section */}
+      <section className="mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <h2
+            className="font-mono text-[13px] font-semibold"
+            style={{ color: 'rgba(245,240,235,0.6)' }}
+          >
+            Account
+          </h2>
+        </div>
+
+        <div
+          className="rounded-[10px] overflow-hidden"
+          style={{
+            background: '#111116',
+            border: '1px solid rgba(255,255,255,0.06)',
+          }}
+        >
+          <div className="px-5 py-5" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {/* Email */}
+            {userEmail && (
+              <div>
+                <p
+                  className="font-mono text-[11px]"
+                  style={{ color: 'rgba(245,240,235,0.4)', marginBottom: '4px' }}
+                >
+                  Email
+                </p>
+                <p
+                  className="font-mono text-[13px]"
+                  style={{ color: 'rgba(245,240,235,0.55)' }}
+                >
+                  {userEmail}
+                </p>
+              </div>
+            )}
+
+            {/* Password change */}
+            <div>
+              <p
+                className="font-mono text-[11px]"
+                style={{ color: 'rgba(245,240,235,0.4)', marginBottom: '12px' }}
+              >
+                Change password
+              </p>
+              <PasswordChangeForm />
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* Devices section */}
       <section className="mb-8">

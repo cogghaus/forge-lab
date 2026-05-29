@@ -195,6 +195,80 @@ describe('POST /auth/logout', () => {
   });
 });
 
+describe('PATCH /auth/password', () => {
+  let hub: Hub;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: '/auth/password',
+      payload: { currentPassword: 'password123', newPassword: 'newpassword456' },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 400 for new password too short (< 8 chars)', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: '/auth/password',
+      headers: { cookie },
+      payload: { currentPassword: 'password123', newPassword: 'short' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('returns 401 for wrong current password', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: '/auth/password',
+      headers: { cookie },
+      payload: { currentPassword: 'wrongpassword', newPassword: 'newpassword456' },
+    });
+    expect(res.statusCode).toBe(401);
+    expect((res.json() as { error: string }).error).toBe('invalid_password');
+  });
+
+  it('successfully changes password and invalidates old login', async () => {
+    const { cookie } = await setupAdmin(hub);
+
+    // Change the password
+    const changeRes = await hub.fastify.inject({
+      method: 'PATCH',
+      url: '/auth/password',
+      headers: { cookie },
+      payload: { currentPassword: 'password123', newPassword: 'newpassword456' },
+    });
+    expect(changeRes.statusCode).toBe(200);
+    expect((changeRes.json() as { ok: boolean }).ok).toBe(true);
+
+    // Old password should no longer work for login
+    const oldLoginRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'admin@example.com', password: 'password123' },
+    });
+    expect(oldLoginRes.statusCode).toBe(401);
+
+    // New password should work
+    const newLoginRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'admin@example.com', password: 'newpassword456' },
+    });
+    expect(newLoginRes.statusCode).toBe(200);
+  });
+});
+
 describe('rate limiting on auth endpoints', () => {
   let hub: Hub;
 
