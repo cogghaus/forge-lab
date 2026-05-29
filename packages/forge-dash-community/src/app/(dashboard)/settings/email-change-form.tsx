@@ -74,7 +74,9 @@ export function EmailChangeForm() {
             margin: 0,
           }}
         >
-          &#10003; Email changed. You will need to log in again.
+          {state.verificationSent
+            ? '✓ Check your inbox — click the link to confirm your new email.'
+            : '✓ Email changed.'}
         </p>
       )}
 

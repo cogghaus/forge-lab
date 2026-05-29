@@ -9,6 +9,7 @@ import type { HubConfig } from './config.js';
 import { populateAuth } from './auth/middleware.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { TokenBucketStore } from './rate-limit/index.js';
+import { createEmailService, type EmailService } from './email/index.js';
 import { registerDeviceRoutes, type DeviceRouteHandles } from './routes/devices.js';
 import { registerTaskRoutes } from './routes/tasks.js';
 import { registerAgentRoutes } from './routes/agents.js';
@@ -30,11 +31,15 @@ export interface Hub {
   db: Db;
   bus: EventBus;
   config: HubConfig;
+  emailService?: EmailService;
   close(): Promise<void>;
 }
 
 export async function createHub(options: { config: HubConfig }): Promise<Hub> {
   const { config } = options;
+  const emailService: EmailService | undefined = config.resendApiKey
+    ? createEmailService(config.resendApiKey)
+    : undefined;
   const authRateLimitStore = new TokenBucketStore();
   let deviceRouteHandles: DeviceRouteHandles | undefined;
   const handle: DbHandle = openDatabase(config.databaseUrl);
@@ -77,7 +82,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
   fastify.get('/healthz', () => ({ status: 'ok' }));
 
   await fastify.register((scope) => {
-    registerAuthRoutes(scope, handle.db, config, authRateLimitStore);
+    registerAuthRoutes(scope, handle.db, config, authRateLimitStore, emailService);
     deviceRouteHandles = registerDeviceRoutes(scope, handle.db);
     registerTaskRoutes(scope, handle.db, bus);
     registerAgentRoutes(scope, handle.db);
@@ -102,6 +107,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
     db: handle.db,
     bus,
     config,
+    ...(emailService ? { emailService } : {}),
     close: async () => {
       await fastify.close();
       handle.close();
