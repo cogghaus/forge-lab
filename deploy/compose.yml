@@ -32,7 +32,9 @@ services:
     volumes:
       - /datapool/docker/vibe-forge/data:/data
     ports:
-      - "127.0.0.1:3000:3000"  # localhost-only; enables bootstrap curl from accserver host
+      # localhost-only host publish so host-side daemons (PM2) can reach the hub.
+      # Host port 3300 (3000 is occupied by an unrelated host service on accserver).
+      - "127.0.0.1:3300:3000"
     networks:
       - vibe-forge-internal
     healthcheck:
