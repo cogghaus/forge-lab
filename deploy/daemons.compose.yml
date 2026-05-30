@@ -1,0 +1,157 @@
+# forge-lab agent daemons.
+#
+# One image (vibe-forge-daemon), nine agent identities. Each daemon connects to
+# the hub over the shared internal network and spawns `claude` per task.
+#
+# Prereqs on accserver:
+#   1. The main stack (deploy/compose.yml, project "deploy") is up, so the
+#      network `deploy_vibe-forge-internal` and `forge-hub` exist.
+#   2. Claude OAuth creds seeded at /datapool/docker/vibe-forge/claude
+#      (owned by uid 1001 so the in-container `forge` user can refresh tokens).
+#   3. deploy/.env.daemons filled with the workspace id + 9 device tokens.
+#
+# Usage (from a checkout on accserver):
+#   docker compose -p deploy \
+#     -f deploy/daemons.compose.yml \
+#     --env-file deploy/.env.daemons \
+#     up -d --build
+#
+# Start just one for validation:  ... up -d --build forge-fm
+
+x-daemon-common: &daemon-common
+  image: vibe-forge-daemon:latest
+  build:
+    context: ..
+    dockerfile: packages/forge-daemon/Dockerfile
+  restart: unless-stopped
+  environment: &daemon-env
+    FORGE_DAEMON_HUB_URL: "http://forge-hub:3000"
+    FORGE_DAEMON_WORKSPACE_ID: "${FORGE_DAEMON_WORKSPACE_ID:?set in .env.daemons}"
+    FORGE_DAEMON_DEFAULT_RUNTIME: "background"
+    FORGE_DAEMON_SKIP_PERMISSIONS: "true"
+    FORGE_DAEMON_MAX_CONCURRENT_TASKS: "1"
+  volumes:
+    # Shared OAuth creds (read-write: claude refreshes tokens in place).
+    - /datapool/docker/vibe-forge/claude:/home/forge/.claude
+  networks:
+    - vibe-forge-internal
+
+services:
+  forge-fm:
+    <<: *daemon-common
+    container_name: forge-fm
+    environment:
+      <<: *daemon-env
+      FORGE_DAEMON_AGENT_ID: "forge-master"
+      FORGE_DAEMON_DISPATCHER_MODE: "true"
+      FORGE_DAEMON_STALE_TTL_MINUTES: "30"
+      FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_FM_TOKEN:?}"
+      # Dispatcher does not claim worker tasks; leave MAX_CONCURRENT unset.
+      FORGE_DAEMON_MAX_CONCURRENT_TASKS: ""
+    volumes:
+      - /datapool/docker/vibe-forge/claude:/home/forge/.claude
+      - daemon-fm-workdir:/workdir
+
+  forge-architect:
+    <<: *daemon-common
+    container_name: forge-architect
+    environment:
+      <<: *daemon-env
+      FORGE_DAEMON_AGENT_ID: "architect"
+      FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_ARCHITECT_TOKEN:?}"
+    volumes:
+      - /datapool/docker/vibe-forge/claude:/home/forge/.claude
+      - daemon-architect-workdir:/workdir
+
+  forge-furnace:
+    <<: *daemon-common
+    container_name: forge-furnace
+    environment:
+      <<: *daemon-env
+      FORGE_DAEMON_AGENT_ID: "furnace"
+      FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_FURNACE_TOKEN:?}"
+    volumes:
+      - /datapool/docker/vibe-forge/claude:/home/forge/.claude
+      - daemon-furnace-workdir:/workdir
+
+  forge-anvil:
+    <<: *daemon-common
+    container_name: forge-anvil
+    environment:
+      <<: *daemon-env
+      FORGE_DAEMON_AGENT_ID: "anvil"
+      FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_ANVIL_TOKEN:?}"
+    volumes:
+      - /datapool/docker/vibe-forge/claude:/home/forge/.claude
+      - daemon-anvil-workdir:/workdir
+
+  forge-crucible:
+    <<: *daemon-common
+    container_name: forge-crucible
+    environment:
+      <<: *daemon-env
+      FORGE_DAEMON_AGENT_ID: "crucible"
+      FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_CRUCIBLE_TOKEN:?}"
+    volumes:
+      - /datapool/docker/vibe-forge/claude:/home/forge/.claude
+      - daemon-crucible-workdir:/workdir
+
+  forge-oracle:
+    <<: *daemon-common
+    container_name: forge-oracle
+    environment:
+      <<: *daemon-env
+      FORGE_DAEMON_AGENT_ID: "oracle"
+      FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_ORACLE_TOKEN:?}"
+    volumes:
+      - /datapool/docker/vibe-forge/claude:/home/forge/.claude
+      - daemon-oracle-workdir:/workdir
+
+  forge-scribe:
+    <<: *daemon-common
+    container_name: forge-scribe
+    environment:
+      <<: *daemon-env
+      FORGE_DAEMON_AGENT_ID: "scribe"
+      FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_SCRIBE_TOKEN:?}"
+    volumes:
+      - /datapool/docker/vibe-forge/claude:/home/forge/.claude
+      - daemon-scribe-workdir:/workdir
+
+  forge-herald:
+    <<: *daemon-common
+    container_name: forge-herald
+    environment:
+      <<: *daemon-env
+      FORGE_DAEMON_AGENT_ID: "herald"
+      FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_HERALD_TOKEN:?}"
+    volumes:
+      - /datapool/docker/vibe-forge/claude:/home/forge/.claude
+      - daemon-herald-workdir:/workdir
+
+  forge-temper:
+    <<: *daemon-common
+    container_name: forge-temper
+    environment:
+      <<: *daemon-env
+      FORGE_DAEMON_AGENT_ID: "temper"
+      FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_TEMPER_TOKEN:?}"
+    volumes:
+      - /datapool/docker/vibe-forge/claude:/home/forge/.claude
+      - daemon-temper-workdir:/workdir
+
+networks:
+  vibe-forge-internal:
+    external: true
+    name: deploy_vibe-forge-internal
+
+volumes:
+  daemon-fm-workdir:
+  daemon-architect-workdir:
+  daemon-furnace-workdir:
+  daemon-anvil-workdir:
+  daemon-crucible-workdir:
+  daemon-oracle-workdir:
+  daemon-scribe-workdir:
+  daemon-herald-workdir:
+  daemon-temper-workdir:
