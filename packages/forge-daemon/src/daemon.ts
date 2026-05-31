@@ -7,8 +7,10 @@ import { HubClient } from './hub-client.js';
 import { RuntimeRegistry } from './runtime/registry.js';
 import {
   cleanupTaskFiles,
+  readDoneFile,
   watchDoneFiles,
   writeTaskFile,
+  writeSyntheticTaskFile,
   type DoneListener,
   type DoneResult,
 } from './sync/task-file.js';
@@ -206,12 +208,25 @@ export class Daemon {
     for (const [taskId, active] of this.activeInstances) {
       const runtime = this.runtimes.get(active.runtimeId);
       const alive = await runtime.isAlive(active.instance);
-      if (!alive) {
-        this.logger.error('agent instance appears dead', {
-          taskId,
-          runtimeId: active.runtimeId,
-        });
-        this.activeInstances.delete(taskId);
+      if (alive) continue;
+
+      // isAlive() is false for two very different reasons: the agent finished
+      // (its done file is present — the done-watcher will handle completion and
+      // reset fmRunning), or it genuinely died. Only the latter is an error.
+      const finished = (await readDoneFile(this.opts.workdir, taskId)) !== null;
+      this.activeInstances.delete(taskId);
+      if (finished) continue;
+
+      this.logger.error('agent instance appears dead', {
+        taskId,
+        runtimeId: active.runtimeId,
+      });
+      // A dead FM agent that never wrote its done file would otherwise leave
+      // fmRunning stuck true and wedge the dispatcher forever. Reset it so the
+      // next poll can re-spawn FM, and remove the orphaned synthetic marker.
+      if (taskId.startsWith('_fm_')) {
+        this.fmRunning = false;
+        await cleanupTaskFiles(this.opts.workdir, taskId).catch(() => {});
       }
     }
 
@@ -328,6 +343,11 @@ export class Daemon {
         }
       }
 
+      // Write a marker task file so the runtime's file-based isAlive() probe
+      // recognizes the synthetic FM agent as live. Without it, isAlive() sees no
+      // task file and the next poll's dead-check reports the running FM as dead.
+      await writeSyntheticTaskFile(this.opts.workdir, syntheticTaskId, 'FM triage');
+
       // runtime.get() inside the try block so a missing runtime ID logs gracefully.
       const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
       const instance = await runtime.spawn(
@@ -344,6 +364,9 @@ export class Daemon {
       this.logger.info('fm agent spawned', { syntheticTaskId, fmAgentId });
     } catch (err) {
       this.fmRunning = false;
+      // The synthetic marker is written before spawn(); remove it so a spawn
+      // failure doesn't orphan it in .forge/tasks.
+      await cleanupTaskFiles(this.opts.workdir, syntheticTaskId).catch(() => {});
       this.logger.error('failed to spawn FM agent', {
         error: err instanceof Error ? err.message : String(err),
       });
