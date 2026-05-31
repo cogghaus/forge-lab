@@ -298,6 +298,12 @@ export class Daemon {
    * fail the task so it is not left stuck in_progress.
    */
   private async handleDeadWorkerTask(taskId: string): Promise<void> {
+    // The agent may have finished in the gap between the isAlive probe and now.
+    // If its done file exists, let the done-watcher complete it — neither retry
+    // (which would spawn a duplicate agent on a completed task) nor fail.
+    if ((await readDoneFile(this.opts.workdir, taskId)) !== null) {
+      return;
+    }
     const limit = this.opts.authRetryLimit ?? 2;
     const logTail = await readAgentLogTail(this.opts.workdir, taskId);
     const authFailed = Daemon.AUTH_FAILURE_RE.test(logTail);
@@ -330,13 +336,8 @@ export class Daemon {
       return;
     }
 
-    // Not a transient auth failure, or retries exhausted. Re-check for a done
-    // file first: the agent may have finished in the gap between the isAlive
-    // probe and now, in which case the done-watcher will complete it — failing
-    // it here would race completeTask and emit a spurious task.failed.
-    if ((await readDoneFile(this.opts.workdir, taskId)) !== null) {
-      return;
-    }
+    // Not a transient auth failure, or retries exhausted: fail the task so it is
+    // not left stuck in_progress (also covers non-auth agent crashes).
     this.taskRetries.delete(taskId);
     const reason = authFailed ? 'auth failure (retries exhausted)' : 'agent exited without completing';
     try {
