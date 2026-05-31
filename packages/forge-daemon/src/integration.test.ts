@@ -253,6 +253,9 @@ describe('integration: workspace-scoped task flow', () => {
     });
     expect(wsRes.status).toBe(201);
     const { id: wsTaskId } = (await wsRes.json()) as { id: string };
+    // Unrouted workspace tasks now default to pending_dispatcher_action; make it
+    // claimable so the worker picks it up (this test asserts workspace scoping).
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, wsTaskId));
 
     // Workspace task should reach completed
     const completed = await waitFor(async () => {
@@ -1631,6 +1634,8 @@ describe('integration: Scribe reactive mode — listenCompletions', () => {
       body: JSON.stringify({ projectPrefix: 'eng', title: 'Add GET /api/users endpoint' }),
     });
     const { id: taskId } = (await taskRes.json()) as { id: string };
+    // Unrouted workspace tasks default to pending_dispatcher_action; make claimable.
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
 
     // Worker claims and completes the task
     await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
@@ -1669,6 +1674,8 @@ describe('integration: Scribe reactive mode — listenCompletions', () => {
       body: JSON.stringify({ projectPrefix: 'eng', title: 'Bump dependency versions' }),
     });
     const { id: taskId } = (await taskRes.json()) as { id: string };
+    // Unrouted workspace tasks default to pending_dispatcher_action; make claimable.
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
 
     await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
       method: 'POST',
@@ -1798,6 +1805,9 @@ describe('integration: Scribe audit mode — auditThreshold', () => {
       body: JSON.stringify({ projectPrefix: prefix, title }),
     });
     const { id: taskId } = (await createRes.json()) as { id: string };
+    // Unrouted workspace tasks now default to pending_dispatcher_action; make it
+    // claimable by the worker (this helper drives a completion, not FM triage).
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
     await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
       method: 'POST',
       headers: { authorization: `Bearer ${workerToken}` },
@@ -1971,6 +1981,8 @@ describe('Scribe — Crucible test matrix: reactive scope + routing', () => {
         body: JSON.stringify({ projectPrefix: 'eng', title: 'Add database migration for users table' }),
       });
       const { id: taskId } = (await taskRes.json()) as { id: string };
+      // Unrouted workspace tasks default to pending_dispatcher_action; make claimable.
+      await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
       await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
         method: 'POST',
         headers: { authorization: `Bearer ${workerToken}` },
@@ -2025,6 +2037,8 @@ describe('Scribe — Crucible test matrix: reactive scope + routing', () => {
         body: JSON.stringify({ projectPrefix: 'eng', title: 'Add GET /api/users endpoint' }),
       });
       const { id: taskId } = (await taskRes.json()) as { id: string };
+      // Unrouted workspace tasks default to pending_dispatcher_action; make claimable.
+      await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
       await fetch(`${hubUrl}/tasks/${taskId}/claim`, { method: 'POST', headers: { authorization: `Bearer ${workerToken}` } });
       await fetch(`${hubUrl}/tasks/${taskId}/complete`, {
         method: 'POST',
@@ -2117,6 +2131,8 @@ describe('Scribe — Crucible test matrix: audit edge cases', () => {
       body: JSON.stringify({ projectPrefix: prefix, title }),
     });
     const { id: taskId } = (await res.json()) as { id: string };
+    // Unrouted workspace tasks now default to pending_dispatcher_action; make it claimable.
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
     await fetch(`${hubUrl}/tasks/${taskId}/claim`, { method: 'POST', headers: { authorization: `Bearer ${wToken}` } });
     await fetch(`${hubUrl}/tasks/${taskId}/complete`, {
       method: 'POST',
@@ -2294,6 +2310,10 @@ describe('integration: worker poll discovers FM-assigned tasks', () => {
       body: JSON.stringify({ projectPrefix: 'ap', title: 'Assigned-before-connect task' }),
     });
     const { id: taskId } = (await createRes.json()) as { id: string };
+    // Unrouted workspace tasks default to pending_dispatcher_action, which the
+    // user assign endpoint cannot transition; move to pending_agent so the
+    // assign (which routes it to 'assigned') succeeds.
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
 
     const assignRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks/${taskId}/assign`, {
       method: 'PATCH',
@@ -2335,6 +2355,7 @@ describe('integration: worker poll discovers FM-assigned tasks', () => {
       body: JSON.stringify({ projectPrefix: 'ap', title: 'Other-agent task' }),
     });
     const { id: taskId } = (await createRes.json()) as { id: string };
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
     await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks/${taskId}/assign`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
