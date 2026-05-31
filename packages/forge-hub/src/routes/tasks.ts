@@ -772,6 +772,14 @@ export function registerTaskRoutes(
         }
       }
 
+      // FM-as-front-door routing for the user-facing workspace endpoint: a task
+      // created without an explicit agent goes to the dispatcher inbox so Forge
+      // Master triages it, rather than defaulting to pending_agent where any
+      // worker would race to claim it (bypassing triage entirely). A caller that
+      // pre-assigns an agent keeps the direct pending_agent path so the target
+      // worker picks it up. (The flat device endpoint POST /tasks keeps its own
+      // default — it is the automation path and routes explicitly.)
+      const assignedAgentId = body.assignedAgentId ?? null;
       await db.insert(schema.tasks).values({
         id,
         projectPrefix: body.projectPrefix,
@@ -781,6 +789,8 @@ export function registerTaskRoutes(
         goalId,
         parentId,
         workspaceId,
+        assignedAgentId,
+        status: assignedAgentId ? 'pending_agent' : 'pending_dispatcher_action',
         createdBy,
       });
       await db.insert(schema.taskHistory).values({

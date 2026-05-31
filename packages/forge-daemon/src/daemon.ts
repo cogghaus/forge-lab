@@ -9,6 +9,7 @@ import {
   cleanupTaskFiles,
   watchDoneFiles,
   writeTaskFile,
+  writeSyntheticTaskFile,
   type DoneListener,
   type DoneResult,
 } from './sync/task-file.js';
@@ -212,6 +213,12 @@ export class Daemon {
           runtimeId: active.runtimeId,
         });
         this.activeInstances.delete(taskId);
+        // A dead FM agent that never wrote its done file would otherwise leave
+        // fmRunning stuck true and wedge the dispatcher forever. Reset it so the
+        // next poll can re-spawn FM.
+        if (taskId.startsWith('_fm_')) {
+          this.fmRunning = false;
+        }
       }
     }
 
@@ -327,6 +334,11 @@ export class Daemon {
           });
         }
       }
+
+      // Write a marker task file so the runtime's file-based isAlive() probe
+      // recognizes the synthetic FM agent as live. Without it, isAlive() sees no
+      // task file and the next poll's dead-check reports the running FM as dead.
+      await writeSyntheticTaskFile(this.opts.workdir, syntheticTaskId, 'FM triage');
 
       // runtime.get() inside the try block so a missing runtime ID logs gracefully.
       const runtime = this.runtimes.get(this.opts.defaultRuntimeId);

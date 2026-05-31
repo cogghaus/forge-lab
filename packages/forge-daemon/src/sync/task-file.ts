@@ -29,6 +29,27 @@ export async function writeTaskFile(workdir: string, task: Task): Promise<void> 
   await fs.writeFile(taskFilePath(workdir, task.id), body, 'utf8');
 }
 
+/**
+ * Write a minimal task-file marker for a synthetic (non-hub) task — e.g. the FM
+ * dispatcher's `_fm_*` agent, which has no hub Task row. The background/mock
+ * runtime's file-based `isAlive()` probe treats a missing task file as "dead",
+ * so without this marker a still-running synthetic agent is reported dead on the
+ * next poll. Cleaned up by {@link cleanupTaskFiles}.
+ */
+export async function writeSyntheticTaskFile(
+  workdir: string,
+  taskId: string,
+  title: string,
+): Promise<void> {
+  const dir = taskDir(workdir);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    taskFilePath(workdir, taskId),
+    `# ${taskId}: ${title}\n\n**Status:** in_progress\n`,
+    'utf8',
+  );
+}
+
 export interface DoneResult {
   result?: string;
   /** ISO 8601 timestamp written by the agent. Informational; not used by the daemon. */
