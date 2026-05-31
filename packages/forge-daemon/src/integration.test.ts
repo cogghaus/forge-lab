@@ -2531,7 +2531,9 @@ describe('integration: dispatcher mode — FM liveness', () => {
     // Let several poll cycles run while FM is still working.
     await new Promise((r) => setTimeout(r, 350));
 
-    // The dead-check must NOT have fired for the live FM agent...
+    // FM actually spawned (so the dead-check had a live instance to evaluate)...
+    expect(infoLogs).toContain('fm agent spawned');
+    // ...and the dead-check must NOT have fired for the live FM agent...
     expect(errorLogs).not.toContain('agent instance appears dead');
     // ...and a synthetic FM task-file marker exists so isAlive() reads it as live.
     const files = await fs.readdir(path.join(workdir, '.forge', 'tasks'));
