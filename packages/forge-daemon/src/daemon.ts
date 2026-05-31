@@ -1,12 +1,13 @@
 import type { FSWatcher } from 'node:fs';
 import path from 'node:path';
-import type { EventEnvelope, RuntimeInstance } from '@forge-lab/core';
+import type { EventEnvelope, RuntimeInstance, Task } from '@forge-lab/core';
 import { composeSystemPrompt } from '@forge-lab/agents';
 import type { PersonalityRegistry } from '@forge-lab/agents';
 import { HubClient } from './hub-client.js';
 import { RuntimeRegistry } from './runtime/registry.js';
 import {
   cleanupTaskFiles,
+  readAgentLogTail,
   readDoneFile,
   watchDoneFiles,
   writeTaskFile,
@@ -94,6 +95,14 @@ export interface DaemonOptions {
   reconnectMaxAttempts?: number;
   /** Per-request HTTP timeout in ms passed to the hub client. Default: 30000. */
   requestTimeoutMs?: number;
+  /**
+   * How many times to re-spawn a worker task whose agent died with a transient
+   * auth-failure signature (e.g. the shared OAuth token rotating mid-run). The
+   * winning daemon writes fresh credentials, so a retry reads a valid token.
+   * After the limit the task is marked failed instead of stuck in_progress.
+   * Default: 2.
+   */
+  authRetryLimit?: number;
 }
 
 export interface DaemonLogger {
@@ -130,6 +139,11 @@ export class Daemon {
    * resets to zero.
    */
   private completionsSinceAudit = 0;
+  /**
+   * Per-task count of auth-failure re-spawns (see {@link DaemonOptions.authRetryLimit}).
+   * Cleared on completion or when the task is failed.
+   */
+  private readonly taskRetries = new Map<string, number>();
 
   constructor(opts: DaemonOptions) {
     this.opts = opts;
@@ -205,7 +219,9 @@ export class Daemon {
   }
 
   private async pollForPendingTasks(): Promise<void> {
-    for (const [taskId, active] of this.activeInstances) {
+    // Snapshot: the worker self-heal path below may re-spawn a task (mutating
+    // activeInstances), which must not perturb this iteration.
+    for (const [taskId, active] of [...this.activeInstances]) {
       const runtime = this.runtimes.get(active.runtimeId);
       const alive = await runtime.isAlive(active.instance);
       if (alive) continue;
@@ -227,7 +243,11 @@ export class Daemon {
       if (taskId.startsWith('_fm_')) {
         this.fmRunning = false;
         await cleanupTaskFiles(this.opts.workdir, taskId).catch(() => {});
+        continue;
       }
+      // A dead worker task: self-heal a transient auth failure by re-spawning,
+      // else fail it so it is not left stuck in_progress.
+      await this.handleDeadWorkerTask(taskId);
     }
 
     if (this.opts.dispatcherMode) {
@@ -257,6 +277,55 @@ export class Daemon {
           payload: { taskId: task.id },
         });
       }
+    }
+  }
+
+  /**
+   * Markers in a dead agent's log that indicate a transient auth failure (the
+   * shared OAuth token rotating mid-run), as opposed to a real task failure.
+   */
+  private static readonly AUTH_FAILURE_RE =
+    /not logged in|please run \/login|invalid_grant|authentication_error|oauth[^\n]*error|401[^\n]*unauthorized/i;
+
+  /**
+   * A worker task whose agent died without writing its done file. If the agent
+   * log shows a transient auth failure and we're under the retry limit, re-spawn
+   * (by now the winning daemon has written fresh shared credentials). Otherwise
+   * fail the task so it is not left stuck in_progress.
+   */
+  private async handleDeadWorkerTask(taskId: string): Promise<void> {
+    const limit = this.opts.authRetryLimit ?? 2;
+    const logTail = await readAgentLogTail(this.opts.workdir, taskId);
+    const authFailed = Daemon.AUTH_FAILURE_RE.test(logTail);
+    const used = this.taskRetries.get(taskId) ?? 0;
+
+    if (authFailed && used < limit) {
+      this.taskRetries.set(taskId, used + 1);
+      this.logger.info('retrying task after auth failure', { taskId, attempt: used + 1, limit });
+      try {
+        const task = await this.client.getTask(taskId);
+        await this.spawnClaimedTask(task);
+      } catch (err) {
+        this.logger.error('failed to re-spawn task after auth failure', {
+          taskId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
+    // Not a transient auth failure, or retries exhausted: fail the task so it is
+    // not left stuck in_progress (also covers non-auth agent crashes).
+    this.taskRetries.delete(taskId);
+    const reason = authFailed ? 'auth failure (retries exhausted)' : 'agent exited without completing';
+    try {
+      await this.client.failTask(taskId, reason);
+      this.logger.error('marked dead task as failed', { taskId, reason });
+    } catch (err) {
+      this.logger.error('failed to mark dead task as failed', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -417,10 +486,20 @@ export class Daemon {
       return;
     }
 
-    // Task is now claimed. Any failure past this point calls failTask to mark it
-    // as failed rather than leaving it permanently stuck in in_progress.
+    // Task is now claimed — spawn the agent for it.
+    const claimed = await this.client.getTask(taskId);
+    await this.spawnClaimedTask(claimed);
+  }
+
+  /**
+   * Spawn (or re-spawn) the agent for an already-claimed task. Writes the task
+   * file, composes the personality, and starts the runtime. On spawn failure the
+   * task is marked failed so it is not left stuck in_progress. Reused by the
+   * initial claim path and the auth-failure retry path.
+   */
+  private async spawnClaimedTask(claimed: Task): Promise<void> {
+    const taskId = claimed.id;
     try {
-      const claimed = await this.client.getTask(taskId);
       await writeTaskFile(this.opts.workdir, claimed);
       const runtime = this.runtimes.get(this.opts.defaultRuntimeId);
       const agentId = this.opts.defaultAgentId ?? 'default';
@@ -638,6 +717,7 @@ export class Daemon {
       await this.client.completeTask(taskId, result.result);
       await cleanupTaskFiles(this.opts.workdir, taskId);
       this.activeInstances.delete(taskId);
+      this.taskRetries.delete(taskId);
       this.logger.info('task completed', { taskId });
     } catch (err) {
       this.logger.error('failed to complete task', {

@@ -50,6 +50,29 @@ export async function writeSyntheticTaskFile(
   );
 }
 
+/** Path to the agent's stdout/stderr log for a task (written by the runtime). */
+export function agentLogPath(workdir: string, taskId: string): string {
+  return path.join(workdir, 'context', 'agent-logs', `${taskId}.log`);
+}
+
+/**
+ * Read the tail of a task's agent log (last `maxBytes`). Returns '' if the log
+ * does not exist or can't be read — callers use it for best-effort diagnostics
+ * (e.g. detecting a transient auth failure), never as authoritative state.
+ */
+export async function readAgentLogTail(
+  workdir: string,
+  taskId: string,
+  maxBytes = 4096,
+): Promise<string> {
+  try {
+    const content = await fs.readFile(agentLogPath(workdir, taskId), 'utf8');
+    return content.length > maxBytes ? content.slice(-maxBytes) : content;
+  } catch {
+    return '';
+  }
+}
+
 export interface DoneResult {
   result?: string;
   /** ISO 8601 timestamp written by the agent. Informational; not used by the daemon. */
