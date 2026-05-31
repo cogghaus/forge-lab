@@ -604,12 +604,18 @@ describe('GET /workspaces/:workspaceId/context', () => {
       .set({ status: 'pending_dispatcher_action' })
       .where(eq(schema.tasks.id, inboxId));
 
-    await hub.fastify.inject({
+    // Unrouted workspace tasks now default to pending_dispatcher_action, so move
+    // the "normal" task out of the inbox to prove only inbox-status tasks appear.
+    const normalRes = await hub.fastify.inject({
       method: 'POST',
       url: `/workspaces/${workspaceId}/tasks`,
       headers: { cookie },
       payload: { projectPrefix: 'ctx', title: 'Normal task' },
     });
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_agent' })
+      .where(eq(schema.tasks.id, (normalRes.json() as { id: string }).id));
 
     const res = await hub.fastify.inject({
       method: 'GET',
@@ -634,7 +640,7 @@ describe('GET /workspaces/:workspaceId/context', () => {
       });
       await hub.db
         .update(schema.tasks)
-        .set({ assignedAgentId: 'architect' })
+        .set({ status: 'pending_agent', assignedAgentId: 'architect' })
         .where(eq(schema.tasks.id, (r.json() as { id: string }).id));
     }
     const furnaceRes = await hub.fastify.inject({
@@ -645,7 +651,7 @@ describe('GET /workspaces/:workspaceId/context', () => {
     });
     await hub.db
       .update(schema.tasks)
-      .set({ assignedAgentId: 'furnace' })
+      .set({ status: 'pending_agent', assignedAgentId: 'furnace' })
       .where(eq(schema.tasks.id, (furnaceRes.json() as { id: string }).id));
 
     // Create an in_progress task — should NOT appear in queueDepth

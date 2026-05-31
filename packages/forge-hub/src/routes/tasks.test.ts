@@ -39,6 +39,44 @@ describe('/workspaces/:workspaceId/tasks', () => {
     expect(task?.workspaceId).toBe(workspaceId);
   });
 
+  it('POST without an agent routes to the FM dispatcher inbox (pending_dispatcher_action)', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ws', title: 'Unrouted task' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const task = await hub.db
+      .select({ status: schema.tasks.status, assignedAgentId: schema.tasks.assignedAgentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.status).toBe('pending_dispatcher_action');
+    expect(task?.assignedAgentId).toBeNull();
+  });
+
+  it('POST with an explicit agent skips triage (pending_agent + assignedAgentId)', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'ws', title: 'Pre-assigned task', assignedAgentId: 'furnace' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const task = await hub.db
+      .select({ status: schema.tasks.status, assignedAgentId: schema.tasks.assignedAgentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.status).toBe('pending_agent');
+    expect(task?.assignedAgentId).toBe('furnace');
+  });
+
   it('GET lists only tasks for that workspace', async () => {
     await hub.fastify.inject({
       method: 'POST',
@@ -727,9 +765,9 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign', () => {
       payload: { projectPrefix: 'fm', title: 'FM task' },
     });
     const id = (res.json() as { id: string }).id;
-    if (status !== 'pending_agent') {
-      await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
-    }
+    // Unrouted workspace tasks now land in pending_dispatcher_action, so force
+    // the status this test needs rather than relying on the create default.
+    await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
     return id;
   }
 
@@ -1916,6 +1954,13 @@ describe('task assignedAgentId via flat POST', () => {
     });
     const { id: taskId } = taskRes.json() as { id: string };
 
+    // Unrouted workspace tasks now land in pending_dispatcher_action, which is
+    // not claimable; move it to pending_agent so the device can claim it.
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_agent' })
+      .where(eq(schema.tasks.id, taskId));
+
     // Claim the task so it can be completed by the same device
     await hub.fastify.inject({
       method: 'POST',
@@ -1973,9 +2018,9 @@ describe('POST /workspaces/:workspaceId/tasks/:taskId/cancel', () => {
       payload: { projectPrefix: 'can', title: 'Cancellable task' },
     });
     const id = (res.json() as { id: string }).id;
-    if (status !== 'pending_agent') {
-      await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
-    }
+    // Unrouted workspace tasks now land in pending_dispatcher_action, so force
+    // the status this test needs rather than relying on the create default.
+    await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
     return id;
   }
 
@@ -2257,9 +2302,9 @@ describe('POST /workspaces/:workspaceId/tasks/:taskId/retry', () => {
       payload: { projectPrefix: 'ret', title: 'Retriable task' },
     });
     const id = (res.json() as { id: string }).id;
-    if (status !== 'pending_agent') {
-      await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
-    }
+    // Unrouted workspace tasks now land in pending_dispatcher_action, so force
+    // the status this test needs rather than relying on the create default.
+    await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
     return id;
   }
 
@@ -2487,9 +2532,9 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign — user session',
       payload: { projectPrefix: 'ras', title: 'Reassignable task' },
     });
     const id = (res.json() as { id: string }).id;
-    if (status !== 'pending_agent') {
-      await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
-    }
+    // Unrouted workspace tasks now land in pending_dispatcher_action, so force
+    // the status this test needs rather than relying on the create default.
+    await hub.db.update(schema.tasks).set({ status }).where(eq(schema.tasks.id, id));
     return id;
   }
 

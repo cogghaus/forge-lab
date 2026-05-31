@@ -253,6 +253,9 @@ describe('integration: workspace-scoped task flow', () => {
     });
     expect(wsRes.status).toBe(201);
     const { id: wsTaskId } = (await wsRes.json()) as { id: string };
+    // Unrouted workspace tasks now default to pending_dispatcher_action; make it
+    // claimable so the worker picks it up (this test asserts workspace scoping).
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, wsTaskId));
 
     // Workspace task should reach completed
     const completed = await waitFor(async () => {
@@ -1631,6 +1634,8 @@ describe('integration: Scribe reactive mode — listenCompletions', () => {
       body: JSON.stringify({ projectPrefix: 'eng', title: 'Add GET /api/users endpoint' }),
     });
     const { id: taskId } = (await taskRes.json()) as { id: string };
+    // Unrouted workspace tasks default to pending_dispatcher_action; make claimable.
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
 
     // Worker claims and completes the task
     await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
@@ -1669,6 +1674,8 @@ describe('integration: Scribe reactive mode — listenCompletions', () => {
       body: JSON.stringify({ projectPrefix: 'eng', title: 'Bump dependency versions' }),
     });
     const { id: taskId } = (await taskRes.json()) as { id: string };
+    // Unrouted workspace tasks default to pending_dispatcher_action; make claimable.
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
 
     await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
       method: 'POST',
@@ -1798,6 +1805,9 @@ describe('integration: Scribe audit mode — auditThreshold', () => {
       body: JSON.stringify({ projectPrefix: prefix, title }),
     });
     const { id: taskId } = (await createRes.json()) as { id: string };
+    // Unrouted workspace tasks now default to pending_dispatcher_action; make it
+    // claimable by the worker (this helper drives a completion, not FM triage).
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
     await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
       method: 'POST',
       headers: { authorization: `Bearer ${workerToken}` },
@@ -1971,6 +1981,8 @@ describe('Scribe — Crucible test matrix: reactive scope + routing', () => {
         body: JSON.stringify({ projectPrefix: 'eng', title: 'Add database migration for users table' }),
       });
       const { id: taskId } = (await taskRes.json()) as { id: string };
+      // Unrouted workspace tasks default to pending_dispatcher_action; make claimable.
+      await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
       await fetch(`${hubUrl}/tasks/${taskId}/claim`, {
         method: 'POST',
         headers: { authorization: `Bearer ${workerToken}` },
@@ -2025,6 +2037,8 @@ describe('Scribe — Crucible test matrix: reactive scope + routing', () => {
         body: JSON.stringify({ projectPrefix: 'eng', title: 'Add GET /api/users endpoint' }),
       });
       const { id: taskId } = (await taskRes.json()) as { id: string };
+      // Unrouted workspace tasks default to pending_dispatcher_action; make claimable.
+      await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
       await fetch(`${hubUrl}/tasks/${taskId}/claim`, { method: 'POST', headers: { authorization: `Bearer ${workerToken}` } });
       await fetch(`${hubUrl}/tasks/${taskId}/complete`, {
         method: 'POST',
@@ -2117,6 +2131,8 @@ describe('Scribe — Crucible test matrix: audit edge cases', () => {
       body: JSON.stringify({ projectPrefix: prefix, title }),
     });
     const { id: taskId } = (await res.json()) as { id: string };
+    // Unrouted workspace tasks now default to pending_dispatcher_action; make it claimable.
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
     await fetch(`${hubUrl}/tasks/${taskId}/claim`, { method: 'POST', headers: { authorization: `Bearer ${wToken}` } });
     await fetch(`${hubUrl}/tasks/${taskId}/complete`, {
       method: 'POST',
@@ -2294,6 +2310,10 @@ describe('integration: worker poll discovers FM-assigned tasks', () => {
       body: JSON.stringify({ projectPrefix: 'ap', title: 'Assigned-before-connect task' }),
     });
     const { id: taskId } = (await createRes.json()) as { id: string };
+    // Unrouted workspace tasks default to pending_dispatcher_action, which the
+    // user assign endpoint cannot transition; move to pending_agent so the
+    // assign (which routes it to 'assigned') succeeds.
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
 
     const assignRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks/${taskId}/assign`, {
       method: 'PATCH',
@@ -2335,6 +2355,7 @@ describe('integration: worker poll discovers FM-assigned tasks', () => {
       body: JSON.stringify({ projectPrefix: 'ap', title: 'Other-agent task' }),
     });
     const { id: taskId } = (await createRes.json()) as { id: string };
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
     await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks/${taskId}/assign`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
@@ -2388,5 +2409,176 @@ describe('integration: worker poll discovers FM-assigned tasks', () => {
       workspaceId,
     });
     expect(daemon.hubClient.reconnectMaxAttempts).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FM liveness: no false "appears dead" while running; recover if it dies.
+// Regression coverage for the 2026-05-31 isAlive false-positive finding.
+// ---------------------------------------------------------------------------
+
+/** Runtime that spawns an instance which never completes and always reports
+ * dead — simulates an FM agent that crashed without writing its done file. */
+class NeverAliveRuntime implements AgentRuntime {
+  readonly id = 'never-alive';
+  readonly displayName = 'Never Alive (test)';
+  readonly capabilities = { supportsStreaming: false, supportsTools: false } as const;
+  spawn(config: AgentRuntimeSpawnConfig): Promise<RuntimeInstance> {
+    return Promise.resolve({
+      id: nanoidLocal(),
+      runtimeId: this.id,
+      agentId: config.agentId,
+      pid: null,
+      startedAt: new Date(),
+      metadata: { config },
+    });
+  }
+  sendInstruction(): Promise<void> { return Promise.resolve(); }
+  stop(): Promise<void> { return Promise.resolve(); }
+  isAlive(): Promise<boolean> { return Promise.resolve(false); }
+}
+
+// Local id generator so the test runtime does not depend on importing nanoid.
+let _idSeq = 0;
+function nanoidLocal(): string {
+  _idSeq += 1;
+  return `na-${_idSeq}`;
+}
+
+describe('integration: dispatcher mode — FM liveness', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let orchestratorToken: string;
+  let workspaceId: string;
+  let infoLogs: string[];
+  let errorLogs: string[];
+
+  async function bootHub(secret: string): Promise<void> {
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: secret,
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    orchestratorToken = ((await devRes.json()) as { token: string }).token;
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'FM Liveness WS', slug: 'fm-liveness' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+  }
+
+  async function addInboxTask(): Promise<string> {
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'fm', title: 'Needs triage' }),
+    });
+    const { id } = (await taskRes.json()) as { id: string };
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, id));
+    return id;
+  }
+
+  beforeEach(() => {
+    infoLogs = [];
+    errorLogs = [];
+  });
+
+  afterEach(async () => {
+    await daemon?.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  function makeDaemon(runtimes: RuntimeRegistry, defaultRuntimeId: string): Daemon {
+    return new Daemon({
+      hubUrl,
+      deviceToken: orchestratorToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId,
+      workspaceId,
+      dispatcherMode: true,
+      fmAgentId: 'forge-master',
+      pollIntervalMs: 100,
+      logger: {
+        info: (msg) => infoLogs.push(msg),
+        error: (msg) => errorLogs.push(msg),
+      },
+    });
+  }
+
+  it('does not report a running FM agent as dead (writes a synthetic task-file marker)', { timeout: 20000 }, async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-fmlive-'));
+    await bootHub('test-secret-for-fm-liveness-aaaaaaaaaaaaa');
+    // FM "runs" for ~600ms, spanning several 100ms poll cycles.
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime({ completionDelayMs: 600 }));
+    daemon = makeDaemon(runtimes, 'mock');
+    await daemon.start();
+    await addInboxTask();
+
+    await waitFor(async () => (infoLogs.includes('fm agent spawned') ? 'ok' : null), 5000);
+    // Let several poll cycles run while FM is still working.
+    await new Promise((r) => setTimeout(r, 350));
+
+    // FM actually spawned (so the dead-check had a live instance to evaluate)...
+    expect(infoLogs).toContain('fm agent spawned');
+    // ...and the dead-check must NOT have fired for the live FM agent...
+    expect(errorLogs).not.toContain('agent instance appears dead');
+    // ...and a synthetic FM task-file marker exists so isAlive() reads it as live.
+    const files = await fs.readdir(path.join(workdir, '.forge', 'tasks'));
+    expect(files.some((f) => f.startsWith('_fm_') && f.endsWith('.md'))).toBe(true);
+  });
+
+  it('recovers (resets fmRunning and re-spawns) when the FM agent dies without completing', { timeout: 20000 }, async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-fmdead-'));
+    await bootHub('test-secret-for-fm-dead-bbbbbbbbbbbbbbbbb');
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new NeverAliveRuntime());
+    daemon = makeDaemon(runtimes, 'never-alive');
+    await daemon.start();
+    await addInboxTask();
+
+    // Each cycle: FM spawns, next poll finds it dead, fmRunning resets, FM
+    // re-spawns. Without the reset, fmRunning stays true and FM spawns once.
+    await waitFor(async () => {
+      const spawns = infoLogs.filter((m) => m === 'fm agent spawned').length;
+      return spawns >= 2 ? 'ok' : null;
+    }, 5000);
+
+    const spawns = infoLogs.filter((m) => m === 'fm agent spawned').length;
+    expect(spawns).toBeGreaterThanOrEqual(2);
+    expect(errorLogs).toContain('agent instance appears dead');
   });
 });
