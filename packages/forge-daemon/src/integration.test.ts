@@ -2602,10 +2602,10 @@ class AuthFlakyRuntime implements AgentRuntime {
     const n = (this.attempts.get(taskId) ?? 0) + 1;
     this.attempts.set(taskId, n);
     const wd = config.workdir;
+    // APPEND (like the real BackgroundRuntime) to prove the daemon resets the
+    // log between attempts — otherwise attempt 1's marker would linger.
     if (n === 1) {
-      const lp = agentLogPath(wd, taskId);
-      await fs.mkdir(path.dirname(lp), { recursive: true });
-      await fs.writeFile(lp, 'Invoking claude...\nNot logged in · Please run /login\n', 'utf8');
+      await fs.appendFile(agentLogPath(wd, taskId), 'Invoking claude...\nNot logged in · Please run /login\n', 'utf8');
     } else {
       const dp = doneFilePath(wd, taskId);
       await fs.mkdir(path.dirname(dp), { recursive: true });
@@ -2624,9 +2624,28 @@ class DyingRuntime implements AgentRuntime {
   readonly displayName = 'Dying (test)';
   readonly capabilities = { supportsStreaming: false, supportsTools: false } as const;
   async spawn(config: AgentRuntimeSpawnConfig): Promise<RuntimeInstance> {
-    const lp = agentLogPath(config.workdir, config.taskId!);
-    await fs.mkdir(path.dirname(lp), { recursive: true });
-    await fs.writeFile(lp, 'TypeError: cannot read property foo of undefined\n', 'utf8');
+    await fs.appendFile(agentLogPath(config.workdir, config.taskId!), 'TypeError: cannot read property foo of undefined\n', 'utf8');
+    return { id: nanoidLocal(), runtimeId: this.id, agentId: config.agentId, pid: null, startedAt: new Date(), metadata: { config } };
+  }
+  sendInstruction(): Promise<void> { return Promise.resolve(); }
+  stop(): Promise<void> { return Promise.resolve(); }
+  isAlive(): Promise<boolean> { return Promise.resolve(false); }
+}
+
+/** Attempt 1 looks like an auth failure; attempt 2 dies with a non-auth crash
+ * (no done file). Used to prove the per-spawn log reset stops attempt 1's
+ * stale auth marker from being misread on attempt 2. */
+class FlakyThenCrashRuntime implements AgentRuntime {
+  readonly id = 'flaky-crash';
+  readonly displayName = 'Flaky then crash (test)';
+  readonly capabilities = { supportsStreaming: false, supportsTools: false } as const;
+  readonly attempts = new Map<string, number>();
+  async spawn(config: AgentRuntimeSpawnConfig): Promise<RuntimeInstance> {
+    const taskId = config.taskId!;
+    const n = (this.attempts.get(taskId) ?? 0) + 1;
+    this.attempts.set(taskId, n);
+    const lp = agentLogPath(config.workdir, taskId);
+    await fs.appendFile(lp, n === 1 ? 'Not logged in · Please run /login\n' : 'TypeError: boom\n', 'utf8');
     return { id: nanoidLocal(), runtimeId: this.id, agentId: config.agentId, pid: null, startedAt: new Date(), metadata: { config } };
   }
   sendInstruction(): Promise<void> { return Promise.resolve(); }
@@ -2705,9 +2724,13 @@ describe('integration: worker auth-failure self-heal', () => {
     });
   }
 
-  it('retries once on a transient auth failure and then completes', { timeout: 20000 }, async () => {
+  const retryLogCount = (): number =>
+    infoLogs.filter((m) => m === 'retrying task after auth failure').length;
+
+  it('retries exactly once on a transient auth failure and then completes', { timeout: 20000 }, async () => {
     const taskId = await seedPreAssignedTask();
-    startDaemon(new AuthFlakyRuntime());
+    const runtime = new AuthFlakyRuntime();
+    startDaemon(runtime);
     await daemon.start();
 
     const completed = await waitFor(async () => {
@@ -2717,7 +2740,28 @@ describe('integration: worker auth-failure self-heal', () => {
       return t.status === 'completed' ? t : null;
     }, 15000);
     expect(completed.status).toBe('completed');
-    expect(infoLogs).toContain('retrying task after auth failure');
+    // Exactly one retry (two spawns total) — not a respawn storm.
+    expect(retryLogCount()).toBe(1);
+    expect(runtime.attempts.get(taskId)).toBe(2);
+  });
+
+  it('does not re-misclassify a prior auth marker on a later non-auth crash (log reset)', { timeout: 20000 }, async () => {
+    const taskId = await seedPreAssignedTask();
+    const runtime = new FlakyThenCrashRuntime();
+    startDaemon(runtime);
+    await daemon.start();
+
+    // Attempt 1 auth-fails (one retry); attempt 2 crashes non-auth. Because the
+    // log is reset per spawn, attempt 2 is classified non-auth → task failed.
+    // If the stale marker leaked, it would retry again (count > 1) / wrong reason.
+    const failed = await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+      if (!res.ok) return null;
+      const t = (await res.json()) as { status: string };
+      return t.status === 'failed' ? t : null;
+    }, 15000);
+    expect(failed.status).toBe('failed');
+    expect(retryLogCount()).toBe(1);
   });
 
   it('fails a worker task that dies without an auth signature (not stuck in_progress)', { timeout: 20000 }, async () => {

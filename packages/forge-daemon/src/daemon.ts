@@ -9,6 +9,7 @@ import {
   cleanupTaskFiles,
   readAgentLogTail,
   readDoneFile,
+  resetAgentLog,
   watchDoneFiles,
   writeTaskFile,
   writeSyntheticTaskFile,
@@ -284,8 +285,11 @@ export class Daemon {
    * Markers in a dead agent's log that indicate a transient auth failure (the
    * shared OAuth token rotating mid-run), as opposed to a real task failure.
    */
+  // Anchored on the claude CLI's own auth prompts ("... · Please run /login")
+  // and OAuth refresh failures — phrases unlikely to appear in normal task
+  // output, to avoid misclassifying a real crash whose text mentions auth.
   private static readonly AUTH_FAILURE_RE =
-    /not logged in|please run \/login|invalid_grant|authentication_error|oauth[^\n]*error|401[^\n]*unauthorized/i;
+    /please run \/login|invalid_grant|invalid api key|oauth[^\n]{0,40}(expired|invalid|error)/i;
 
   /**
    * A worker task whose agent died without writing its done file. If the agent
@@ -300,22 +304,39 @@ export class Daemon {
     const used = this.taskRetries.get(taskId) ?? 0;
 
     if (authFailed && used < limit) {
-      this.taskRetries.set(taskId, used + 1);
-      this.logger.info('retrying task after auth failure', { taskId, attempt: used + 1, limit });
+      // Only re-spawn if this daemon still owns the task and it's still running;
+      // a hub-side requeue/reassign/cancel must not trigger a duplicate agent.
+      let task: Task;
       try {
-        const task = await this.client.getTask(taskId);
-        await this.spawnClaimedTask(task);
+        task = await this.client.getTask(taskId);
       } catch (err) {
-        this.logger.error('failed to re-spawn task after auth failure', {
+        this.logger.error('failed to fetch task for auth retry', {
           taskId,
           error: err instanceof Error ? err.message : String(err),
         });
+        return;
       }
+      if (task.status !== 'in_progress') {
+        this.logger.info('skipping auth retry — task no longer in_progress', {
+          taskId,
+          status: task.status,
+        });
+        this.taskRetries.delete(taskId);
+        return;
+      }
+      this.taskRetries.set(taskId, used + 1);
+      this.logger.info('retrying task after auth failure', { taskId, attempt: used + 1, limit });
+      await this.spawnClaimedTask(task);
       return;
     }
 
-    // Not a transient auth failure, or retries exhausted: fail the task so it is
-    // not left stuck in_progress (also covers non-auth agent crashes).
+    // Not a transient auth failure, or retries exhausted. Re-check for a done
+    // file first: the agent may have finished in the gap between the isAlive
+    // probe and now, in which case the done-watcher will complete it — failing
+    // it here would race completeTask and emit a spurious task.failed.
+    if ((await readDoneFile(this.opts.workdir, taskId)) !== null) {
+      return;
+    }
     this.taskRetries.delete(taskId);
     const reason = authFailed ? 'auth failure (retries exhausted)' : 'agent exited without completing';
     try {
@@ -538,6 +559,9 @@ export class Daemon {
       const initialPrompt = desc != null
         ? `${claimed.title}\n\n${desc}${doneInstruction}`
         : `${claimed.title}${doneInstruction}`;
+      // Reset the agent log so post-mortem classification (auth-failure
+      // detection) reads only THIS run, not a prior attempt's appended output.
+      await resetAgentLog(this.opts.workdir, claimed.id);
       const instance = await runtime.spawn(
         {
           agentId,
@@ -564,6 +588,8 @@ export class Daemon {
           error: failErr instanceof Error ? failErr.message : String(failErr),
         });
       }
+      // Task is now terminal — drop any retry counter so it can't leak.
+      this.taskRetries.delete(taskId);
     }
   }
 

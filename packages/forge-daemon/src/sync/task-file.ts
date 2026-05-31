@@ -56,6 +56,19 @@ export function agentLogPath(workdir: string, taskId: string): string {
 }
 
 /**
+ * Truncate (or create) a task's agent log so it contains only the upcoming run.
+ * The runtime appends to this file, and {@link cleanupTaskFiles} does not remove
+ * it, so without a reset a re-spawn's log would still carry the prior attempt's
+ * output — and a stale "Not logged in" marker would be misread as a fresh auth
+ * failure. Call immediately before (re)spawning an agent.
+ */
+export async function resetAgentLog(workdir: string, taskId: string): Promise<void> {
+  const p = agentLogPath(workdir, taskId);
+  await fs.mkdir(path.dirname(p), { recursive: true });
+  await fs.writeFile(p, '', 'utf8');
+}
+
+/**
  * Read the tail of a task's agent log (last `maxBytes`). Returns '' if the log
  * does not exist or can't be read — callers use it for best-effort diagnostics
  * (e.g. detecting a transient auth failure), never as authoritative state.
