@@ -2218,3 +2218,162 @@ describe('Scribe — Crucible test matrix: audit edge cases', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Resilience: worker poll picks up FM-assigned work; daemon never gives up
+// reconnecting. Regression coverage for the 2026-05-31 triage-path findings.
+// ---------------------------------------------------------------------------
+
+describe('integration: worker poll discovers FM-assigned tasks', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let workerToken: string;
+  let sessionCookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-assignpoll-'));
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-assign-poll-test-xxxxxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    // Worker device registered with agentId 'furnace' so the hub claim filter
+    // lets it claim tasks routed to 'furnace'.
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-furnace', agentId: 'furnace', deviceType: 'worker' }),
+    });
+    workerToken = ((await devRes.json()) as { token: string }).token;
+
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'Assign Poll WS', slug: 'assign-poll' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon?.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('claims and completes a task assigned BEFORE the daemon connected (poll path)', { timeout: 20000 }, async () => {
+    // Create a task and route it to 'furnace' while no daemon is connected, so
+    // the worker can only discover it via the poll loop (the live task.assigned
+    // event is missed). Pre-fix the poll ignored 'assigned' and this stranded.
+    const createRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'ap', title: 'Assigned-before-connect task' }),
+    });
+    const { id: taskId } = (await createRes.json()) as { id: string };
+
+    const assignRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks/${taskId}/assign`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ agentId: 'furnace' }),
+    });
+    expect(assignRes.status).toBe(200);
+
+    const preCheck = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+    expect(((await preCheck.json()) as { status: string }).status).toBe('assigned');
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime({ completionDelayMs: 20 }));
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken: workerToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      defaultAgentId: 'furnace',
+      workspaceId,
+      pollIntervalMs: 200,
+    });
+    await daemon.start();
+
+    const completed = await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+      if (!res.ok) return null;
+      const task = (await res.json()) as { status: string };
+      return task.status === 'completed' ? task : null;
+    }, 15000);
+    expect(completed.status).toBe('completed');
+  });
+
+  it('does not claim a task assigned to a DIFFERENT agent', { timeout: 20000 }, async () => {
+    const createRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'ap', title: 'Other-agent task' }),
+    });
+    const { id: taskId } = (await createRes.json()) as { id: string };
+    await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks/${taskId}/assign`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ agentId: 'architect' }),
+    });
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime({ completionDelayMs: 20 }));
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken: workerToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      defaultAgentId: 'furnace',
+      workspaceId,
+      pollIntervalMs: 200,
+    });
+    await daemon.start();
+
+    // Give the poll loop several cycles; the furnace worker must leave the
+    // architect-routed task untouched (still 'assigned', not claimed).
+    await new Promise((r) => setTimeout(r, 1500));
+    const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+    expect(((await res.json()) as { status: string }).status).toBe('assigned');
+  });
+
+  it('daemon configures its hub client to never give up reconnecting', async () => {
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime({ completionDelayMs: 20 }));
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken: workerToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      defaultAgentId: 'furnace',
+      workspaceId,
+    });
+    expect(daemon.hubClient.reconnectMaxAttempts).toBe(Number.POSITIVE_INFINITY);
+  });
+});
