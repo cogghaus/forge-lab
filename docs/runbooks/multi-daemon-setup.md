@@ -2,7 +2,12 @@
 
 **Maintained by**: Scribe  
 **Category**: runbook  
-**Status**: active
+**Status**: active (PM2 model — local/dev)
+
+> **Production note**: the live accserver fleet runs the daemons as **Docker
+> containers**, not PM2. For the production deploy, creds, tokens, and ops see
+> [`daemon-deployment-accserver.md`](./daemon-deployment-accserver.md). This
+> document covers the PM2 model, still used for local/dev runs.
 
 ---
 
