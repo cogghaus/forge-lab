@@ -31,6 +31,12 @@ export interface HubClientOptions {
    * Upper cap for reconnect delay in ms (default: 30000).
    */
   reconnectMaxDelayMs?: number;
+  /**
+   * Per-request timeout in ms for the HTTP API methods. A hub that accepts the
+   * connection but never responds would otherwise hang a request (and the worker
+   * poll loop calling it) forever. 0 disables the timeout. Default: 30000.
+   */
+  requestTimeoutMs?: number;
 }
 
 /**
@@ -48,12 +54,23 @@ export class HubClient extends EventEmitter {
 
   constructor(opts: HubClientOptions) {
     super();
+    // Coalesce per-field so an explicit `undefined` (e.g. from spreading a
+    // partial options object) falls back to the default rather than clobbering
+    // it — a plain `{ ...defaults, ...opts }` would let `requestTimeoutMs:
+    // undefined` silently disable the timeout this client exists to enforce.
     this.opts = {
-      reconnectMaxAttempts: 10,
-      reconnectBaseDelayMs: 1000,
-      reconnectMaxDelayMs: 30_000,
-      ...opts,
+      hubUrl: opts.hubUrl,
+      deviceToken: opts.deviceToken,
+      reconnectMaxAttempts: opts.reconnectMaxAttempts ?? 10,
+      reconnectBaseDelayMs: opts.reconnectBaseDelayMs ?? 1000,
+      reconnectMaxDelayMs: opts.reconnectMaxDelayMs ?? 30_000,
+      requestTimeoutMs: opts.requestTimeoutMs ?? 30_000,
     };
+  }
+
+  /** Configured max reconnect attempts (Infinity = never give up). Read-only. */
+  get reconnectMaxAttempts(): number {
+    return this.opts.reconnectMaxAttempts;
   }
 
   async connect(): Promise<void> {
@@ -255,6 +272,9 @@ export class HubClient extends EventEmitter {
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(body);
+    }
+    if (this.opts.requestTimeoutMs > 0) {
+      init.signal = AbortSignal.timeout(this.opts.requestTimeoutMs);
     }
     const res = await fetch(url, init);
     if (!res.ok) {

@@ -83,6 +83,15 @@ export interface DaemonOptions {
    * `workspaceId` is set. When unset, no audit task is ever created automatically.
    */
   auditThreshold?: number;
+  /**
+   * Max WebSocket reconnect attempts after an unexpected disconnect. A daemon is
+   * long-lived, so it defaults to Infinity (never permanently give up): a hub
+   * outage longer than a finite attempt budget previously left the daemon a
+   * silent zombie with no event stream until manual restart.
+   */
+  reconnectMaxAttempts?: number;
+  /** Per-request HTTP timeout in ms passed to the hub client. Default: 30000. */
+  requestTimeoutMs?: number;
 }
 
 export interface DaemonLogger {
@@ -124,7 +133,14 @@ export class Daemon {
     this.opts = opts;
     this.runtimes = opts.runtimes;
     this.logger = opts.logger ?? noopLogger;
-    this.client = new HubClient({ hubUrl: opts.hubUrl, deviceToken: opts.deviceToken });
+    this.client = new HubClient({
+      hubUrl: opts.hubUrl,
+      deviceToken: opts.deviceToken,
+      reconnectMaxAttempts: opts.reconnectMaxAttempts ?? Number.POSITIVE_INFINITY,
+      // Only forward when set: exactOptionalPropertyTypes forbids passing
+      // `undefined`, and the client defaults requestTimeoutMs to 30s anyway.
+      ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
+    });
   }
 
   get hubClient(): HubClient {
@@ -205,8 +221,19 @@ export class Daemon {
     }
 
     const { tasks } = await this.client.listTasks(this.opts.workspaceId);
+    const myAgentId = this.opts.defaultAgentId;
     for (const task of tasks) {
-      if (task.status === 'pending_agent') {
+      // Pick up unrouted work (pending_agent) AND work the dispatcher routed to
+      // this worker (status=assigned, assignedAgentId === ours). The poll used to
+      // ignore 'assigned', so a worker that missed the live task.assigned event —
+      // e.g. it was down when FM assigned — never discovered its own assigned task
+      // and it stranded until the 30-minute stale-assigned requeue.
+      const claimable =
+        task.status === 'pending_agent' ||
+        (task.status === 'assigned' &&
+          myAgentId !== undefined &&
+          task.assignedAgentId === myAgentId);
+      if (claimable) {
         await this.handleIncomingTask({
           id: 'poll-synthetic',
           name: 'task.created',

@@ -5,6 +5,7 @@
  * without mocking internals. Keeps base reconnect delay at 50ms to keep tests fast.
  */
 import { describe, it, expect, afterEach } from 'vitest';
+import { createServer, type Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { HubClient } from './hub-client.js';
 
@@ -237,4 +238,68 @@ describe('HubClient reconnect', () => {
     await msgPromise;
     expect(receivedEvents).toHaveLength(1);
   });
+
+  it('retries indefinitely when reconnectMaxAttempts is Infinity — never gives up', async () => {
+    const { server, port } = await startServer();
+    primaryServer = server;
+
+    client = new HubClient({
+      hubUrl: `http://127.0.0.1:${port}`,
+      deviceToken: 'test-token',
+      reconnectMaxAttempts: Number.POSITIVE_INFINITY,
+      reconnectBaseDelayMs: 20,
+      reconnectMaxDelayMs: 40,
+    });
+    await client.connect();
+
+    let reconnectFailed = false;
+    client.on('reconnect_failed', () => {
+      reconnectFailed = true;
+    });
+
+    const disconnectPromise = once(client, 'disconnect');
+    // Stop the server permanently — every reconnect attempt will fail.
+    await stopServer(server);
+    primaryServer = null;
+    await disconnectPromise;
+
+    // Wait far longer than a finite small budget would take to exhaust: the
+    // "exhausts max attempts" test above fires reconnect_failed within a 2-attempt
+    // budget at 30-60ms cadence, so 300ms with Infinity and never seeing it is a
+    // clean contrast — the client never declares defeat.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(reconnectFailed).toBe(false);
+  }, 5000);
+
+  it('request() rejects when the hub accepts but never responds (requestTimeoutMs)', async () => {
+    // Server accepts the TCP connection and the HTTP request but never sends a
+    // response — without a request timeout, fetch (and the worker poll loop that
+    // calls it) would hang forever.
+    const hung: Server = createServer(() => {
+      /* intentionally never call res.end() */
+    });
+    const port = await new Promise<number>((resolve) => {
+      hung.listen(0, '127.0.0.1', () => {
+        const addr = hung.address();
+        resolve(typeof addr === 'object' && addr !== null ? addr.port : 0);
+      });
+    });
+
+    const httpClient = new HubClient({
+      hubUrl: `http://127.0.0.1:${port}`,
+      deviceToken: 'test-token',
+      reconnectMaxAttempts: 0,
+      requestTimeoutMs: 150,
+    });
+
+    try {
+      await expect(httpClient.listTasks()).rejects.toThrow();
+    } finally {
+      // Force the half-open (accepted-but-never-answered) socket closed so
+      // close()'s callback fires promptly instead of waiting on the lingering
+      // connection under slow CI.
+      hung.closeAllConnections?.();
+      await new Promise<void>((resolve) => hung.close(() => resolve()));
+    }
+  }, 5000);
 });
