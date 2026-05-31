@@ -22,7 +22,7 @@ jobs:
 
       - name: Build and deploy all services
         run: |
-          docker compose \
+          docker compose -p deploy \
             -f deploy/compose.yml \
             --env-file /datapool/docker/vibe-forge/.env \
             up -d --build --remove-orphans
