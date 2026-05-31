@@ -30,4 +30,4 @@ jobs:
       - name: Verify health
         run: |
           sleep 15
-          docker inspect --format='{{.Names}} {{.State.Health.Status}}' forge-hub forge-dash forge-mcp
+          docker inspect --format='{{.Name}} {{.State.Health.Status}}' forge-hub forge-dash forge-mcp
