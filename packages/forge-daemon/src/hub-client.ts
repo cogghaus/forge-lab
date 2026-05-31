@@ -54,12 +54,17 @@ export class HubClient extends EventEmitter {
 
   constructor(opts: HubClientOptions) {
     super();
+    // Coalesce per-field so an explicit `undefined` (e.g. from spreading a
+    // partial options object) falls back to the default rather than clobbering
+    // it — a plain `{ ...defaults, ...opts }` would let `requestTimeoutMs:
+    // undefined` silently disable the timeout this client exists to enforce.
     this.opts = {
-      reconnectMaxAttempts: 10,
-      reconnectBaseDelayMs: 1000,
-      reconnectMaxDelayMs: 30_000,
-      requestTimeoutMs: 30_000,
-      ...opts,
+      hubUrl: opts.hubUrl,
+      deviceToken: opts.deviceToken,
+      reconnectMaxAttempts: opts.reconnectMaxAttempts ?? 10,
+      reconnectBaseDelayMs: opts.reconnectBaseDelayMs ?? 1000,
+      reconnectMaxDelayMs: opts.reconnectMaxDelayMs ?? 30_000,
+      requestTimeoutMs: opts.requestTimeoutMs ?? 30_000,
     };
   }
 

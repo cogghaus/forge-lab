@@ -137,6 +137,8 @@ export class Daemon {
       hubUrl: opts.hubUrl,
       deviceToken: opts.deviceToken,
       reconnectMaxAttempts: opts.reconnectMaxAttempts ?? Number.POSITIVE_INFINITY,
+      // Only forward when set: exactOptionalPropertyTypes forbids passing
+      // `undefined`, and the client defaults requestTimeoutMs to 30s anyway.
       ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
     });
   }

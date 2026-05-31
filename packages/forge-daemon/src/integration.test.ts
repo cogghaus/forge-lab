@@ -2341,6 +2341,13 @@ describe('integration: worker poll discovers FM-assigned tasks', () => {
       body: JSON.stringify({ agentId: 'architect' }),
     });
 
+    // Capture error logs so we can prove the worker filtered client-side rather
+    // than relying on the hub's claim gate. If the daemon's poll filter were
+    // broadened to claim any 'assigned' task, it would attempt the claim and the
+    // hub would reject it with a 409, producing a 'failed to claim task' error
+    // mentioning this taskId. Asserting that error never appears proves the
+    // daemon never even tried — the behavior under test, not the hub gate.
+    const errors: string[] = [];
     const runtimes = new RuntimeRegistry();
     runtimes.register(new MockRuntime({ completionDelayMs: 20 }));
     daemon = new Daemon({
@@ -2352,14 +2359,20 @@ describe('integration: worker poll discovers FM-assigned tasks', () => {
       defaultAgentId: 'furnace',
       workspaceId,
       pollIntervalMs: 200,
+      logger: {
+        info: () => {},
+        error: (msg, meta) => errors.push(`${msg} ${meta ? JSON.stringify(meta) : ''}`),
+      },
     });
     await daemon.start();
 
     // Give the poll loop several cycles; the furnace worker must leave the
-    // architect-routed task untouched (still 'assigned', not claimed).
+    // architect-routed task untouched (still 'assigned', not claimed) AND must
+    // not have attempted to claim it at all.
     await new Promise((r) => setTimeout(r, 1500));
     const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
     expect(((await res.json()) as { status: string }).status).toBe('assigned');
+    expect(errors.some((e) => e.includes(taskId))).toBe(false);
   });
 
   it('daemon configures its hub client to never give up reconnecting', async () => {
