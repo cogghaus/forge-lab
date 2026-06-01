@@ -5,26 +5,52 @@ import { redirect } from 'next/navigation';
 import { hubFetch } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 
-export async function createWorkspaceAction(formData: FormData): Promise<{ error?: string }> {
+/** Derive a URL-safe slug from a workspace name. */
+export function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 50);
+}
+
+export async function createWorkspaceAction(
+  formData: FormData,
+): Promise<{ error?: string; id?: string }> {
   const name = (formData.get('name') as string | null)?.trim();
-  const slug = (formData.get('slug') as string | null)?.trim();
+  // Slug defaults to a slugified name when left blank.
+  const slug = (formData.get('slug') as string | null)?.trim() || (name ? slugify(name) : '');
   const description = (formData.get('description') as string | null)?.trim() || undefined;
-  if (!name || !slug) return { error: 'Name and slug are required.' };
+  const repoUrl = (formData.get('repoUrl') as string | null)?.trim() || undefined;
+  const repoBranch = (formData.get('repoBranch') as string | null)?.trim() || undefined;
+  if (!name) return { error: 'Name is required.' };
+  if (!slug) return { error: 'Could not derive a slug — add one manually.' };
+  if (repoBranch && !repoUrl) return { error: 'Repo branch needs a repo URL.' };
 
   const session = await getSessionCookie();
   if (!session) redirect('/login');
 
   const res = await hubFetch<{ id?: string; error?: string }>('/workspaces', {
     method: 'POST',
-    body: { name, slug, description },
+    body: {
+      name,
+      slug,
+      description,
+      ...(repoUrl ? { repoUrl } : {}),
+      ...(repoBranch ? { repoBranch } : {}),
+    },
     cookie: `${SESSION_COOKIE}=${session}`,
   });
 
   if (!res.ok) {
     const err = (res.data as { error?: string }).error;
-    return { error: err === 'slug_taken' ? 'That slug is already taken.' : 'Failed to create workspace.' };
+    if (err === 'slug_taken') return { error: 'That slug is already taken.' };
+    // Zod validation failures surface as a 400 with no friendly error code.
+    if (res.status === 400) return { error: 'Invalid input — check the repo URL (must be https) and slug.' };
+    return { error: 'Failed to create workspace.' };
   }
 
   revalidatePath('/workspaces');
-  redirect('/workspaces');
+  return { id: res.data.id };
 }

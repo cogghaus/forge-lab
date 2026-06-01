@@ -244,12 +244,12 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
       })}
 
       <div className="px-3 py-1.5">
-        <button
-          className="text-[12px] w-full text-left border border-dashed rounded-md px-2.5 py-1 transition-all border-[rgba(255,255,255,0.1)] text-[rgba(245,240,235,0.35)] hover:border-[rgba(255,107,43,0.3)] hover:text-[#FF6B2B]"
-          aria-disabled="true"
+        <Link
+          href="/workspaces?new=1"
+          className="block text-[12px] w-full text-left border border-dashed rounded-md px-2.5 py-1 transition-all border-[rgba(255,255,255,0.1)] text-[rgba(245,240,235,0.5)] hover:border-[rgba(255,107,43,0.3)] hover:text-[#FF6B2B]"
         >
           + New workspace
-        </button>
+        </Link>
       </div>
 
       <div className="border-t border-white/[0.05] mx-2 my-1" />

@@ -126,8 +126,8 @@ export function TopBar({ workspaces }: { workspaces: HubWorkspace[] }) {
                 ))}
                 <div className="border-t my-1.5" style={{ borderColor: 'rgba(255,255,255,0.06)' }} />
                 <button
-                  aria-disabled="true"
-                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-[13px] transition-colors text-[rgba(245,240,235,0.35)] hover:bg-[rgba(255,255,255,0.04)] hover:text-[rgba(245,240,235,0.6)]"
+                  onClick={() => { router.push('/workspaces?new=1'); closeDropdown(); }}
+                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-[13px] transition-colors text-[rgba(245,240,235,0.6)] hover:bg-[rgba(255,255,255,0.04)] hover:text-[rgba(245,240,235,0.85)]"
                 >
                   <span>+</span> New workspace
                 </button>
