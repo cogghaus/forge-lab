@@ -22,6 +22,8 @@ const UpdateWorkspaceInputSchema = z.object({
   // Pass null to clear the repo binding.
   repoUrl: RepoUrlSchema.nullable().optional(),
   repoBranch: RepoBranchSchema.nullable().optional(),
+  // Archive / unarchive. Hard delete goes through DELETE (status='deleted').
+  status: z.enum(['active', 'archived']).optional(),
 });
 
 const AddMemberInputSchema = z.object({
@@ -113,6 +115,7 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
       if (body.description !== undefined) updates['description'] = body.description;
       if (body.repoUrl !== undefined) updates['repoUrl'] = body.repoUrl;
       if (body.repoBranch !== undefined) updates['repoBranch'] = body.repoBranch;
+      if (body.status !== undefined) updates['status'] = body.status;
       if (Object.keys(updates).length === 0) {
         await reply.code(400).send({ error: 'no_fields' });
         return;
