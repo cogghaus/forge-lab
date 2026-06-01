@@ -99,17 +99,22 @@ const config: Config = {
               DEFAULT: '#FF4757',
               foreground: '#F5F0EB',
             },
+            // Dark-mode scale: 50 = darkest surface, ascending to 900 = light.
+            // HeroUI flat inputs/chips use default-100 as their fill, so it MUST
+            // be a subtle dark (was #e8e8ef, which rendered inputs as white boxes
+            // on the dark modal). 200/300 give visible borders; 400+ for muted
+            // text/icons.
             default: {
-              50: '#f5f5f8',
-              100: '#e8e8ef',
-              200: '#d0d0df',
-              300: '#a8a8c0',
-              400: '#7a7a98',
-              500: '#58587a',
-              600: '#424260',
-              700: '#333348',
-              800: '#24242C',
-              900: '#1A1A1F',
+              50: '#16161A',
+              100: '#24242C',
+              200: '#2E2E38',
+              300: '#3A3A44',
+              400: '#58587a',
+              500: '#7a7a98',
+              600: '#a8a8c0',
+              700: '#d0d0df',
+              800: '#e8e8ef',
+              900: '#f5f5f8',
               DEFAULT: '#24242C',
               foreground: '#F5F0EB',
             },
