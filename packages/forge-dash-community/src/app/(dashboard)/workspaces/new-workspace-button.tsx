@@ -164,6 +164,7 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
               <ModalBody className="flex flex-col gap-4">
                 <Input
                   label="Name"
+                  labelPlacement="outside"
                   name="name"
                   placeholder="My Project"
                   value={name}
@@ -179,6 +180,7 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
                 />
                 <Input
                   label="Slug"
+                  labelPlacement="outside"
                   name="slug"
                   placeholder="my-project"
                   value={effectiveSlug}
@@ -221,6 +223,7 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
                 />
                 <Textarea
                   label="Description"
+                  labelPlacement="outside"
                   name="description"
                   placeholder="Optional"
                   minRows={2}
@@ -249,6 +252,7 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
                     <Input
                       ref={repoUrlRef}
                       label="Repo URL"
+                      labelPlacement="outside"
                       name="repoUrl"
                       placeholder="https://github.com/org/repo.git"
                       value={repoUrl}
@@ -263,6 +267,7 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
                     />
                     <Input
                       label="Base branch"
+                      labelPlacement="outside"
                       name="repoBranch"
                       placeholder="main"
                       value={repoBranch}
