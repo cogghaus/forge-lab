@@ -14,17 +14,8 @@ import {
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createWorkspaceAction } from '@/actions/workspaces';
+import { slugify } from '@/lib/slug';
 import { toast } from 'sonner';
-
-/** Client-side mirror of the server slugify (kept in sync for live preview). */
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 50);
-}
 
 export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
@@ -42,11 +33,11 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
   // here), then strip the param. Stripping re-runs this effect with new=null so
   // it opens exactly once per navigation, and a later ?new=1 reopens it.
   useEffect(() => {
-    if (searchParams.get('new') === '1') {
+    if (searchParams.get('new') === '1' && !isOpen) {
       onOpen();
       router.replace('/workspaces');
     }
-  }, [searchParams, onOpen, router]);
+  }, [searchParams, onOpen, router, isOpen]);
 
   function reset() {
     setName('');
@@ -62,8 +53,8 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
     setError(null);
     setIsSubmitting(true);
     try {
-      // Ensure the derived slug is submitted when the user never edited it.
-      if (!slugTouched) formData.set('slug', effectiveSlug);
+      // The Slug input is controlled with value={effectiveSlug}, so the derived
+      // slug is already in formData; the action also falls back to slugify(name).
       const result = await createWorkspaceAction(formData);
       if (result?.error) {
         setError(result.error);

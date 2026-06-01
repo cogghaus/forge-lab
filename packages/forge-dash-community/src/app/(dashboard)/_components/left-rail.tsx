@@ -286,9 +286,9 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
         const deviceTasks = activeTasks.filter(t => t.assignedDeviceId === device.id);
         const firstTask = deviceTasks[0] ?? null;
         // Clicking an agent opens the task it's working — its status, dispatcher
-        // decision, and result. Only linkable when it has an active task in the
-        // current workspace.
-        const taskHref = firstTask && activeWsId
+        // decision, and result. Linkable only when actively working a task in the
+        // current workspace (matches the visible task indicator below).
+        const taskHref = status === 'active' && firstTask && activeWsId
           ? `/workspaces/${activeWsId}/tasks/${firstTask.id}`
           : null;
 

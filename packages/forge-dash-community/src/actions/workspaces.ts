@@ -4,16 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { hubFetch } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
-
-/** Derive a URL-safe slug from a workspace name. */
-export function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 50);
-}
+import { slugify } from '@/lib/slug';
 
 export async function createWorkspaceAction(
   formData: FormData,
@@ -47,7 +38,9 @@ export async function createWorkspaceAction(
     const err = (res.data as { error?: string }).error;
     if (err === 'slug_taken') return { error: 'That slug is already taken.' };
     // Zod validation failures surface as a 400 with no friendly error code.
-    if (res.status === 400) return { error: 'Invalid input — check the repo URL (must be https) and slug.' };
+    // Don't presume which field — a repo URL (if any) must be https, the slug
+    // must be lowercase alphanumeric/hyphens, the branch a valid git name.
+    if (res.status === 400) return { error: 'Invalid input — check the slug, branch, and repo URL (https only).' };
     return { error: 'Failed to create workspace.' };
   }
 
