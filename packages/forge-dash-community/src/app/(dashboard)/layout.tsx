@@ -17,7 +17,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     <div className="h-screen flex flex-col overflow-hidden">
       <TopBar workspaces={workspaces} />
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        <LeftRail workspaces={workspaces} version={process.env.BUILD_SHA ?? null} />
+        <LeftRail workspaces={workspaces} buildSha={process.env.BUILD_SHA ?? null} />
         <main className="flex-1 overflow-y-auto min-w-0 p-6">
           {children}
         </main>
