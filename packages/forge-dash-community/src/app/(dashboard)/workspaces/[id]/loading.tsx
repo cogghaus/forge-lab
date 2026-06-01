@@ -1,33 +1,34 @@
-import { Card, CardBody, Skeleton } from '@heroui/react';
+function Block({ className }: { className?: string }) {
+  return <div className={`animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800 ${className ?? ''}`} />;
+}
 
 export default function WorkspaceLoading() {
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-2">
-        <Skeleton className="h-4 w-20 rounded-lg" />
-        <span className="text-default-400">/</span>
-        <Skeleton className="h-7 w-36 rounded-lg" />
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <Block className="h-4 w-20" />
+          <span className="text-zinc-300 dark:text-zinc-700">/</span>
+          <Block className="h-7 w-40" />
+        </div>
+        <Block className="h-9 w-28" />
       </div>
-      <div className="flex items-center gap-4 border-b border-default-200 pb-px">
-        <Skeleton className="h-4 w-10 rounded mb-2" />
-        <Skeleton className="h-4 w-12 rounded mb-2" />
-      </div>
-      <div className="flex items-center justify-between">
-        <Skeleton className="h-4 w-20 rounded-lg" />
-        <Skeleton className="h-9 w-28 rounded-lg" />
-      </div>
-      <div className="flex flex-col gap-2">
+
+      {/* Stat strip */}
+      <div className="flex items-center gap-7 rounded-lg border border-zinc-200 px-4 py-2.5 dark:border-zinc-800">
         {Array.from({ length: 5 }).map((_, i) => (
-          <Card key={i}>
-            <CardBody className="flex flex-row items-center justify-between gap-4 py-3">
-              <div className="flex flex-col gap-1.5 flex-1">
-                <Skeleton className="h-4 w-64 rounded-lg" />
-                <Skeleton className="h-3 w-32 rounded-lg" />
-              </div>
-              <Skeleton className="h-6 w-20 rounded-lg" />
-            </CardBody>
-          </Card>
+          <Block key={i} className="h-5 w-16" />
         ))}
+      </div>
+
+      {/* Kanban */}
+      <Block className="h-[235px] w-full rounded-[10px]" />
+
+      {/* Activity + devices */}
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[1fr_260px]">
+        <Block className="h-56 w-full" />
+        <Block className="h-56 w-full" />
       </div>
     </div>
   );
