@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import type { HubWorkspace, HubDevice, HubTask } from '@/lib/hub';
 import { logoutAction } from '@/actions/auth';
+import { APP_VERSION } from '@/lib/version';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -159,12 +160,12 @@ export interface LeftRailUser {
 export function LeftRail({
   workspaces,
   user,
-  version,
+  buildSha,
 }: {
   workspaces: HubWorkspace[];
   user?: LeftRailUser;
-  /** Deployed build id (git short SHA), shown in the footer for deploy verification. */
-  version?: string | null;
+  /** Deployed git short SHA — shown on hover over the version for deploy verification. */
+  buildSha?: string | null;
 }) {
   const pathname = usePathname();
 
@@ -415,12 +416,12 @@ export function LeftRail({
         </form>
       </div>
 
-      {/* Deployed build id — lets you verify a deploy landed without guessing. */}
+      {/* App version (semver). Hover shows the deployed git SHA for verification. */}
       <div
         className="px-3 pb-1.5 pt-0.5 font-mono text-[10px] text-[rgba(245,240,235,0.28)]"
-        title="Deployed build (git short SHA)"
+        title={`build ${buildSha || 'dev'}`}
       >
-        build {version || 'dev'}
+        v{APP_VERSION}
       </div>
     </nav>
   );
