@@ -45,5 +45,7 @@ export async function createWorkspaceAction(
   }
 
   revalidatePath('/workspaces');
-  return { id: res.data.id };
+  // Guard against an empty/non-JSON 200 body (res.data null) — the client falls
+  // back to a refresh when no id is returned.
+  return { id: res.data?.id };
 }
