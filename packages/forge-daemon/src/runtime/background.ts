@@ -7,7 +7,7 @@ import type {
   AgentRuntimeSpawnConfig,
   RuntimeInstance,
 } from '@forge-lab/core';
-import { doneFilePath, taskFilePath } from '../sync/task-file.js';
+import { agentLogPath, doneFilePath, taskFilePath } from '../sync/task-file.js';
 
 // ---------------------------------------------------------------------------
 // Spawner abstraction (injectable for tests)
@@ -151,10 +151,9 @@ export class BackgroundRuntime implements AgentRuntime {
     }
     const taskId = config.taskId;
 
-    const logDir = path.join(config.workdir, 'context', 'agent-logs');
-    await fs.mkdir(logDir, { recursive: true });
+    const logPath = agentLogPath(config.workdir, taskId);
+    await fs.mkdir(path.dirname(logPath), { recursive: true });
 
-    const logPath = path.join(logDir, `${taskId}.log`);
     const logStream = createWriteStream(logPath, { flags: 'a' });
     // Ensure the file is created before we return (createWriteStream opens lazily).
     await new Promise<void>((resolve, reject) => {
