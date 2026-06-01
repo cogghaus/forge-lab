@@ -168,8 +168,15 @@ export class Daemon {
     this.runtimes = opts.runtimes;
     this.logger = opts.logger ?? noopLogger;
     this.gitOps = opts.gitOps ?? defaultGitOps;
-    // Spawned agents inherit process.env; expose the git token to `gh` so they
-    // can open PRs. git push itself uses the credentialed remote URL.
+    // A repo-bound daemon reuses a single ${workdir}/repo checkout, so it MUST
+    // run one task at a time — concurrent agents would corrupt the shared tree.
+    if (opts.repoUrl && (opts.maxConcurrentTasks ?? Infinity) !== 1) {
+      throw new Error(
+        'repoUrl requires maxConcurrentTasks=1 (a repo-bound daemon shares one checkout)',
+      );
+    }
+    // Spawned agents inherit process.env; expose the git token to `gh` and the
+    // git credential helper so they can fetch/push/open PRs.
     if (opts.gitToken && process.env['GH_TOKEN'] === undefined) {
       process.env['GH_TOKEN'] = opts.gitToken;
     }
@@ -592,11 +599,15 @@ export class Daemon {
         });
         donePath = path.join(this.opts.workdir, '.forge', 'tasks', `${claimed.id}.done`);
         repoAddendum =
-          `\n\n---\nA git checkout of ${this.opts.repoUrl} is at \`${co.repoDir}\` on branch ` +
-          `\`${co.branch}\` (cut from \`${co.baseBranch}\`). cd into it to do your work. When ` +
-          `finished, from inside the checkout: stage and commit your changes, push the branch ` +
-          `(\`git push -u origin ${co.branch}\`), and open a pull request to \`${co.baseBranch}\` ` +
-          `(\`gh pr create --base ${co.baseBranch} --head ${co.branch} --fill\`). Then write the done file.`;
+          `\n\n---\nA git checkout of ${this.opts.repoUrl} is at the absolute path ` +
+          `\`${co.repoDir}\`, already on a fresh branch \`${co.branch}\` (cut from ` +
+          `\`${co.baseBranch}\`). Do ALL your work inside that directory — start each shell ` +
+          `command with \`cd "${co.repoDir}"\` (your shell's working directory may reset ` +
+          `between commands), or use \`git -C "${co.repoDir}" ...\`. When finished: stage and ` +
+          `commit your changes, push the branch (\`git -C "${co.repoDir}" push -u origin ` +
+          `${co.branch}\`), then open a pull request to \`${co.baseBranch}\` (from inside the ` +
+          `checkout: \`gh pr create --base ${co.baseBranch} --head ${co.branch} --fill\`). ` +
+          `Do NOT print secrets (no \`env\`, \`git remote -v\`, or \`.git/config\`). Then write the done file.`;
         this.logger.info('repo checked out for task', { taskId: claimed.id, branch: co.branch });
       }
 

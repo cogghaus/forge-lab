@@ -2875,6 +2875,7 @@ describe('integration: repo-bound worker (dev-capability)', () => {
       hubUrl, deviceToken: workerToken, workdir, runtimes,
       defaultRuntimeId: 'prompt-spy', defaultAgentId: 'furnace', workspaceId,
       pollIntervalMs: 150,
+      maxConcurrentTasks: 1,
       repoUrl: 'https://github.com/sugar-crash-studios/hal.git',
       repoBranch: 'main',
       gitToken: 'ghp_test',
@@ -2901,9 +2902,23 @@ describe('integration: repo-bound worker (dev-capability)', () => {
     expect(req.userName).toBe('forge-lab[bot]');
     expect(req.taskId).toBe(taskId);
 
-    // The agent was told to branch, push, and open a PR.
+    // The agent was told where the checkout is, to push the branch, and open a PR.
     expect(spy.lastPrompt).toContain(`forge/${taskId}`);
+    expect(spy.lastPrompt).toContain(`${workdir}/repo`);
     expect(spy.lastPrompt).toContain('gh pr create');
-    expect(spy.lastPrompt).toContain('git push -u origin');
+    expect(spy.lastPrompt).toContain('push -u origin');
+  });
+
+  it('refuses a repo-bound daemon with maxConcurrentTasks > 1', () => {
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new PromptSpyRuntime());
+    expect(() => new Daemon({
+      hubUrl, deviceToken: workerToken, workdir, runtimes,
+      defaultRuntimeId: 'prompt-spy', defaultAgentId: 'furnace', workspaceId,
+      maxConcurrentTasks: 3,
+      repoUrl: 'https://github.com/sugar-crash-studios/hal.git',
+      gitToken: 'ghp_test',
+      gitOps: new FakeGitOps(),
+    })).toThrow(/maxConcurrentTasks=1/);
   });
 });
