@@ -59,6 +59,9 @@ export interface HubWorkspace {
   role: string;
   /** Monthly budget allocation in US cents (0 = unlimited / unset). */
   budgetMonthlyCents: number;
+  /** Optional git repo this workspace's worker agents check out + open PRs against. */
+  repoUrl?: string | null;
+  repoBranch?: string | null;
 }
 
 export interface HubTask {
