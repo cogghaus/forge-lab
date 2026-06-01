@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { Card, CardBody, Chip } from '@heroui/react';
 import { hubFetch, type HubGoal, type HubTask, type HubWorkspace } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { NewGoalButton } from './new-goal-button';
@@ -10,11 +9,15 @@ interface Props {
   params: Promise<{ id: string }>;
 }
 
-const STATUS_COLOR: Record<string, 'default' | 'primary' | 'success' | 'danger'> = {
-  active: 'primary',
-  completed: 'success',
-  cancelled: 'danger',
+const STATUS_HEX: Record<string, string> = {
+  active: '#FF6B2B',
+  completed: '#2DD4A0',
+  cancelled: '#FF4757',
 };
+
+function statusHex(s: string): string {
+  return STATUS_HEX[s] ?? '#a1a1aa';
+}
 
 function buildTree(goals: HubGoal[]): Map<string | null, HubGoal[]> {
   const map = new Map<string | null, HubGoal[]>();
@@ -56,41 +59,53 @@ function GoalTree({
   if (goals.length === 0) return null;
 
   return (
-    <div className={depth > 0 ? 'ml-6 border-l border-default-200 pl-4' : ''}>
+    <div className={depth > 0 ? 'ml-6 border-l border-zinc-200 pl-4 dark:border-zinc-800' : ''}>
       {goals.map((goal) => {
         if (visited.has(goal.id)) return null;
         const nextVisited = new Set(visited);
         nextVisited.add(goal.id);
         const taskCount = taskCounts.get(goal.id) ?? 0;
+        const accent = statusHex(goal.status);
         return (
-          <div key={goal.id} className="flex flex-col gap-1 mb-3">
-            <Card>
-              <CardBody className="flex flex-row items-center gap-3 py-3">
-                <div className="flex-1 min-w-0">
-                  <p className={`font-medium ${goal.status !== 'active' ? 'line-through text-default-400' : ''}`}>
-                    {goal.title}
-                  </p>
-                  {goal.description && (
-                    <p className="text-xs text-default-500 truncate mt-0.5">{goal.description}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {taskCount > 0 && (
-                    <Link href={`/workspaces/${workspaceId}/tasks?goalId=${goal.id}`} className="text-xs text-default-400 hover:text-foreground">
-                      {taskCount} task{taskCount !== 1 ? 's' : ''}
-                    </Link>
-                  )}
-                  <Chip size="sm" variant="flat" color={STATUS_COLOR[goal.status] ?? 'default'}>
-                    {goal.status}
-                  </Chip>
-                  <GoalStatusButton
-                    workspaceId={workspaceId}
-                    goalId={goal.id}
-                    currentStatus={goal.status}
-                  />
-                </div>
-              </CardBody>
-            </Card>
+          <div key={goal.id} className="mb-3 flex flex-col gap-1">
+            <div className="relative flex flex-row items-center gap-3 overflow-hidden rounded-xl border border-zinc-200 bg-white py-3 pl-5 pr-4 dark:border-zinc-800 dark:bg-zinc-900/70">
+              <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: accent }} aria-hidden />
+              <div className="min-w-0 flex-1">
+                <p
+                  className={`font-medium ${
+                    goal.status !== 'active'
+                      ? 'text-zinc-400 line-through dark:text-zinc-500'
+                      : 'text-zinc-900 dark:text-zinc-100'
+                  }`}
+                >
+                  {goal.title}
+                </p>
+                {goal.description && (
+                  <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">{goal.description}</p>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {taskCount > 0 && (
+                  <Link
+                    href={`/workspaces/${workspaceId}/tasks?goalId=${goal.id}`}
+                    className="text-xs text-zinc-500 hover:text-[#FF6B2B] dark:text-zinc-400"
+                  >
+                    {taskCount} task{taskCount !== 1 ? 's' : ''}
+                  </Link>
+                )}
+                <span
+                  className="rounded px-1.5 py-0.5 font-mono text-[10px] capitalize"
+                  style={{ color: accent, background: `${accent}1f` }}
+                >
+                  {goal.status}
+                </span>
+                <GoalStatusButton
+                  workspaceId={workspaceId}
+                  goalId={goal.id}
+                  currentStatus={goal.status}
+                />
+              </div>
+            </div>
             <GoalTree
               tree={tree}
               parentId={goal.id}
@@ -129,52 +144,59 @@ export default async function WorkspaceGoalsPage({ params }: Props) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-3">
-        <Link href="/workspaces" className="text-default-500 hover:text-foreground text-sm">
+      <div className="flex flex-wrap items-center gap-3">
+        <Link
+          href="/workspaces"
+          className="text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+        >
           Workspaces
         </Link>
-        <span className="text-default-400">/</span>
+        <span className="text-zinc-300 dark:text-zinc-700">/</span>
         <Link
           href={`/workspaces/${workspaceId}`}
-          className="text-default-500 hover:text-foreground text-sm"
+          className="min-w-0 truncate text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           {workspace.name}
         </Link>
-        <span className="text-default-400">/</span>
-        <h1 className="text-2xl font-bold">Goals</h1>
+        <span className="text-zinc-300 dark:text-zinc-700">/</span>
+        <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">Goals</h1>
       </div>
 
-      <div className="flex items-center gap-4 border-b border-default-200">
+      <div className="flex items-center gap-4 border-b border-zinc-200 dark:border-zinc-800">
         <Link
           href={`/workspaces/${workspaceId}/tasks`}
-          className="pb-2 text-default-500 hover:text-foreground text-sm"
+          className="pb-2 text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           Tasks
         </Link>
-        <span className="pb-2 border-b-2 border-primary text-primary text-sm font-medium">
+        <span className="border-b-2 border-[#FF6B2B] pb-2 text-sm font-medium text-[#FF6B2B]">
           Goals
         </span>
       </div>
 
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-default-500">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
           {goals.length} goal{goals.length !== 1 ? 's' : ''}
         </p>
         <NewGoalButton workspaceId={workspaceId} goals={goals} />
       </div>
 
       {goals.length === 0 ? (
-        <Card>
-          <CardBody className="py-12 flex flex-col items-center gap-4">
-            <p className="text-default-500 text-center">
-              No goals defined for <span className="text-foreground font-medium">{workspace.name}</span> yet.
+        <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed border-zinc-300 px-6 py-14 text-center dark:border-zinc-700/80">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FF6B2B]/10 text-[#FF6B2B]">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-6 w-6" aria-hidden>
+              <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1" />
+            </svg>
+          </span>
+          <div className="space-y-1">
+            <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">No goals yet</h3>
+            <p className="mx-auto max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
+              Goals group tasks into milestones and track progress toward outcomes for{' '}
+              <span className="font-medium text-zinc-700 dark:text-zinc-200">{workspace.name}</span>.
             </p>
-            <p className="text-sm text-default-400 text-center">
-              Goals let you group tasks into milestones and track progress toward outcomes.
-            </p>
-            <NewGoalButton workspaceId={workspaceId} goals={[]} />
-          </CardBody>
-        </Card>
+          </div>
+          <NewGoalButton workspaceId={workspaceId} goals={[]} />
+        </div>
       ) : (
         <GoalTree
           tree={tree}
