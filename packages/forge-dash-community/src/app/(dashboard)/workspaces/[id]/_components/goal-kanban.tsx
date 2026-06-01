@@ -83,6 +83,48 @@ function colHeaderStyle(extra: React.CSSProperties): React.CSSProperties {
   return { ...COL_HEADER_BASE, ...extra };
 }
 
+function GoalGlyph({ kind }: { kind: 'ungrouped' | 'done' | 'active' }) {
+  const common = { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, className: 'h-3 w-3 flex-shrink-0', 'aria-hidden': true };
+  if (kind === 'done') {
+    return (
+      <svg {...common}>
+        <path d="M20 6 9 17l-5-5" />
+      </svg>
+    );
+  }
+  if (kind === 'ungrouped') {
+    return (
+      <svg {...common} strokeDasharray="3 3">
+        <circle cx="12" cy="12" r="9" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="4.5" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="inline-block h-3 w-3 align-middle"
+      style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms' }}
+      aria-hidden
+    >
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  );
+}
+
 function countByCol(tasks: HubTask[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const col of KANBAN_COLS) {
@@ -138,12 +180,15 @@ function GoalRow({ goal, tasks, workspaceId, isLast }: GoalRowProps) {
         style={{ padding: '7px 12px' }}
       >
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="flex-shrink-0 text-[12px]">
-            {isUngrouped ? '◌' : allDone ? '✓' : '🎯'}
+          <span
+            className="flex-shrink-0"
+            style={{ color: allDone ? '#2DD4A0' : isUngrouped ? 'rgba(245,240,235,0.4)' : '#FF6B2B' }}
+          >
+            <GoalGlyph kind={isUngrouped ? 'ungrouped' : allDone ? 'done' : 'active'} />
           </span>
           <span
             className="text-[12px] font-semibold truncate"
-            style={{ color: allDone || isUngrouped ? 'rgba(245,240,235,0.4)' : 'var(--foreground)' }}
+            style={{ color: allDone || isUngrouped ? 'rgba(245,240,235,0.4)' : 'rgba(245,240,235,0.92)' }}
           >
             {isUngrouped ? 'Ungrouped' : goal.title}
           </span>
@@ -226,7 +271,7 @@ function GoalRow({ goal, tasks, workspaceId, isLast }: GoalRowProps) {
  *
  * Each goal row shows per-column task counts and mini stacked block bars.
  * Tasks not linked to any goal appear in an "Ungrouped" row at the bottom.
- * Active tasks trigger a 5-second polling refresh.
+ * Live updates arrive via SSE (useHubEvents).
  */
 export function GoalKanban({ goals, tasks, workspaceId }: GoalKanbanProps) {
   const [isLive, setIsLive] = useState(false);
@@ -304,7 +349,7 @@ export function GoalKanban({ goals, tasks, workspaceId }: GoalKanbanProps) {
       )}
 
       {/* ── Goal rows ── */}
-      <div style={{ maxHeight: 195, overflowY: 'auto' }}>
+      <div style={{ maxHeight: 220, overflowY: 'auto' }}>
         {!hasRows && (
           <p
             className="px-3 py-5 text-sm text-center"
@@ -347,10 +392,11 @@ export function GoalKanban({ goals, tasks, workspaceId }: GoalKanbanProps) {
           <button
             type="button"
             onClick={() => setShowCompleted((v) => !v)}
-            className="font-mono text-[9px] uppercase tracking-[0.08em] cursor-pointer bg-transparent border-none"
-            style={{ color: 'rgba(245,240,235,0.3)' }}
+            className="font-mono text-[9px] uppercase tracking-[0.08em] cursor-pointer bg-transparent border-none inline-flex items-center gap-1"
+            style={{ color: 'rgba(245,240,235,0.45)' }}
           >
-            {showCompleted ? '▾ Hide' : '▸ Show'}{' '}
+            <ChevronIcon open={showCompleted} />
+            {showCompleted ? 'Hide' : 'Show'}{' '}
             {doneGoals.length} completed goal{doneGoals.length !== 1 ? 's' : ''}
           </button>
         </div>

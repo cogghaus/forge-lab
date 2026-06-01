@@ -89,7 +89,7 @@ export function ActivityStreamPanel({ activity, isLive = false, workspaceId, dev
         {activity.length > 0 && (
           <span
             className="font-mono text-[10px] ml-auto"
-            style={{ color: 'rgba(245,240,235,0.2)' }}
+            style={{ color: 'rgba(245,240,235,0.4)' }}
           >
             {activity.length} event{activity.length !== 1 ? 's' : ''}
           </span>
@@ -101,7 +101,7 @@ export function ActivityStreamPanel({ activity, isLive = false, workspaceId, dev
         {activity.length === 0 ? (
           <p
             className="px-4 py-6 text-xs text-center"
-            style={{ color: 'rgba(245,240,235,0.2)' }}
+            style={{ color: 'rgba(245,240,235,0.4)' }}
           >
             No activity yet. Create a task to get started.
           </p>
