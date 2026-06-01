@@ -1,17 +1,6 @@
 'use client';
 
-import {
-  Button,
-  Chip,
-  Input,
-  Modal,
-  ModalBody,
-  ModalContent,
-  ModalFooter,
-  ModalHeader,
-  Textarea,
-  useDisclosure,
-} from '@heroui/react';
+import { Button, Modal, ModalContent, useDisclosure } from '@heroui/react';
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -22,6 +11,74 @@ import { slugify } from '@/lib/slug';
 import { toast } from 'sonner';
 
 type FieldErrors = Partial<Record<Exclude<WorkspaceErrorField, 'form'>, string>>;
+
+// Explicit, theme-agnostic styles — no HeroUI default-* tokens (those rendered
+// inputs as white boxes on the dark surface). Works in both light and dark via
+// Tailwind `dark:` variants; accent is the brand orange (#FF6B2B).
+const ACCENT = '#FF6B2B';
+const fieldBase =
+  'w-full rounded-md border px-3 py-2 text-sm outline-none transition-colors ' +
+  'bg-white text-zinc-900 border-zinc-300 placeholder:text-zinc-400 ' +
+  'dark:bg-zinc-900 dark:text-zinc-100 dark:border-zinc-700 dark:placeholder:text-zinc-500 ' +
+  'focus:border-[#FF6B2B] focus:ring-1 focus:ring-[#FF6B2B]/40 ' +
+  'disabled:opacity-50 disabled:cursor-not-allowed';
+const fieldErrorRing = 'border-red-500 dark:border-red-500 focus:border-red-500 focus:ring-red-500/40';
+
+function fieldClass(invalid?: boolean): string {
+  return invalid ? `${fieldBase} ${fieldErrorRing}` : fieldBase;
+}
+
+function Field({
+  label,
+  htmlFor,
+  required,
+  error,
+  hint,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  required?: boolean;
+  error?: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={htmlFor} className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+        {label}
+        {required && <span style={{ color: ACCENT }}> *</span>}
+      </label>
+      {children}
+      {error ? (
+        <span className="text-xs text-red-600 dark:text-red-400">{error}</span>
+      ) : hint ? (
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">{hint}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function GitBranchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="6" cy="18" r="2.5" />
+      <circle cx="18" cy="7" r="2.5" />
+      <path d="M6 8.5v7" />
+      <path d="M18 9.5a6 6 0 0 1-6 6H6" />
+    </svg>
+  );
+}
 
 export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
@@ -42,9 +99,8 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
   const repoUrlRef = useRef<HTMLInputElement>(null);
   const repoToggledOnce = useRef(false);
 
-  // Auto-open when arriving via ?new=1 (the left-rail / top-bar buttons link
-  // here), then strip the param. Stripping re-runs this effect with new=null so
-  // it opens exactly once per navigation, and a later ?new=1 reopens it.
+  // Auto-open when arriving via ?new=1 (rail / top-bar buttons link here), then
+  // strip the param so it opens once per navigation and a later ?new=1 reopens.
   useEffect(() => {
     if (searchParams.get('new') === '1' && !isOpen) {
       onOpen();
@@ -52,8 +108,7 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
     }
   }, [searchParams, onOpen, router, isOpen]);
 
-  // Move focus into the repo section when it opens, and back to the trigger when
-  // it's removed (don't fire on the first render before any toggle).
+  // Focus into the repo section when it opens, back to the trigger when removed.
   useEffect(() => {
     if (!repoToggledOnce.current) return;
     if (showRepo) repoUrlRef.current?.focus();
@@ -74,13 +129,11 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
 
   const effectiveSlug = slugTouched ? slug : slugify(name);
 
-  /** Clear a field's error (and any form-level error) as the user edits it. */
   function clearError(field: keyof FieldErrors) {
     setFormError(null);
     setFieldErrors((e) => (e[field] ? { ...e, [field]: undefined } : e));
   }
 
-  /** Client-side validation — catch the obvious problems before a round-trip. */
   function validate(): FieldErrors {
     const errs: FieldErrors = {};
     if (!name.trim()) errs.name = 'Name is required.';
@@ -93,7 +146,8 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
     return errs;
   }
 
-  async function handleAction(formData: FormData) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
     setFormError(null);
     const clientErrs = validate();
     if (Object.keys(clientErrs).length > 0) {
@@ -103,7 +157,17 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
     setFieldErrors({});
     setIsSubmitting(true);
     try {
-      const result = await createWorkspaceAction(formData);
+      const fd = new FormData();
+      fd.set('name', name.trim());
+      fd.set('slug', effectiveSlug);
+      fd.set('description', '');
+      const descEl = (e.currentTarget.elements.namedItem('description') as HTMLTextAreaElement | null);
+      if (descEl) fd.set('description', descEl.value);
+      if (showRepo) {
+        fd.set('repoUrl', repoUrl.trim());
+        fd.set('repoBranch', repoBranch.trim());
+      }
+      const result = await createWorkspaceAction(fd);
       if (result?.error) {
         if (result.field && result.field !== 'form') {
           setFieldErrors({ [result.field]: result.error });
@@ -123,7 +187,7 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
     }
   }
 
-  function handleOpenChange() {
+  function handleModalChange() {
     if (isOpen) reset();
     onOpenChange();
   }
@@ -151,175 +215,212 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
         New Workspace
       </Button>
 
-      <Modal isOpen={isOpen} onOpenChange={handleOpenChange} size="lg">
+      <Modal
+        isOpen={isOpen}
+        onOpenChange={handleModalChange}
+        size="lg"
+        backdrop="blur"
+        classNames={{
+          // Own the surface explicitly so it's correct on any theme.
+          base: 'bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100',
+          closeButton: 'text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800',
+        }}
+      >
         <ModalContent>
           {(onClose) => (
-            <form action={handleAction}>
-              <ModalHeader className="flex flex-col gap-0.5">
-                <span>Create workspace</span>
-                <span className="text-xs font-normal text-default-400">
+            <form onSubmit={handleSubmit} noValidate>
+              {/* Header */}
+              <div className="px-6 pt-5 pb-3 border-b border-zinc-200 dark:border-zinc-800">
+                <h2 className="text-lg font-semibold">Create workspace</h2>
+                <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
                   Groups tasks for a project.
-                </span>
-              </ModalHeader>
-              <ModalBody className="flex flex-col gap-4">
-                <Input
-                  label="Name"
-                  labelPlacement="outside"
-                  name="name"
-                  placeholder="My Project"
-                  value={name}
-                  onValueChange={(v) => {
-                    setName(v);
-                    clearError('name');
-                  }}
-                  isRequired
-                  autoFocus
-                  isDisabled={isSubmitting}
-                  isInvalid={!!fieldErrors.name}
-                  errorMessage={fieldErrors.name}
-                />
-                <Input
+                </p>
+              </div>
+
+              {/* Body */}
+              <div className="flex flex-col gap-4 px-6 py-5">
+                <Field label="Name" htmlFor="ws-name" required error={fieldErrors.name}>
+                  <input
+                    id="ws-name"
+                    name="name"
+                    autoFocus
+                    placeholder="My Project"
+                    value={name}
+                    onChange={(e) => {
+                      setName(e.target.value);
+                      clearError('name');
+                    }}
+                    disabled={isSubmitting}
+                    className={fieldClass(!!fieldErrors.name)}
+                  />
+                </Field>
+
+                <Field
                   label="Slug"
-                  labelPlacement="outside"
-                  name="slug"
-                  placeholder="my-project"
-                  value={effectiveSlug}
-                  onValueChange={(v) => {
-                    setSlugTouched(true);
-                    setSlug(v);
-                    clearError('slug');
-                  }}
-                  isDisabled={isSubmitting}
-                  isInvalid={!!fieldErrors.slug}
-                  errorMessage={fieldErrors.slug}
-                  startContent={
-                    !slugTouched && effectiveSlug ? (
-                      <Chip size="sm" variant="flat" className="h-5 text-[10px] text-default-500">
-                        auto
-                      </Chip>
-                    ) : undefined
-                  }
-                  endContent={
-                    slugTouched ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSlugTouched(false);
-                          setSlug('');
-                          clearError('slug');
-                        }}
-                        className="text-[11px] text-default-400 hover:text-primary transition-colors"
-                        aria-label="Reset slug to auto-derived from the name"
-                      >
-                        ↺ auto
-                      </button>
-                    ) : undefined
-                  }
-                  description={
-                    slugTouched
-                      ? 'Lowercase letters, numbers, hyphens.'
-                      : 'Auto-derived from the name — edit to override.'
-                  }
-                />
-                <Textarea
-                  label="Description"
-                  labelPlacement="outside"
-                  name="description"
-                  placeholder="Optional"
-                  minRows={2}
-                  isDisabled={isSubmitting}
-                />
+                  htmlFor="ws-slug"
+                  error={fieldErrors.slug}
+                  hint={slugTouched ? 'Lowercase letters, numbers, hyphens.' : 'Auto-derived from the name — edit to override.'}
+                >
+                  <div className="relative">
+                    <input
+                      id="ws-slug"
+                      name="slug"
+                      placeholder="my-project"
+                      value={effectiveSlug}
+                      onChange={(e) => {
+                        setSlugTouched(true);
+                        setSlug(e.target.value);
+                        clearError('slug');
+                      }}
+                      disabled={isSubmitting}
+                      className={`${fieldClass(!!fieldErrors.slug)} ${slugTouched ? 'pr-16' : 'pr-14'}`}
+                    />
+                    <span className="absolute inset-y-0 right-2 flex items-center">
+                      {slugTouched ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSlugTouched(false);
+                            setSlug('');
+                            clearError('slug');
+                          }}
+                          className="text-[11px] text-zinc-500 hover:text-[#FF6B2B] transition-colors"
+                          aria-label="Reset slug to auto-derived from the name"
+                        >
+                          ↺ auto
+                        </button>
+                      ) : (
+                        effectiveSlug && (
+                          <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                            auto
+                          </span>
+                        )
+                      )}
+                    </span>
+                  </div>
+                </Field>
+
+                <Field label="Description" htmlFor="ws-desc">
+                  <textarea
+                    id="ws-desc"
+                    name="description"
+                    placeholder="Optional"
+                    rows={2}
+                    disabled={isSubmitting}
+                    className={`${fieldClass(false)} resize-y`}
+                  />
+                </Field>
 
                 {showRepo ? (
-                  <div className="flex flex-col gap-4 rounded-lg border border-primary/40 bg-primary/5 p-3">
+                  <div className="flex flex-col gap-4 rounded-lg border border-[#FF6B2B]/40 bg-[#FF6B2B]/[0.06] p-3.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium flex items-center gap-2">
-                        <span aria-hidden>⎇</span> Git repo
+                      <span className="flex items-center gap-2 text-sm font-medium">
+                        <GitBranchIcon className="h-4 w-4 text-[#FF6B2B]" />
+                        Git repo
                       </span>
-                      <Button
+                      <button
                         type="button"
-                        size="sm"
-                        variant="light"
-                        onPress={removeRepo}
-                        isDisabled={isSubmitting}
+                        onClick={removeRepo}
+                        disabled={isSubmitting}
+                        className="text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors disabled:opacity-50"
                       >
                         Remove
-                      </Button>
+                      </button>
                     </div>
-                    <p className="text-xs text-default-400 -mt-2">
+                    <p className="-mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                       This workspace&apos;s agents check out the repo, branch per task, and open PRs.
                     </p>
-                    <Input
-                      ref={repoUrlRef}
+                    <Field
                       label="Repo URL"
-                      labelPlacement="outside"
-                      name="repoUrl"
-                      placeholder="https://github.com/org/repo.git"
-                      value={repoUrl}
-                      onValueChange={(v) => {
-                        setRepoUrl(v);
-                        clearError('repoUrl');
-                      }}
-                      isDisabled={isSubmitting}
-                      isInvalid={!!fieldErrors.repoUrl}
-                      errorMessage={fieldErrors.repoUrl}
-                      description={fieldErrors.repoUrl ? undefined : 'https only.'}
-                    />
-                    <Input
+                      htmlFor="ws-repo-url"
+                      error={fieldErrors.repoUrl}
+                      hint="https only."
+                    >
+                      <input
+                        id="ws-repo-url"
+                        ref={repoUrlRef}
+                        name="repoUrl"
+                        placeholder="https://github.com/org/repo.git"
+                        value={repoUrl}
+                        onChange={(e) => {
+                          setRepoUrl(e.target.value);
+                          clearError('repoUrl');
+                        }}
+                        disabled={isSubmitting}
+                        className={fieldClass(!!fieldErrors.repoUrl)}
+                      />
+                    </Field>
+                    <Field
                       label="Base branch"
-                      labelPlacement="outside"
-                      name="repoBranch"
-                      placeholder="main"
-                      value={repoBranch}
-                      onValueChange={(v) => {
-                        setRepoBranch(v);
-                        clearError('repoBranch');
-                      }}
-                      isDisabled={isSubmitting}
-                      isInvalid={!!fieldErrors.repoBranch}
-                      errorMessage={fieldErrors.repoBranch}
-                      description={fieldErrors.repoBranch ? undefined : 'Branch PRs target (defaults to main).'}
-                    />
+                      htmlFor="ws-repo-branch"
+                      error={fieldErrors.repoBranch}
+                      hint="Branch PRs target (defaults to main)."
+                    >
+                      <input
+                        id="ws-repo-branch"
+                        name="repoBranch"
+                        placeholder="main"
+                        value={repoBranch}
+                        onChange={(e) => {
+                          setRepoBranch(e.target.value);
+                          clearError('repoBranch');
+                        }}
+                        disabled={isSubmitting}
+                        className={fieldClass(!!fieldErrors.repoBranch)}
+                      />
+                    </Field>
                   </div>
                 ) : (
-                  <Button
+                  <button
                     ref={connectTriggerRef}
                     type="button"
-                    variant="bordered"
-                    fullWidth
-                    onPress={openRepo}
-                    isDisabled={isSubmitting}
-                    className="h-auto justify-start gap-3 whitespace-normal py-3 border-default-300 hover:border-primary/50"
+                    onClick={openRepo}
+                    disabled={isSubmitting}
+                    className="flex w-full items-center gap-3 rounded-lg border border-dashed px-3.5 py-3 text-left transition-colors border-zinc-300 hover:border-[#FF6B2B]/60 hover:bg-[#FF6B2B]/[0.04] dark:border-zinc-700 disabled:opacity-50"
                   >
-                    <span className="text-lg" aria-hidden>⎇</span>
-                    <span className="flex flex-1 flex-col items-start gap-0.5">
+                    <GitBranchIcon className="h-5 w-5 shrink-0 text-[#FF6B2B]" />
+                    <span className="flex flex-1 flex-col gap-0.5">
                       <span className="flex items-center gap-2 text-sm font-medium">
                         Connect a git repo
-                        <Chip size="sm" variant="flat" className="h-5 text-[10px] text-default-500">
+                        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
                           optional
-                        </Chip>
+                        </span>
                       </span>
-                      <span className="text-xs text-default-400 text-left">
+                      <span className="text-xs text-zinc-500 dark:text-zinc-400">
                         Let this workspace&apos;s agents check out the code and open PRs.
                       </span>
                     </span>
-                  </Button>
+                  </button>
                 )}
 
                 {formError && (
-                  <p role="alert" aria-live="polite" className="text-danger text-sm">
+                  <p role="alert" aria-live="polite" className="text-sm text-red-600 dark:text-red-400">
                     {formError}
                   </p>
                 )}
-              </ModalBody>
-              <ModalFooter>
-                <Button type="button" variant="light" onPress={onClose} isDisabled={isSubmitting}>
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-6 py-4 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={isSubmitting}
+                  className="rounded-md px-4 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800 disabled:opacity-50"
+                >
                   Cancel
-                </Button>
-                <Button color="primary" type="submit" isLoading={isSubmitting}>
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="inline-flex items-center gap-2 rounded-md bg-[#FF6B2B] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#e5531a] disabled:opacity-60"
+                >
+                  {isSubmitting && (
+                    <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  )}
                   {showRepo && repoUrl.trim() ? 'Create & connect repo' : 'Create'}
-                </Button>
-              </ModalFooter>
+                </button>
+              </div>
             </form>
           )}
         </ModalContent>
