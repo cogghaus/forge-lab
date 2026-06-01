@@ -301,6 +301,15 @@ CREATE INDEX email_verifications_user_idx ON email_verifications(user_id);
 CREATE UNIQUE INDEX email_verifications_token_idx ON email_verifications(token);
 `,
   },
+  {
+    name: '0009_workspace_repo',
+    sql: `
+-- Repo binding for worker dev-capability: a workspace optionally maps to a git
+-- repo that its worker agents check out, branch per task, and open PRs against.
+ALTER TABLE workspaces ADD COLUMN repo_url TEXT;
+ALTER TABLE workspaces ADD COLUMN repo_branch TEXT;
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {

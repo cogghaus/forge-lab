@@ -256,6 +256,9 @@ export const workspaces = sqliteTable(
       .notNull()
       .default('active'),
     budgetMonthlyCents: integer('budget_monthly_cents').notNull().default(0),
+    // Optional repo binding for worker dev-capability (checkout + branch + PR).
+    repoUrl: text('repo_url'),
+    repoBranch: text('repo_branch'),
     createdAt: timestampMs('created_at').notNull().default(nowDefault),
     updatedAt: timestampMs('updated_at').notNull().default(nowDefault),
   },

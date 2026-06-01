@@ -51,6 +51,13 @@ const ConfigSchema = z.object({
   // How many times to re-spawn a worker task after a transient auth failure
   // (shared OAuth token rotating mid-run) before failing it. Default: 2.
   authRetryLimit: z.coerce.number().int().min(0).optional(),
+  // Dev-capability: repo this daemon's workers check out, branch per task, and
+  // open PRs against. Requires gitToken. Without repoUrl, output-only as before.
+  repoUrl: z.string().url().optional(),
+  repoBranch: z.string().optional(),
+  gitToken: z.string().optional(),
+  gitUserName: z.string().optional(),
+  gitUserEmail: z.string().optional(),
   // Personality ID to use for the FM agent spawned in dispatcher mode.
   // Must match an id registered in the PersonalityRegistry.
   // Defaults to 'forge-master'. Ignored in worker mode.
@@ -72,6 +79,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     staleTtlMinutes: env['FORGE_DAEMON_STALE_TTL_MINUTES'],
     maxConcurrentTasks: env['FORGE_DAEMON_MAX_CONCURRENT_TASKS'],
     authRetryLimit: env['FORGE_DAEMON_AUTH_RETRY_LIMIT'],
+    repoUrl: env['FORGE_DAEMON_REPO_URL'],
+    repoBranch: env['FORGE_DAEMON_REPO_BRANCH'],
+    gitToken: env['FORGE_DAEMON_GIT_TOKEN'],
+    gitUserName: env['FORGE_DAEMON_GIT_NAME'],
+    gitUserEmail: env['FORGE_DAEMON_GIT_EMAIL'],
     dispatcherPersonality: env['FORGE_DAEMON_DISPATCHER_PERSONALITY'],
   });
 }

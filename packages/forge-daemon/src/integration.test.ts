@@ -2779,3 +2779,146 @@ describe('integration: worker auth-failure self-heal', () => {
     expect(infoLogs).not.toContain('retrying task after auth failure');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Dev-capability: a repo-bound worker checks out the repo and is instructed to
+// branch + commit + push + open a PR. GitOps is faked (no real git).
+// ---------------------------------------------------------------------------
+
+import type { GitOps, RepoCheckout, RepoCheckoutRequest } from './git/repo.js';
+
+class FakeGitOps implements GitOps {
+  readonly requests: RepoCheckoutRequest[] = [];
+  async checkout(req: RepoCheckoutRequest): Promise<RepoCheckout> {
+    this.requests.push(req);
+    return { repoDir: `${req.workdir}/repo`, branch: `forge/${req.taskId}`, baseBranch: req.baseBranch };
+  }
+}
+
+/** Records the prompt it was spawned with, then completes via the done file. */
+class PromptSpyRuntime implements AgentRuntime {
+  readonly id = 'prompt-spy';
+  readonly displayName = 'Prompt Spy (test)';
+  readonly capabilities = { supportsStreaming: false, supportsTools: false } as const;
+  lastPrompt = '';
+  async spawn(config: AgentRuntimeSpawnConfig, initialPrompt: string): Promise<RuntimeInstance> {
+    this.lastPrompt = initialPrompt;
+    const dp = doneFilePath(config.workdir, config.taskId!);
+    await fs.mkdir(path.dirname(dp), { recursive: true });
+    setTimeout(() => { void fs.writeFile(dp, JSON.stringify({ result: 'opened PR' }), 'utf8').catch(() => {}); }, 20);
+    return { id: nanoidLocal(), runtimeId: this.id, agentId: config.agentId, pid: null, startedAt: new Date(), metadata: { config } };
+  }
+  sendInstruction(): Promise<void> { return Promise.resolve(); }
+  stop(): Promise<void> { return Promise.resolve(); }
+  isAlive(): Promise<boolean> { return Promise.resolve(true); }
+}
+
+describe('integration: repo-bound worker (dev-capability)', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let workerToken: string;
+  let sessionCookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-repo-'));
+    hub = await createHub({
+      config: {
+        port: 0, host: '127.0.0.1', databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-repo-bound-test-xxxxxxxxx',
+        sessionTtlHours: 24, bcryptCost: 10, cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-furnace', agentId: 'furnace', deviceType: 'worker' }),
+    });
+    workerToken = ((await devRes.json()) as { token: string }).token;
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'HAL', slug: 'hal' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon?.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('checks out the repo and instructs the agent to branch + push + PR', { timeout: 20000 }, async () => {
+    const createRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'hal', title: 'Build the thing', assignedAgentId: 'furnace' }),
+    });
+    const { id: taskId } = (await createRes.json()) as { id: string };
+
+    const gitOps = new FakeGitOps();
+    const spy = new PromptSpyRuntime();
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(spy);
+    daemon = new Daemon({
+      hubUrl, deviceToken: workerToken, workdir, runtimes,
+      defaultRuntimeId: 'prompt-spy', defaultAgentId: 'furnace', workspaceId,
+      pollIntervalMs: 150,
+      maxConcurrentTasks: 1,
+      repoUrl: 'https://github.com/sugar-crash-studios/hal.git',
+      repoBranch: 'main',
+      gitToken: 'ghp_test',
+      gitUserName: 'forge-lab[bot]',
+      gitUserEmail: 'forge-lab@cogg.haus',
+      gitOps,
+    });
+    await daemon.start();
+
+    const completed = await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+      if (!res.ok) return null;
+      const t = (await res.json()) as { status: string };
+      return t.status === 'completed' ? t : null;
+    }, 15000);
+    expect(completed.status).toBe('completed');
+
+    // Checkout happened with the configured repo/branch/token/identity.
+    expect(gitOps.requests).toHaveLength(1);
+    const req = gitOps.requests[0]!;
+    expect(req.repoUrl).toBe('https://github.com/sugar-crash-studios/hal.git');
+    expect(req.baseBranch).toBe('main');
+    expect(req.token).toBe('ghp_test');
+    expect(req.userName).toBe('forge-lab[bot]');
+    expect(req.taskId).toBe(taskId);
+
+    // The agent was told where the checkout is, to push the branch, and open a PR.
+    expect(spy.lastPrompt).toContain(`forge/${taskId}`);
+    expect(spy.lastPrompt).toContain(`${workdir}/repo`);
+    expect(spy.lastPrompt).toContain('gh pr create');
+    expect(spy.lastPrompt).toContain('push -u origin');
+  });
+
+  it('refuses a repo-bound daemon with maxConcurrentTasks > 1', () => {
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new PromptSpyRuntime());
+    expect(() => new Daemon({
+      hubUrl, deviceToken: workerToken, workdir, runtimes,
+      defaultRuntimeId: 'prompt-spy', defaultAgentId: 'furnace', workspaceId,
+      maxConcurrentTasks: 3,
+      repoUrl: 'https://github.com/sugar-crash-studios/hal.git',
+      gitToken: 'ghp_test',
+      gitOps: new FakeGitOps(),
+    })).toThrow(/maxConcurrentTasks=1/);
+  });
+});

@@ -29,9 +29,15 @@ COPY packages/forge-daemon packages/forge-daemon
 RUN pnpm --filter @forge-lab/daemon... build
 
 FROM node:20-slim AS runner
-# git: agents perform source work. The claude CLI provides the `claude` binary.
+# git + gh: agents check out repos, commit, and open PRs. `claude` = the CLI.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates \
+  && apt-get install -y --no-install-recommends git ca-certificates curl gpg \
+  && mkdir -p -m 755 /etc/apt/keyrings \
+  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/* \
   && npm install -g @anthropic-ai/claude-code \
   && npm cache clean --force
