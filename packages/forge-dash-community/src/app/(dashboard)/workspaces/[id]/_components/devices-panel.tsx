@@ -105,7 +105,7 @@ export function DevicesPanel({ devices: initialDevices, queueDepth = 0 }: Device
         {activeDevices.length > 0 && (
           <span
             className="font-mono text-[10px]"
-            style={{ color: 'rgba(245,240,235,0.2)' }}
+            style={{ color: 'rgba(245,240,235,0.45)' }}
           >
             {onlineCount}/{activeDevices.length} online
           </span>
@@ -116,7 +116,7 @@ export function DevicesPanel({ devices: initialDevices, queueDepth = 0 }: Device
           onClick={() => { void toggleShowDeregistered(); }}
           className="ml-auto font-mono text-[10px] px-1.5 py-0.5 rounded transition-colors"
           style={{
-            color: showDeregistered ? 'rgba(245,240,235,0.6)' : 'rgba(245,240,235,0.2)',
+            color: showDeregistered ? 'rgba(245,240,235,0.6)' : 'rgba(245,240,235,0.45)',
             background: showDeregistered ? 'rgba(255,255,255,0.06)' : 'transparent',
           }}
           disabled={loadingDevices}
@@ -129,7 +129,7 @@ export function DevicesPanel({ devices: initialDevices, queueDepth = 0 }: Device
       {/* Device list */}
       <div className="flex-1">
         {displayDevices.length === 0 ? (
-          <p className="px-4 py-6 text-xs text-center" style={{ color: 'rgba(245,240,235,0.2)' }}>
+          <p className="px-4 py-6 text-xs text-center" style={{ color: 'rgba(245,240,235,0.4)' }}>
             No devices registered.
           </p>
         ) : (
@@ -316,11 +316,14 @@ function DeviceRow({ device, isLast, onMutate }: DeviceRowProps) {
               <button
                 onClick={() => { void submitRename(); }}
                 disabled={renamePending}
-                className="text-[10px] px-1 rounded"
+                className="flex items-center px-1 rounded"
                 style={{ color: '#2DD4A0' }}
                 title="Save"
+                aria-label="Save name"
               >
-                ✓
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3" aria-hidden>
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
               </button>
             </div>
           ) : (
@@ -370,8 +373,8 @@ function DeviceRow({ device, isLast, onMutate }: DeviceRowProps) {
           <div className="flex items-center gap-1 flex-shrink-0">
             <button
               onClick={() => { setShowRotateConfirm(true); setRotateError(null); }}
-              className="font-mono text-[10px] px-1.5 py-0.5 rounded transition-colors"
-              style={{ color: 'rgba(245,240,235,0.3)', background: 'rgba(255,255,255,0.04)' }}
+              className="font-mono text-[10px] px-1.5 py-0.5 rounded transition-colors hover:bg-white/10"
+              style={{ color: 'rgba(245,240,235,0.5)', background: 'rgba(255,255,255,0.04)' }}
               title="Rotate token"
             >
               rotate
