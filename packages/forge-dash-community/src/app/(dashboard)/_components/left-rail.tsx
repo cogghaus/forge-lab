@@ -156,7 +156,16 @@ export interface LeftRailUser {
 // LeftRail component
 // ---------------------------------------------------------------------------
 
-export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; user?: LeftRailUser }) {
+export function LeftRail({
+  workspaces,
+  user,
+  version,
+}: {
+  workspaces: HubWorkspace[];
+  user?: LeftRailUser;
+  /** Deployed build id (git short SHA), shown in the footer for deploy verification. */
+  version?: string | null;
+}) {
   const pathname = usePathname();
 
   const wsMatch = pathname.match(/^\/workspaces\/([^/]+)/);
@@ -404,6 +413,14 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
             </div>
           </button>
         </form>
+      </div>
+
+      {/* Deployed build id — lets you verify a deploy landed without guessing. */}
+      <div
+        className="px-3 pb-1.5 pt-0.5 font-mono text-[10px] text-[rgba(245,240,235,0.28)]"
+        title="Deployed build (git short SHA)"
+      >
+        build {version || 'dev'}
       </div>
     </nav>
   );
