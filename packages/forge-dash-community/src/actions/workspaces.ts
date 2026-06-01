@@ -6,18 +6,30 @@ import { hubFetch } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { slugify } from '@/lib/slug';
 
+/** Which field an error attaches to, so the dialog can render it inline. */
+export type WorkspaceErrorField = 'name' | 'slug' | 'repoUrl' | 'repoBranch' | 'form';
+
+export interface CreateWorkspaceResult {
+  error?: string;
+  field?: WorkspaceErrorField;
+  id?: string;
+}
+
 export async function createWorkspaceAction(
   formData: FormData,
-): Promise<{ error?: string; id?: string }> {
+): Promise<CreateWorkspaceResult> {
   const name = (formData.get('name') as string | null)?.trim();
   // Slug defaults to a slugified name when left blank.
   const slug = (formData.get('slug') as string | null)?.trim() || (name ? slugify(name) : '');
   const description = (formData.get('description') as string | null)?.trim() || undefined;
   const repoUrl = (formData.get('repoUrl') as string | null)?.trim() || undefined;
   const repoBranch = (formData.get('repoBranch') as string | null)?.trim() || undefined;
-  if (!name) return { error: 'Name is required.' };
-  if (!slug) return { error: 'Could not derive a slug — add one manually.' };
-  if (repoBranch && !repoUrl) return { error: 'Repo branch needs a repo URL.' };
+  if (!name) return { error: 'Name is required.', field: 'name' };
+  if (!slug) return { error: 'Could not derive a slug — add one manually.', field: 'slug' };
+  if (repoUrl && !/^https:\/\//i.test(repoUrl)) {
+    return { error: 'Repo URL must be an https:// URL.', field: 'repoUrl' };
+  }
+  if (repoBranch && !repoUrl) return { error: 'Add a repo URL, or clear the branch.', field: 'repoUrl' };
 
   const session = await getSessionCookie();
   if (!session) redirect('/login');
@@ -36,12 +48,14 @@ export async function createWorkspaceAction(
 
   if (!res.ok) {
     const err = (res.data as { error?: string }).error;
-    if (err === 'slug_taken') return { error: 'That slug is already taken.' };
+    if (err === 'slug_taken') return { error: 'That slug is already taken.', field: 'slug' };
     // Zod validation failures surface as a 400 with no friendly error code.
-    // Don't presume which field — a repo URL (if any) must be https, the slug
-    // must be lowercase alphanumeric/hyphens, the branch a valid git name.
-    if (res.status === 400) return { error: 'Invalid input — check the slug, branch, and repo URL (https only).' };
-    return { error: 'Failed to create workspace.' };
+    // Client-side validation catches repo/slug shape pre-submit, so a 400 here
+    // is most likely the slug; attach it there.
+    if (res.status === 400) {
+      return { error: 'Invalid — use lowercase letters, numbers, and hyphens.', field: 'slug' };
+    }
+    return { error: 'Failed to create workspace.', field: 'form' };
   }
 
   revalidatePath('/workspaces');
