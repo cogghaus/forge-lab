@@ -285,14 +285,15 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
         const status = deviceStatus(device, activeTasks);
         const deviceTasks = activeTasks.filter(t => t.assignedDeviceId === device.id);
         const firstTask = deviceTasks[0] ?? null;
+        // Clicking an agent opens the task it's working — its status, dispatcher
+        // decision, and result. Only linkable when it has an active task in the
+        // current workspace.
+        const taskHref = firstTask && activeWsId
+          ? `/workspaces/${activeWsId}/tasks/${firstTask.id}`
+          : null;
 
-        return (
-          <div
-            key={device.id}
-            role="listitem"
-            aria-label={`${device.name} — ${status}`}
-            className="px-3 py-1.5 rounded-md transition-colors hover:bg-white/[0.04]"
-          >
+        const inner = (
+          <>
             <div className="flex items-center gap-2">
               <span
                 className={`w-[7px] h-[7px] rounded-full flex-shrink-0 mt-px ${DOT_COLOR[status]}`}
@@ -327,6 +328,27 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
                 </div>
               </div>
             )}
+          </>
+        );
+
+        return taskHref ? (
+          <Link
+            key={device.id}
+            href={taskHref}
+            role="listitem"
+            aria-label={`${device.name} — ${status}, working ${firstTask!.id}`}
+            className="block px-3 py-1.5 rounded-md transition-colors hover:bg-white/[0.04]"
+          >
+            {inner}
+          </Link>
+        ) : (
+          <div
+            key={device.id}
+            role="listitem"
+            aria-label={`${device.name} — ${status}`}
+            className="px-3 py-1.5 rounded-md"
+          >
+            {inner}
           </div>
         );
       })}
