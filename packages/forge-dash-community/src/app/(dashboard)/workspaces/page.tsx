@@ -1,9 +1,15 @@
 import { Card, CardBody, Chip } from '@heroui/react';
 import Link from 'next/link';
+import { Suspense } from 'react';
 import { redirect } from 'next/navigation';
 import { hubFetch, type HubWorkspace } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { NewWorkspaceButton } from './new-workspace-button';
+
+/** "github.com/org/repo" from an https clone URL, for a compact card label. */
+function repoLabel(url: string): string {
+  return url.replace(/^https:\/\//i, '').replace(/\.git$/, '');
+}
 
 export default async function WorkspacesPage() {
   const session = await getSessionCookie();
@@ -17,19 +23,31 @@ export default async function WorkspacesPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Workspaces</h1>
-          <p className="text-sm text-default-500">Select a workspace to view its tasks</p>
+          <p className="text-sm text-default-500">
+            {workspaces.length > 0
+              ? `${workspaces.length} workspace${workspaces.length === 1 ? '' : 's'} — select one to view its tasks`
+              : 'Select a workspace to view its tasks'}
+          </p>
         </div>
-        <NewWorkspaceButton />
+        <Suspense>
+          <NewWorkspaceButton />
+        </Suspense>
       </div>
 
       {workspaces.length === 0 ? (
         <Card>
-          <CardBody className="py-12 flex flex-col items-center gap-4">
-            <p className="text-default-500 text-center">No workspaces yet.</p>
-            <NewWorkspaceButton />
+          <CardBody className="py-14 flex flex-col items-center gap-4 text-center">
+            <p className="text-default-500">No workspaces yet.</p>
+            <p className="text-sm text-default-400 max-w-sm">
+              A workspace groups tasks for a project. Bind a git repo to let its agents open
+              pull requests.
+            </p>
+            <Suspense>
+              <NewWorkspaceButton />
+            </Suspense>
           </CardBody>
         </Card>
       ) : (
@@ -55,7 +73,22 @@ export default async function WorkspacesPage() {
                 {ws.description && (
                   <p className="mt-1 text-sm text-default-500 line-clamp-2">{ws.description}</p>
                 )}
-                <p className="mt-2 text-xs text-default-400 capitalize">Role: {ws.role}</p>
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                  <Chip size="sm" variant="flat" color="default" className="capitalize">
+                    {ws.role}
+                  </Chip>
+                  {ws.repoUrl && (
+                    <Chip
+                      size="sm"
+                      variant="flat"
+                      color="primary"
+                      title={ws.repoUrl}
+                      className="max-w-full"
+                    >
+                      <span className="truncate">⎇ {repoLabel(ws.repoUrl)}</span>
+                    </Chip>
+                  )}
+                </div>
               </CardBody>
             </Card>
           ))}

@@ -244,12 +244,12 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
       })}
 
       <div className="px-3 py-1.5">
-        <button
-          className="text-[12px] w-full text-left border border-dashed rounded-md px-2.5 py-1 transition-all border-[rgba(255,255,255,0.1)] text-[rgba(245,240,235,0.35)] hover:border-[rgba(255,107,43,0.3)] hover:text-[#FF6B2B]"
-          aria-disabled="true"
+        <Link
+          href="/workspaces?new=1"
+          className="block text-[12px] w-full text-left border border-dashed rounded-md px-2.5 py-1 transition-all border-[rgba(255,255,255,0.1)] text-[rgba(245,240,235,0.5)] hover:border-[rgba(255,107,43,0.3)] hover:text-[#FF6B2B]"
         >
           + New workspace
-        </button>
+        </Link>
       </div>
 
       <div className="border-t border-white/[0.05] mx-2 my-1" />
@@ -285,14 +285,15 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
         const status = deviceStatus(device, activeTasks);
         const deviceTasks = activeTasks.filter(t => t.assignedDeviceId === device.id);
         const firstTask = deviceTasks[0] ?? null;
+        // Clicking an agent opens the task it's working — its status, dispatcher
+        // decision, and result. Linkable only when actively working a task in the
+        // current workspace (matches the visible task indicator below).
+        const taskHref = status === 'active' && firstTask && activeWsId
+          ? `/workspaces/${activeWsId}/tasks/${firstTask.id}`
+          : null;
 
-        return (
-          <div
-            key={device.id}
-            role="listitem"
-            aria-label={`${device.name} — ${status}`}
-            className="px-3 py-1.5 rounded-md transition-colors hover:bg-white/[0.04]"
-          >
+        const inner = (
+          <>
             <div className="flex items-center gap-2">
               <span
                 className={`w-[7px] h-[7px] rounded-full flex-shrink-0 mt-px ${DOT_COLOR[status]}`}
@@ -327,6 +328,27 @@ export function LeftRail({ workspaces, user }: { workspaces: HubWorkspace[]; use
                 </div>
               </div>
             )}
+          </>
+        );
+
+        return taskHref ? (
+          <Link
+            key={device.id}
+            href={taskHref}
+            role="listitem"
+            aria-label={`${device.name} — ${status}, working ${firstTask!.id}`}
+            className="block px-3 py-1.5 rounded-md transition-colors hover:bg-white/[0.04]"
+          >
+            {inner}
+          </Link>
+        ) : (
+          <div
+            key={device.id}
+            role="listitem"
+            aria-label={`${device.name} — ${status}`}
+            className="px-3 py-1.5 rounded-md"
+          >
+            {inner}
           </div>
         );
       })}
