@@ -41,60 +41,68 @@ export default async function WorkspaceTaskListPage({ params, searchParams }: Pr
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-3">
-        <Link href="/workspaces" className="text-default-500 hover:text-foreground text-sm">
+      <div className="flex flex-wrap items-center gap-3">
+        <Link
+          href="/workspaces"
+          className="text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+        >
           Workspaces
         </Link>
-        <span className="text-default-400">/</span>
+        <span className="text-zinc-300 dark:text-zinc-700">/</span>
         <Link
           href={`/workspaces/${workspaceId}`}
-          className="text-default-500 hover:text-foreground text-sm"
+          className="min-w-0 truncate text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
           {workspace.name}
         </Link>
-        <span className="text-default-400">/</span>
-        <h1 className="text-2xl font-bold">Tasks</h1>
+        <span className="text-zinc-300 dark:text-zinc-700">/</span>
+        <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">Tasks</h1>
       </div>
 
       {/* Active filters */}
       {(activeGoal ?? status) && (
-        <div className="flex items-center gap-2 text-sm flex-wrap">
-          <span className="text-default-400">Filtered by:</span>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-zinc-500 dark:text-zinc-400">Filtered by:</span>
           {activeGoal && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary border border-primary/20">
-              🎯 {activeGoal.title}
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[#FF6B2B]/30 bg-[#FF6B2B]/[0.08] px-2.5 py-1 text-xs font-medium text-[#FF6B2B]">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3 w-3" aria-hidden>
+                <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="1" />
+              </svg>
+              {activeGoal.title}
               <Link
                 href={`/workspaces/${workspaceId}/tasks${status ? `?status=${status}` : ''}`}
-                className="ml-1 text-primary/60 hover:text-primary"
+                className="ml-0.5 inline-flex text-[#FF6B2B]/60 hover:text-[#FF6B2B]"
                 title="Clear goal filter"
+                aria-label="Clear goal filter"
               >
-                ×
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" className="h-3 w-3" aria-hidden><path d="M18 6 6 18M6 6l12 12" /></svg>
               </Link>
             </span>
           )}
           {status && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-default-100 text-default-700 border border-default-200">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-1 text-xs font-medium capitalize text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
               {status.replace(/_/g, ' ')}
               <Link
                 href={`/workspaces/${workspaceId}/tasks${goalId ? `?goalId=${goalId}` : ''}`}
-                className="ml-1 text-default-400 hover:text-default-600"
+                className="ml-0.5 inline-flex text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
                 title="Clear status filter"
+                aria-label="Clear status filter"
               >
-                ×
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" className="h-3 w-3" aria-hidden><path d="M18 6 6 18M6 6l12 12" /></svg>
               </Link>
             </span>
           )}
           <Link
             href={`/workspaces/${workspaceId}/tasks`}
-            className="text-xs text-default-400 hover:text-foreground"
+            className="text-xs text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
           >
             Clear all
           </Link>
         </div>
       )}
 
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-default-500">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
           {tasks.length} of {allTasks.length} task{allTasks.length !== 1 ? 's' : ''}
           {tasks.length !== allTasks.length ? ' (filtered)' : ''}
         </p>

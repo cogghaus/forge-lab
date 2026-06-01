@@ -1,6 +1,5 @@
 'use client';
 
-import { Button } from '@heroui/react';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { updateGoalStatusAction } from '@/actions/goals';
@@ -28,15 +27,23 @@ export function GoalStatusButton({ workspaceId, goalId, currentStatus }: Props) 
 
   if (currentStatus === 'cancelled') return null;
 
+  const isActive = currentStatus === 'active';
+
   return (
-    <Button
-      size="sm"
-      variant="flat"
-      color={currentStatus === 'active' ? 'success' : 'default'}
-      onPress={toggle}
-      isLoading={isLoading}
+    <button
+      type="button"
+      onClick={() => { void toggle(); }}
+      disabled={isLoading}
+      className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+        isActive
+          ? 'border-[#2DD4A0]/40 text-[#2DD4A0] hover:bg-[#2DD4A0]/10'
+          : 'border-zinc-300 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800'
+      }`}
     >
-      {currentStatus === 'active' ? 'Complete' : 'Reopen'}
-    </Button>
+      {isLoading && (
+        <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-r-transparent" />
+      )}
+      {isActive ? 'Complete' : 'Reopen'}
+    </button>
   );
 }
