@@ -238,6 +238,43 @@ describe('/workspaces routes', () => {
     expect(ws.description).toBe('Updated desc');
   });
 
+  it('PATCH /workspaces/:workspaceId archives and unarchives via status', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'arch-ws' });
+
+    const archive = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${wsId}`,
+      headers: { cookie },
+      payload: { status: 'archived' },
+    });
+    expect(archive.statusCode).toBe(200);
+    let ws = (await hub.fastify.inject({ method: 'GET', url: `/workspaces/${wsId}`, headers: { cookie } })).json() as { status: string };
+    expect(ws.status).toBe('archived');
+
+    const unarchive = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${wsId}`,
+      headers: { cookie },
+      payload: { status: 'active' },
+    });
+    expect(unarchive.statusCode).toBe(200);
+    ws = (await hub.fastify.inject({ method: 'GET', url: `/workspaces/${wsId}`, headers: { cookie } })).json() as { status: string };
+    expect(ws.status).toBe('active');
+  });
+
+  it('PATCH /workspaces/:workspaceId - 400 for invalid status', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'badstatus-ws' });
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${wsId}`,
+      headers: { cookie },
+      payload: { status: 'deleted' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('PATCH /workspaces/:workspaceId - 400 when no fields sent', async () => {
     const { cookie } = await setupAdmin(hub);
     const wsId = await createWorkspace(hub, cookie, { slug: 'patch-ws' });

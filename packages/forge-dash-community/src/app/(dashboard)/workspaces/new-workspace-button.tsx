@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, Modal, ModalContent, useDisclosure } from '@heroui/react';
+import { Modal, ModalContent, useDisclosure } from '@heroui/react';
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -59,7 +59,7 @@ function Field({
   );
 }
 
-function GitBranchIcon({ className }: { className?: string }) {
+export function GitBranchIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -207,13 +207,20 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
 
   return (
     <>
-      <Button
-        color="primary"
-        variant={variant === 'inline' ? 'flat' : 'solid'}
-        onPress={onOpen}
+      <button
+        type="button"
+        onClick={onOpen}
+        className={
+          variant === 'inline'
+            ? 'inline-flex items-center gap-2 rounded-md border border-[#FF6B2B]/50 px-4 py-2 text-sm font-medium text-[#FF6B2B] transition-colors hover:bg-[#FF6B2B]/10'
+            : 'inline-flex items-center gap-2 rounded-md bg-[#FF6B2B] px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-[#FF6B2B]/20 transition-colors hover:bg-[#e5531a]'
+        }
       >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" className="h-4 w-4" aria-hidden>
+          <path d="M12 5v14M5 12h14" />
+        </svg>
         New Workspace
-      </Button>
+      </button>
 
       <Modal
         isOpen={isOpen}
