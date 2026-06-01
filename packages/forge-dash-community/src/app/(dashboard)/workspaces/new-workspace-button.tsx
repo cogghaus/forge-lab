@@ -219,6 +219,8 @@ export function NewWorkspaceButton({ variant }: { variant?: 'inline' }) {
         isOpen={isOpen}
         onOpenChange={handleModalChange}
         size="lg"
+        placement="center"
+        scrollBehavior="inside"
         backdrop="blur"
         classNames={{
           // Own the surface explicitly so it's correct on any theme.
