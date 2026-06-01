@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { CreateWorkspaceInputSchema, schema } from '@forge-lab/core';
+import { CreateWorkspaceInputSchema, RepoUrlSchema, RepoBranchSchema, schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { hasUniqueConstraint } from '../db/errors.js';
 import { requireUser, requireDevice, requireWorkspaceMember, getUser, getWorkspace, getDevice } from '../auth/middleware.js';
@@ -19,6 +19,9 @@ const CONTEXT_DOC_CATEGORIES = ['architecture', 'adr', 'agent', 'runbook'] as co
 const UpdateWorkspaceInputSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).nullable().optional(),
+  // Pass null to clear the repo binding.
+  repoUrl: RepoUrlSchema.nullable().optional(),
+  repoBranch: RepoBranchSchema.nullable().optional(),
 });
 
 const AddMemberInputSchema = z.object({
@@ -37,6 +40,8 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
         name: body.name,
         slug: body.slug,
         description: body.description ?? null,
+        repoUrl: body.repoUrl ?? null,
+        repoBranch: body.repoBranch ?? null,
         ownerUserId: user.id,
       });
     } catch (err) {
@@ -106,6 +111,8 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
       const updates: Record<string, unknown> = {};
       if (body.name !== undefined) updates['name'] = body.name;
       if (body.description !== undefined) updates['description'] = body.description;
+      if (body.repoUrl !== undefined) updates['repoUrl'] = body.repoUrl;
+      if (body.repoBranch !== undefined) updates['repoBranch'] = body.repoBranch;
       if (Object.keys(updates).length === 0) {
         await reply.code(400).send({ error: 'no_fields' });
         return;

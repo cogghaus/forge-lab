@@ -12,6 +12,20 @@ export const WorkspaceSlugSchema = z
   .string()
   .regex(slugPattern, 'Slug must be 1-50 lowercase alphanumeric chars or hyphens, no leading/trailing hyphens');
 
+/** HTTPS git clone URL a workspace's worker agents check out and push to. */
+export const RepoUrlSchema = z
+  .string()
+  .url()
+  .max(500)
+  .refine((u) => /^https:\/\//i.test(u), 'Repo URL must be an https:// clone URL');
+
+/** Git branch name (the base branch worker PRs target). */
+export const RepoBranchSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[^\s~^:?*[\\]+$/, 'Invalid git branch name');
+
 export const WorkspaceSchema = z.object({
   id: z.string(),
   name: z.string().min(1).max(100),
@@ -20,6 +34,10 @@ export const WorkspaceSchema = z.object({
   ownerUserId: z.string(),
   status: WorkspaceStatusSchema,
   budgetMonthlyCents: z.number().int().nonnegative(),
+  // Optional repo binding: when set, worker agents in this workspace check out
+  // the repo, branch per task, and open PRs. Null = no repo (output-only tasks).
+  repoUrl: z.string().nullable(),
+  repoBranch: z.string().nullable(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -37,6 +55,8 @@ export const CreateWorkspaceInputSchema = z.object({
   name: z.string().min(1).max(100),
   slug: WorkspaceSlugSchema,
   description: z.string().max(500).optional(),
+  repoUrl: RepoUrlSchema.optional(),
+  repoBranch: RepoBranchSchema.optional(),
 });
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 
