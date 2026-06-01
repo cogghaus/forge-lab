@@ -53,6 +53,9 @@ services:
       NODE_ENV: production
       FORGE_HUB_URL: "http://forge-hub:3000"
       FORGE_WORKDIR: "/workdir"
+      # Deployed build id, shown in the dash rail footer. Set by the deploy
+      # command: BUILD_SHA=$(git rev-parse --short HEAD) docker compose up -d ...
+      BUILD_SHA: "${BUILD_SHA:-dev}"
     volumes:
       - /datapool/docker/vibe-forge/workdir:/workdir:ro
     depends_on:
