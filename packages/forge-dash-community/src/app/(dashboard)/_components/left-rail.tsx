@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { HubWorkspace, HubDevice, HubTask } from '@/lib/hub';
 import { logoutAction } from '@/actions/auth';
 import { APP_VERSION } from '@/lib/version';
@@ -390,30 +390,11 @@ export function LeftRail({
 
       {/* ── Profile ── */}
       <div className="border-t border-white/[0.05] mt-2 pt-1 px-1">
-        <form action={logoutAction}>
-          <button
-            type="submit"
-            aria-label="Sign out"
-            className="w-full flex items-center gap-2.5 px-2 py-2 rounded-md transition-colors hover:bg-white/[0.04]"
-          >
-            <div
-              className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 font-mono text-[11px] font-bold text-[#FF6B2B]"
-              style={{ background: 'rgba(255,107,43,0.2)' }}
-            >
-              {initials}
-            </div>
-            <div className="flex-1 min-w-0 text-left">
-              <div className="text-[12px] font-semibold truncate text-[#F5F0EB]">
-                {user?.name ?? 'Account'}
-              </div>
-              {user?.email && (
-                <div className="font-mono text-[10px] truncate text-[rgba(245,240,235,0.35)]">
-                  {user.email}
-                </div>
-              )}
-            </div>
-          </button>
-        </form>
+        <ProfileMenu
+          name={user?.name ?? 'Account'}
+          email={user?.email ?? null}
+          initials={initials}
+        />
       </div>
 
       {/* App version (semver). Hover shows the deployed git SHA for verification. */}
@@ -424,5 +405,113 @@ export function LeftRail({
         v{APP_VERSION}
       </div>
     </nav>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ProfileMenu — click the account row to open a menu (account settings +
+// explicit sign out). Previously the whole row was the logout button, so a
+// click silently signed you out with no way to reach account settings.
+// ---------------------------------------------------------------------------
+
+function ProfileMenu({ name, email, initials }: { name: string; email: string | null; initials: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      {/* Popover — opens above the trigger */}
+      {open && (
+        <div
+          role="menu"
+          className="absolute bottom-full left-0 right-0 mb-1.5 overflow-hidden rounded-lg border shadow-lg"
+          style={{ background: '#1A1A1F', borderColor: 'rgba(255,255,255,0.1)' }}
+        >
+          <div className="px-3 py-2.5 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+            <div className="text-[12px] font-semibold truncate text-[#F5F0EB]">{name}</div>
+            {email && (
+              <div className="font-mono text-[10px] truncate text-[rgba(245,240,235,0.4)]">{email}</div>
+            )}
+          </div>
+          <Link
+            href="/settings"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2.5 px-3 py-2 text-[13px] text-[rgba(245,240,235,0.85)] transition-colors hover:bg-white/[0.05]"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 flex-shrink-0" aria-hidden>
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+            Account settings
+          </Link>
+          <form action={logoutAction} className="border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+            <button
+              type="submit"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-[#FF6B6B] transition-colors hover:bg-[rgba(255,107,107,0.1)]"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 flex-shrink-0" aria-hidden>
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <path d="M16 17l5-5-5-5" />
+                <path d="M21 12H9" />
+              </svg>
+              Sign out
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Trigger row */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="w-full flex items-center gap-2.5 px-2 py-2 rounded-md transition-colors hover:bg-white/[0.04]"
+      >
+        <div
+          className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 font-mono text-[11px] font-bold text-[#FF6B2B]"
+          style={{ background: 'rgba(255,107,43,0.2)' }}
+        >
+          {initials}
+        </div>
+        <div className="flex-1 min-w-0 text-left">
+          <div className="text-[12px] font-semibold truncate text-[#F5F0EB]">{name}</div>
+          {email && (
+            <div className="font-mono text-[10px] truncate text-[rgba(245,240,235,0.35)]">{email}</div>
+          )}
+        </div>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="h-3.5 w-3.5 flex-shrink-0 text-[rgba(245,240,235,0.4)]"
+          style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 120ms' }}
+          aria-hidden
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+    </div>
   );
 }
