@@ -17,6 +17,7 @@ import {
   type DoneResult,
 } from './sync/task-file.js';
 import { runWorkerLoop } from './worker-loop/loop.js';
+import { defaultGitOps, type GitOps } from './git/repo.js';
 
 export interface DaemonOptions {
   hubUrl: string;
@@ -97,6 +98,21 @@ export interface DaemonOptions {
   /** Per-request HTTP timeout in ms passed to the hub client. Default: 30000. */
   requestTimeoutMs?: number;
   /**
+   * Dev-capability: when set, worker agents check out this repo into
+   * `${workdir}/repo`, branch per task, and are instructed to commit/push/open a
+   * PR. Requires gitToken. Without repoUrl the daemon runs output-only as before.
+   */
+  repoUrl?: string;
+  /** Base branch for the repo checkout + PR target. Default: 'main'. */
+  repoBranch?: string;
+  /** GitHub token (x-access-token) for clone/fetch/push + `gh`. */
+  gitToken?: string;
+  /** Git commit identity for worker commits. Defaults to a forge-lab bot. */
+  gitUserName?: string;
+  gitUserEmail?: string;
+  /** Injectable git operations (tests). Defaults to real `git`. */
+  gitOps?: GitOps;
+  /**
    * How many times to re-spawn a worker task whose agent died with a transient
    * auth-failure signature (e.g. the shared OAuth token rotating mid-run). The
    * winning daemon writes fresh credentials, so a retry reads a valid token.
@@ -145,11 +161,25 @@ export class Daemon {
    * Cleared on completion or when the task is failed.
    */
   private readonly taskRetries = new Map<string, number>();
+  private readonly gitOps: GitOps;
 
   constructor(opts: DaemonOptions) {
     this.opts = opts;
     this.runtimes = opts.runtimes;
     this.logger = opts.logger ?? noopLogger;
+    this.gitOps = opts.gitOps ?? defaultGitOps;
+    // A repo-bound daemon reuses a single ${workdir}/repo checkout, so it MUST
+    // run one task at a time — concurrent agents would corrupt the shared tree.
+    if (opts.repoUrl && (opts.maxConcurrentTasks ?? Infinity) !== 1) {
+      throw new Error(
+        'repoUrl requires maxConcurrentTasks=1 (a repo-bound daemon shares one checkout)',
+      );
+    }
+    // Spawned agents inherit process.env; expose the git token to `gh` and the
+    // git credential helper so they can fetch/push/open PRs.
+    if (opts.gitToken && process.env['GH_TOKEN'] === undefined) {
+      process.env['GH_TOKEN'] = opts.gitToken;
+    }
     this.client = new HubClient({
       hubUrl: opts.hubUrl,
       deviceToken: opts.deviceToken,
@@ -549,17 +579,48 @@ export class Daemon {
       const desc = claimed.description != null
         ? claimed.description.slice(0, MAX_DESC_CHARS)
         : null;
-      // Append mandatory done-file write instruction so agents actually write the
-      // marker file rather than just describing it in text output. The instruction
-      // names the exact path so agents don't have to infer it from the protocol docs.
+
+      // Dev-capability: when the daemon is repo-bound, check out the repo into
+      // ${workdir}/repo on a per-task branch and instruct the agent to commit,
+      // push, and open a PR. The agent works inside ./repo, so the done marker
+      // uses an absolute path OUTSIDE the checkout (keeps it un-committed and
+      // detectable by the workdir-scoped done-watcher).
+      let repoAddendum = '';
+      let donePath = `.forge/tasks/${claimed.id}.done`;
+      if (this.opts.repoUrl && this.opts.gitToken) {
+        const co = await this.gitOps.checkout({
+          workdir: this.opts.workdir,
+          repoUrl: this.opts.repoUrl,
+          baseBranch: this.opts.repoBranch || 'main',
+          taskId: claimed.id,
+          token: this.opts.gitToken,
+          userName: this.opts.gitUserName || 'forge-lab[bot]',
+          userEmail: this.opts.gitUserEmail || 'forge-lab@example.com',
+        });
+        donePath = path.join(this.opts.workdir, '.forge', 'tasks', `${claimed.id}.done`);
+        repoAddendum =
+          `\n\n---\nA git checkout of ${this.opts.repoUrl} is at the absolute path ` +
+          `\`${co.repoDir}\`, already on a fresh branch \`${co.branch}\` (cut from ` +
+          `\`${co.baseBranch}\`). Do ALL your work inside that directory — start each shell ` +
+          `command with \`cd "${co.repoDir}"\` (your shell's working directory may reset ` +
+          `between commands), or use \`git -C "${co.repoDir}" ...\`. When finished: stage and ` +
+          `commit your changes, push the branch (\`git -C "${co.repoDir}" push -u origin ` +
+          `${co.branch}\`), then open a pull request to \`${co.baseBranch}\` (from inside the ` +
+          `checkout: \`gh pr create --base ${co.baseBranch} --head ${co.branch} --fill\`). ` +
+          `Do NOT print secrets (no \`env\`, \`git remote -v\`, or \`.git/config\`). Then write the done file.`;
+        this.logger.info('repo checked out for task', { taskId: claimed.id, branch: co.branch });
+      }
+
+      // Mandatory done-file write instruction so agents write the marker rather
+      // than just describing it. The path is named exactly so agents don't infer it.
       const doneInstruction =
         `\n\n---\nWhen you have completed the task above, you MUST write the done file using ` +
-        `a tool (Bash, Write, or shell command). Create \`.forge/tasks/${claimed.id}.done\` with:\n` +
+        `a tool (Bash, Write, or shell command). Create \`${donePath}\` with:\n` +
         `{"result":"<one sentence summary of what you did>","completedAt":"<current ISO 8601 timestamp>"}\n` +
         `Do not just describe writing the file — actually write it with a tool call.`;
       const initialPrompt = desc != null
-        ? `${claimed.title}\n\n${desc}${doneInstruction}`
-        : `${claimed.title}${doneInstruction}`;
+        ? `${claimed.title}\n\n${desc}${repoAddendum}${doneInstruction}`
+        : `${claimed.title}${repoAddendum}${doneInstruction}`;
       // Reset the agent log so post-mortem classification (auth-failure
       // detection) reads only THIS run, not a prior attempt's appended output.
       await resetAgentLog(this.opts.workdir, claimed.id);

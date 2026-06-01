@@ -114,6 +114,38 @@ describe('CreateWorkspaceInputSchema', () => {
       CreateWorkspaceInputSchema.parse({ name: 'My Workspace', slug: '-bad-slug' }),
     ).toThrow();
   });
+
+  it('accepts an https repo binding', () => {
+    expect(() =>
+      CreateWorkspaceInputSchema.parse({
+        name: 'HAL',
+        slug: 'hal',
+        repoUrl: 'https://github.com/sugar-crash-studios/hal.git',
+        repoBranch: 'main',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects a non-https repo URL', () => {
+    expect(() =>
+      CreateWorkspaceInputSchema.parse({
+        name: 'HAL',
+        slug: 'hal',
+        repoUrl: 'git@github.com:sugar-crash-studios/hal.git',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects a branch name with whitespace', () => {
+    expect(() =>
+      CreateWorkspaceInputSchema.parse({
+        name: 'HAL',
+        slug: 'hal',
+        repoUrl: 'https://github.com/sugar-crash-studios/hal',
+        repoBranch: 'bad branch',
+      }),
+    ).toThrow();
+  });
 });
 
 describe('WorkspaceRoleSchema', () => {

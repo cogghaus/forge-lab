@@ -79,6 +79,11 @@ async function main(): Promise<void> {
     ...(config.staleTtlMinutes !== undefined && { staleTtlMinutes: config.staleTtlMinutes }),
     ...(config.maxConcurrentTasks !== undefined && { maxConcurrentTasks: config.maxConcurrentTasks }),
     ...(config.authRetryLimit !== undefined && { authRetryLimit: config.authRetryLimit }),
+    ...(config.repoUrl !== undefined && { repoUrl: config.repoUrl }),
+    ...(config.repoBranch !== undefined && { repoBranch: config.repoBranch }),
+    ...(config.gitToken !== undefined && { gitToken: config.gitToken }),
+    ...(config.gitUserName !== undefined && { gitUserName: config.gitUserName }),
+    ...(config.gitUserEmail !== undefined && { gitUserEmail: config.gitUserEmail }),
     ...(config.dispatcherPersonality !== undefined && { dispatcherPersonality: config.dispatcherPersonality }),
     logger,
   });

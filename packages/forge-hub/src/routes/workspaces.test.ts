@@ -107,6 +107,62 @@ describe('/workspaces routes', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('POST /workspaces stores a repo binding and GET returns it', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: {
+        name: 'HAL',
+        slug: 'hal',
+        repoUrl: 'https://github.com/sugar-crash-studios/hal.git',
+        repoBranch: 'main',
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+    const getRes = await hub.fastify.inject({ method: 'GET', url: `/workspaces/${id}`, headers: { cookie } });
+    const ws = getRes.json() as { repoUrl: string; repoBranch: string };
+    expect(ws.repoUrl).toBe('https://github.com/sugar-crash-studios/hal.git');
+    expect(ws.repoBranch).toBe('main');
+  });
+
+  it('POST /workspaces - 400 for a non-https repo URL', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'HAL', slug: 'hal', repoUrl: 'git@github.com:sugar-crash-studios/hal.git' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('PATCH /workspaces/:workspaceId updates and clears the repo binding', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const wsId = await createWorkspace(hub, cookie, { slug: 'repo-ws' });
+    const patch = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${wsId}`,
+      headers: { cookie },
+      payload: { repoUrl: 'https://github.com/sugar-crash-studios/hal', repoBranch: 'dev' },
+    });
+    expect(patch.statusCode).toBe(200);
+    let ws = (await hub.fastify.inject({ method: 'GET', url: `/workspaces/${wsId}`, headers: { cookie } })).json() as { repoUrl: string | null };
+    expect(ws.repoUrl).toBe('https://github.com/sugar-crash-studios/hal');
+
+    const clear = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${wsId}`,
+      headers: { cookie },
+      payload: { repoUrl: null },
+    });
+    expect(clear.statusCode).toBe(200);
+    ws = (await hub.fastify.inject({ method: 'GET', url: `/workspaces/${wsId}`, headers: { cookie } })).json() as { repoUrl: string | null };
+    expect(ws.repoUrl).toBeNull();
+  });
+
   it('GET /workspaces lists only user memberships', async () => {
     const { cookie } = await setupAdmin(hub);
     const { cookie: cookieB } = await setupSecondUser(hub);
