@@ -295,11 +295,11 @@ export function LeftRail({
         const status = deviceStatus(device, activeTasks);
         const deviceTasks = activeTasks.filter(t => t.assignedDeviceId === device.id);
         const firstTask = deviceTasks[0] ?? null;
-        // Clicking an agent opens the task it's working — its status, dispatcher
-        // decision, and result. Linkable only when actively working a task in the
-        // current workspace (matches the visible task indicator below).
-        const taskHref = status === 'active' && firstTask && activeWsId
-          ? `/workspaces/${activeWsId}/tasks/${firstTask.id}`
+        // Clicking an agent opens its detail in the workspace right-rail
+        // (?agent=<deviceId>) — current work, stats, recent activity. Linkable
+        // whenever a workspace is active.
+        const agentHref = activeWsId
+          ? `/workspaces/${activeWsId}?agent=${device.id}`
           : null;
 
         const inner = (
@@ -341,12 +341,12 @@ export function LeftRail({
           </>
         );
 
-        return taskHref ? (
+        return agentHref ? (
           <Link
             key={device.id}
-            href={taskHref}
+            href={agentHref}
             role="listitem"
-            aria-label={`${device.name} — ${status}, working ${firstTask!.id}`}
+            aria-label={`${device.name} — ${status}${firstTask ? `, working ${firstTask.id}` : ''}`}
             className="block px-3 py-1.5 rounded-md transition-colors hover:bg-white/[0.04]"
           >
             {inner}
