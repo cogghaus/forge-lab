@@ -1,6 +1,6 @@
 # ADR-004: Single Agent Fleet Across Workspaces (Multi-Workspace FM + Shared Workers)
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-06-02
 **Authors**: Adam + Claude (Architect lens)
 **Supersedes**: deployment topology implied by [ADR-001](./ADR-001-forge-master-orchestrator.md) (per-workspace daemon set)
@@ -20,7 +20,7 @@ Two code facts force the duplication:
 
 Neither is fundamental:
 
-- Workers **already** support running unscoped — with `FORGE_DAEMON_WORKSPACE_ID` unset, `listTasks(undefined)` returns tasks across all the device's workspaces and the scope guard at `daemon.ts:529` is skipped, so the worker claims its agent's tasks in **any** workspace.
+- Workers **already** support running unscoped — with `FORGE_DAEMON_WORKSPACE_ID` unset, `listTasks(undefined)` returns tasks across all the device's workspaces and the scope guard at `daemon.ts:529` is skipped, so the worker claims its agent's tasks in **any** workspace the device's owning account is a member of.
 - FM's single-workspace restriction is a `if (!workspaceId) return`, not an architectural constraint. It can iterate the workspaces it serves.
 
 ---
@@ -33,10 +33,10 @@ Move to **one fleet for the whole hub**: a single multi-workspace FM plus a sing
 
 FM stops being workspace-pinned. Each dispatcher tick it:
 
-1. Enumerates the workspaces it serves (the FM device's memberships).
+1. Enumerates the workspaces it serves (the FM device's memberships, via `GET /dispatcher/workspaces`).
 2. For each workspace with a non-empty `pending_dispatcher_action` inbox, runs the existing single-workspace triage cycle (stale-requeue → fetch context → spawn FM agent → assign).
 
-The existing per-workspace triage logic is **reused unchanged**; only the *selection of which workspace(s) to triage* changes. The global `fmRunning` guard still serializes — at most one FM agent runs at a time, triaging workspaces in sequence. Hub state remains FM's memory (still ephemeral per cycle, per ADR-001).
+The existing per-workspace triage logic is **reused unchanged**; only the *selection of which workspace(s) to triage* changes. The global `fmRunning` guard still serializes — at most one FM agent runs at a time, triaging workspaces in sequence. Workspace errors are isolated (per-workspace try/catch); a transient failure in one workspace does not abort triage of others. Hub state remains FM's memory (still ephemeral per cycle, per ADR-001).
 
 ### 2. Shared worker pool
 
@@ -58,22 +58,25 @@ A worker that checks out a repo is the one case that can't trivially share. Two 
 ## Scope — FM multi-workspace change
 
 **Config (`forge-daemon/src/config.ts`)**
-- `workspaceId` stays optional. Add `dispatcherWorkspaceMode: 'single' | 'all'` (env `FORGE_DAEMON_DISPATCHER_SCOPE`, default `single` for back-comat). `all` = serve every membership.
-- Drop the hard requirement that dispatcher mode needs `workspaceId` when scope is `all`.
+- `workspaceId` stays optional. Add `dispatcherWorkspaceMode: 'single' | 'all'` (env `FORGE_DAEMON_DISPATCHER_SCOPE`, default `single` for back-compat). `all` = serve every membership.
+- When `dispatcherMode=true` and `dispatcherWorkspaceMode='all'`, drop the hard requirement that `workspaceId` must be set; log a warning if `workspaceId` is set along with `scope=all` (ambiguous config).
 
 **Hub**
-- New client need: enumerate the orchestrator's workspaces. Reuse `GET /workspaces` (already returns the caller's memberships) — confirm it authorizes an **orchestrator device** token, not just a user session; if not, add a thin `GET /dispatcher/workspaces` (orchestrator-only) returning `{id}` for workspaces the device may triage. (Heimdall already gates `task:assign` / `context:read` to `agent:forge-master` at priority 200 — extend the same principal to the listing route.)
-- `getWorkspaceContext` / `requeueStaleAssigned` are already per-workspace; called in a loop. No hub change beyond the listing route.
+- `GET /workspaces` requires a user session and cannot be called with a device token. Add `GET /dispatcher/workspaces` — orchestrator-device-only endpoint (requires `requireDevice` + `deviceType=orchestrator` check, same pattern as `GET /workspaces/:id/context`). Returns `{ id: string }[]` for workspaces where the device's owning account has **active** membership (archived or deactivated workspaces excluded).
+- Extend Heimdall built-in rules: add `{ principal: 'agent:forge-master', action: 'workspace:list', effect: 'allow', priority: 200 }` alongside the existing `task:assign` / `context:read` grants.
+- `getWorkspaceContext` / `requeueStaleAssigned` are already per-workspace; called in a loop. No other hub change required.
 
 **Daemon (`daemon.ts`)**
-- `HubClient.listWorkspaces()` (GET /workspaces) — new method.
-- `pollDispatcher`: when scope is `all`, replace the single-`workspaceId` body with `for (const ws of await listWorkspaces())` running the existing requeue+context+spawn per workspace whose `inboxTasks` is non-empty. Keep `fmRunning` as a global gate (sequential triage). Preserve the synthetic `_fm_` marker per cycle.
-- Logging/metrics gain a `workspaceId` dimension per triaged workspace.
+- `HubClient.listWorkspaces()` — calls `GET /dispatcher/workspaces`, returns workspace IDs the FM should triage.
+- `pollDispatcher`: when scope is `all`, replace the single-`workspaceId` body with a loop over `await listWorkspaces()`. `fmRunning` is acquired once at the start of the full dispatcher tick and released after all workspaces are processed (or on fatal error) — it is not toggled per workspace iteration. For each workspace, run the existing requeue+context+spawn sequence wrapped in a per-workspace `try/catch`. Transient errors (network timeout, context fetch failure) are logged with `workspaceId` and the loop continues. Structural errors (auth failure, FM device missing) abort the whole tick and release `fmRunning`. Each FM spawn gets its own unique `syntheticTaskId` (`_fm_${Date.now()}-${workspaceId}-${randomSuffix}`) to prevent ID collision when multiple workspace triages run in the same tick; the marker file is per-spawn.
+- Logging gains a `workspaceId` dimension on all triage log lines (info/error) within the loop.
 
 **Tests**
-- Dispatcher integration: 2 workspaces, inboxes in each → one FM run triages both; empty inboxes skipped; `fmRunning` prevents overlap; a workspace error doesn't abort the others.
+- `GET /dispatcher/workspaces` hub route: orchestrator device returns its workspaces; worker device returns 403; non-member workspace excluded.
+- Dispatcher integration (scope=all): 2 workspaces, inboxes in each → one FM run triages both; empty inbox workspace is skipped; `fmRunning` gate prevents a concurrent second dispatch call from spawning a second FM while the first is active (assert no double-spawn); error in any workspace-1 triage step (context fetch, spawn, or assign) does not abort workspace-2 triage.
+- Backward compat (scope=single): `dispatcherWorkspaceMode='single'` with `workspaceId` set still triages exactly one workspace (regression guard for existing behavior).
 
-**Effort:** small-to-medium, mostly in `daemon.ts` + one client method + a possible orchestrator-scoped listing route. No schema change.
+**Effort:** small-to-medium, mostly in `daemon.ts` + one new hub route + Heimdall rule. No schema change.
 
 ---
 
@@ -81,18 +84,21 @@ A worker that checks out a repo is the one case that can't trivially share. Two 
 
 Goal: collapse `forge-*` + `hal-*` (and any future per-workspace sets) into **1 FM + 8 workers**, no dropped tasks.
 
-**Pre:** FM multi-workspace change deployed; the FM device + each worker device are members of *all* target workspaces (add memberships via the hub before cutover — workers must be members to claim).
+**Pre-flight (before any config change):**
+- Identify repo-bound workers: query the hub for devices with `repoUrl` set, or inspect `daemons.compose.yml` for any `FORGE_DAEMON_REPO_URL` entries. Handle these per §3 before proceeding.
+- Confirm in-progress task count is 0 on both fleets: `docker logs forge-fm --tail 20` + check task statuses in the hub.
+- Verify `GET /dispatcher/workspaces` is reachable with the FM device token: `curl -H 'Authorization: Bearer <fm-token>' http://forge-hub:3000/dispatcher/workspaces` should return both workspace IDs.
 
-1. **Add memberships.** Ensure the shared FM + worker devices' owning account is a member of every workspace (forge-lab, HAL, …). Workers only claim in workspaces they belong to.
-2. **Reconfigure the canonical fleet.** In `daemons.compose.yml`: remove the `FORGE_DAEMON_WORKSPACE_ID` pin from the worker services (run unscoped); set `forge-fm` to `FORGE_DAEMON_DISPATCHER_SCOPE=all`. The `&daemon-env` anchor's workspace var is dropped.
-3. **Drain, don't kill.** Bring the HAL set's workers to idle (stop *new* claims): scale `hal-*` workers to 0 **after** confirming no in-progress tasks on them (`dprod ps` / task statuses). In-progress tasks finish on their current worker; the requeue-stale path (30 min) backstops anything stranded.
-4. **Cut over.** `docker compose -p forge-daemons up -d` the reconfigured single fleet. The unscoped workers now claim across forge-lab + HAL. The single FM triages both inboxes.
-5. **Retire duplicates.** Once the single fleet is claiming HAL tasks, remove the `hal-*` services + their volumes; deregister their device tokens in the hub (Org → Agent daemons → deregister). Keep their tokens revoked, not just stopped.
-6. **Repo-bound caveat.** If any HAL worker was repo-bound, keep one per-repo worker (option b) until repo-switching (option a) ships. Flag which agents are repo-bound before step 3.
+**Steps:**
 
-**Rollback:** re-pin `FORGE_DAEMON_WORKSPACE_ID`, set dispatcher scope back to `single`, re-up the per-workspace sets. State lives in the hub, so flipping daemon config is reversible; no data migration.
+1. **Add memberships.** Ensure the owning account for the shared FM + worker devices is a member of every workspace (forge-lab, HAL, …). Workers claim tasks only in workspaces the device's owning account belongs to. Add memberships via the hub UI (Org → Members) or API before cutover.
+2. **Reconfigure the canonical fleet.** In `daemons.compose.yml`: remove the `FORGE_DAEMON_WORKSPACE_ID` pin from the worker services (run unscoped); set `FORGE_DAEMON_DISPATCHER_SCOPE=all` on `forge-fm`. Drop the `&daemon-env` anchor's workspace var. Commit this change.
+3. **Drain, don't kill.** Stop the HAL workers from claiming new tasks: `docker compose -p forge-daemons stop hal-furnace hal-anvil …` (not scale-to-0 — that is not a valid Compose v2 command). Wait for any in-progress tasks on hal-* workers to finish; the 30-minute stale-requeue path backstops anything stranded. Note: there is a ~10-second race window between confirming idle and the stop command — at worst, 1-2 tasks may be dispatched to a hal-* worker during that window and will auto-requeue after 30 minutes.
+4. **Cut over.** `docker compose -p forge-daemons up -d --build` the reconfigured single fleet. The unscoped workers now claim across forge-lab + HAL. The single FM triages both inboxes via `scope=all`.
+5. **Validate before retiring.** Create a `pending_dispatcher_action` task in each workspace and confirm the single FM triages both. Create a plain worker task in the HAL workspace and confirm a shared (unscoped) worker claims it. Only proceed to step 6 when all three checks pass.
+6. **Retire duplicates.** Remove the `hal-*` services from `daemons.compose.yml` and their volumes; deregister their device tokens in the hub (Org → Agent daemons → deregister). Keep their tokens revoked, not just stopped.
 
-**Validation:** create a `pending_dispatcher_action` task in each workspace → confirm the single FM triages both; create a worker task in HAL → confirm a shared (unscoped) worker claims it; confirm `0` duplicate daemons remain registered.
+**Rollback (before step 6):** re-pin `FORGE_DAEMON_WORKSPACE_ID`, set dispatcher scope back to `single`, re-up the per-workspace sets. State lives in the hub, so flipping daemon config is reversible; no data migration. **If rollback is needed after step 6**, the hal-* device tokens have been deregistered and cannot be reused; new tokens must be minted via `POST /devices` and `deploy/.env.daemons` updated before re-upping the hal-* set. Plan to complete rollback before step 6 if confidence is low.
 
 ---
 
@@ -104,9 +110,10 @@ Goal: collapse `forge-*` + `hal-*` (and any future per-workspace sets) into **1 
 - FM triage logic unchanged — lower risk.
 
 **Negative / risks**
-- **Single FM = single triage throughput.** One FM serializes triage across all workspaces. Mitigation: triage is fast (assign/decompose, not execution); if it ever bottlenecks, shard FM by workspace-hash later. Revisit if inbox latency grows.
-- **Cross-workspace blast radius.** A shared worker bug now touches all workspaces. Mitigation: Heimdall policy + per-task isolation already scope what a worker may do.
-- **Membership is now load-bearing.** A worker not a member of a workspace silently won't serve it. Make membership part of workspace creation/onboarding.
+- **Single FM = serial triage latency per workspace.** FM spawns an LLM agent (claude CLI) per triage cycle; expect ~3-5 seconds of LLM roundtrip per workspace (measure actual cycle time via logger timestamps on triage start/end lines). With N workspaces, workspace N waits for workspaces 1…N-1 to complete before its inbox is processed. At current scale (2-5 workspaces) this is acceptable for async task routing; revisit if inbox latency becomes user-visible. Shard FM by workspace-hash if needed.
+- **Worker pool starvation.** A long-running task in workspace A holds one of the 8 shared worker slots for its duration. No per-workspace fairness guarantee exists in the current `listTasks` scheduling. Workspaces generating many long-running tasks may delay others. Mitigation at current scale: 8 workers is well above per-workspace concurrency today; add workspace-aware round-robin to `listTasks` if contention appears.
+- **Cross-workspace blast radius.** A shared worker bug now touches all workspaces. Mitigation: Heimdall policy gates worker actions; per-task file isolation scopes what a worker may write.
+- **Membership is now load-bearing.** A worker not a member of a workspace silently won't serve it. Make membership part of workspace creation/onboarding (see Follow-ups).
 - **Repo-bound work** still needs care until repo-switching lands (option a).
 
 ---
