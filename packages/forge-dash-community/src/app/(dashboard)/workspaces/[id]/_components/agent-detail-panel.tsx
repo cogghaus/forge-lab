@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import type { HubActivityEvent, HubDevice, HubTask } from '@/lib/hub';
+import type { HubActivityEvent, HubAgentPerf, HubDevice, HubTask } from '@/lib/hub';
+import { AgentStopButton } from './agent-stop-button';
 
 // ---------------------------------------------------------------------------
 // Agent detail right-rail — opens over the workspace view when ?agent=<deviceId>
@@ -29,6 +30,15 @@ function relativeTime(ts: string): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
+function fmtDuration(ms: number | null): string {
+  if (ms === null || Number.isNaN(ms)) return '—';
+  const m = Math.round(ms / 60000);
+  if (m < 1) return '<1m';
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
 function StatCell({ label, value, color }: { label: string; value: string | number; color?: string }) {
   return (
     <div className="flex flex-col gap-0.5">
@@ -47,9 +57,11 @@ export interface AgentDetailPanelProps {
   device: HubDevice;
   tasks: HubTask[];
   activity: HubActivityEvent[];
+  /** 7-day performance for this device's agent persona, if available. */
+  perf?: HubAgentPerf | null;
 }
 
-export function AgentDetailPanel({ workspaceId, device, tasks, activity }: AgentDetailPanelProps) {
+export function AgentDetailPanel({ workspaceId, device, tasks, activity, perf }: AgentDetailPanelProps) {
   const online =
     device.lastSeen !== null && Date.now() - new Date(device.lastSeen).getTime() < ONLINE_THRESHOLD_MS;
   const deregistered = device.status === 'deregistered';
@@ -124,12 +136,15 @@ export function AgentDetailPanel({ workspaceId, device, tasks, activity }: Agent
                   <div className="h-full bg-[#FF6B2B] rounded-full animate-pulse" style={{ width: '45%' }} />
                 </div>
               )}
-              <Link
-                href={`/workspaces/${workspaceId}/tasks/${current.id}`}
-                className="self-start rounded-md border border-[#FF6B2B]/30 bg-[#FF6B2B]/10 px-3 py-1.5 font-mono text-[11px] text-[#FF6B2B] transition-colors hover:bg-[#FF6B2B]/20"
-              >
-                View task
-              </Link>
+              <div className="flex items-center gap-2">
+                <Link
+                  href={`/workspaces/${workspaceId}/tasks/${current.id}`}
+                  className="rounded-md border border-[#FF6B2B]/30 bg-[#FF6B2B]/10 px-3 py-1.5 font-mono text-[11px] text-[#FF6B2B] transition-colors hover:bg-[#FF6B2B]/20"
+                >
+                  View task
+                </Link>
+                {working && <AgentStopButton workspaceId={workspaceId} taskId={current.id} />}
+              </div>
             </div>
           ) : (
             <p className="text-[13px]" style={{ color: 'rgba(245,240,235,0.4)' }}>
@@ -154,6 +169,25 @@ export function AgentDetailPanel({ workspaceId, device, tasks, activity }: Agent
             </div>
           )}
         </div>
+
+        {/* 7-day performance (from /agents/performance, keyed by agent persona) */}
+        {perf && (
+          <div className="px-4 py-3.5 border-b" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+            <div className="font-mono text-[9px] uppercase tracking-[0.1em] mb-3" style={{ color: 'rgba(245,240,235,0.35)' }}>
+              7-day performance
+            </div>
+            <div className="grid grid-cols-2 gap-y-2 font-mono text-[11px]">
+              <span style={{ color: 'rgba(245,240,235,0.4)' }}>completed</span>
+              <span className="text-right" style={{ color: 'rgba(245,240,235,0.85)' }}>{perf.completedCount}</span>
+              <span style={{ color: 'rgba(245,240,235,0.4)' }}>avg duration</span>
+              <span className="text-right" style={{ color: 'rgba(245,240,235,0.85)' }}>{fmtDuration(perf.avgCompletionTimeMs)}</span>
+              <span style={{ color: 'rgba(245,240,235,0.4)' }}>throughput</span>
+              <span className="text-right" style={{ color: 'rgba(245,240,235,0.85)' }}>{perf.throughputPerDay}/day</span>
+              <span style={{ color: 'rgba(245,240,235,0.4)' }}>failure rate</span>
+              <span className="text-right" style={{ color: perf.failureRate > 0 ? '#FF4757' : 'rgba(245,240,235,0.85)' }}>{perf.failureRate}%</span>
+            </div>
+          </div>
+        )}
 
         {/* Recent activity */}
         <div className="px-4 py-3.5">
