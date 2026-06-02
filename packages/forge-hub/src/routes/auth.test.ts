@@ -515,3 +515,104 @@ describe('rate limiting on auth endpoints', () => {
     vi.useRealTimers();
   });
 });
+
+describe('Session management (/auth/sessions)', () => {
+  let hub: Hub;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  /** Logs in an existing user again, returning the new session cookie. */
+  async function login(email: string, password: string, userAgent?: string): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      headers: userAgent ? { 'user-agent': userAgent } : {},
+      payload: { email, password },
+    });
+    const setCookie = res.headers['set-cookie'];
+    return (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!;
+  }
+
+  it('GET /auth/sessions requires auth', async () => {
+    const res = await hub.fastify.inject({ method: 'GET', url: '/auth/sessions' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('lists the current session and flags it', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const res = await hub.fastify.inject({ method: 'GET', url: '/auth/sessions', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    const { sessions } = res.json() as { sessions: { id: string; current: boolean }[] };
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]!.current).toBe(true);
+  });
+
+  it('captures user-agent and lists multiple sessions with one current', async () => {
+    const { cookie } = await setupAdmin(hub);
+    await login('admin@example.com', 'password123', 'Mozilla/5.0 TestBrowser');
+
+    const res = await hub.fastify.inject({ method: 'GET', url: '/auth/sessions', headers: { cookie } });
+    const { sessions } = res.json() as { sessions: { current: boolean; userAgent: string | null }[] };
+    expect(sessions).toHaveLength(2);
+    expect(sessions.filter((s) => s.current)).toHaveLength(1);
+    expect(sessions.some((s) => s.userAgent === 'Mozilla/5.0 TestBrowser')).toBe(true);
+  });
+
+  it('DELETE revokes another session', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const otherCookie = await login('admin@example.com', 'password123', 'OtherDevice');
+
+    let res = await hub.fastify.inject({ method: 'GET', url: '/auth/sessions', headers: { cookie } });
+    const { sessions } = res.json() as { sessions: { id: string; current: boolean }[] };
+    const other = sessions.find((s) => !s.current)!;
+
+    const del = await hub.fastify.inject({
+      method: 'DELETE',
+      url: `/auth/sessions/${other.id}`,
+      headers: { cookie },
+    });
+    expect(del.statusCode).toBe(200);
+
+    // The revoked cookie no longer authenticates.
+    const check = await hub.fastify.inject({ method: 'GET', url: '/auth/me', headers: { cookie: otherCookie } });
+    expect(check.statusCode).toBe(401);
+
+    res = await hub.fastify.inject({ method: 'GET', url: '/auth/sessions', headers: { cookie } });
+    expect((res.json() as { sessions: unknown[] }).sessions).toHaveLength(1);
+  });
+
+  it('DELETE returns 404 for an unknown / foreign session id', async () => {
+    const { cookie } = await setupAdmin(hub);
+    const res = await hub.fastify.inject({
+      method: 'DELETE',
+      url: `/auth/sessions/${nanoid()}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('revoke-others keeps only the current session', async () => {
+    const { cookie } = await setupAdmin(hub);
+    await login('admin@example.com', 'password123', 'DeviceA');
+    await login('admin@example.com', 'password123', 'DeviceB');
+
+    const revoke = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/sessions/revoke-others',
+      headers: { cookie },
+    });
+    expect(revoke.statusCode).toBe(200);
+    expect((revoke.json() as { revoked: number }).revoked).toBe(2);
+
+    const res = await hub.fastify.inject({ method: 'GET', url: '/auth/sessions', headers: { cookie } });
+    const { sessions } = res.json() as { sessions: { current: boolean }[] };
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]!.current).toBe(true);
+  });
+});

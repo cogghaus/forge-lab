@@ -3,6 +3,7 @@ import { hubFetch, type HubDevice, type HubMe } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { PasswordChangeForm } from './password-change-form';
 import { EmailChangeForm } from './email-change-form';
+import { SessionsPanel } from './sessions-panel';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -195,7 +196,23 @@ export default async function SettingsPage() {
         </div>
       </section>
 
-      {/* Devices section */}
+      {/* Active sessions (this user's authorized logins) */}
+      <section className="mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <h2
+            className="font-mono text-[13px] font-semibold"
+            style={{ color: 'rgba(245,240,235,0.6)' }}
+          >
+            Active sessions
+          </h2>
+        </div>
+        <p className="font-mono text-[11px] mb-3" style={{ color: 'rgba(245,240,235,0.3)' }}>
+          Browsers and apps signed in to your account. Revoke any you don&apos;t recognise.
+        </p>
+        <SessionsPanel />
+      </section>
+
+      {/* Agent daemons section */}
       <section className="mb-8">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-3">
@@ -203,7 +220,7 @@ export default async function SettingsPage() {
               className="font-mono text-[13px] font-semibold"
               style={{ color: 'rgba(245,240,235,0.6)' }}
             >
-              Devices
+              Agent daemons
             </h2>
             {devices.length > 0 && (
               <span

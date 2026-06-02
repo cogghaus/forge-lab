@@ -184,7 +184,10 @@ export function registerInviteRoutes(
 
       await db.update(schema.invites).set({ acceptedBy: userId }).where(eq(schema.invites.id, invite.id));
 
-      const session = await createSession(db, userId, config.sessionTtlHours);
+      const session = await createSession(db, userId, config.sessionTtlHours, {
+        userAgent: req.headers['user-agent'] ?? null,
+        ipAddress: req.ip ?? null,
+      });
       await reply
         .setCookie('session', session.token, {
           path: '/',

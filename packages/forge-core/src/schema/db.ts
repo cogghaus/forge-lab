@@ -41,6 +41,12 @@ export const sessions = sqliteTable(
     tokenHash: text('token_hash').notNull().unique(),
     expiresAt: timestampMs('expires_at').notNull(),
     createdAt: timestampMs('created_at').notNull().default(nowDefault),
+    /** Raw User-Agent header captured at login (for labelling the session). */
+    userAgent: text('user_agent'),
+    /** Client IP captured at login. */
+    ipAddress: text('ip_address'),
+    /** Bumped on use (throttled) so "last active" is meaningful. */
+    lastSeenAt: timestampMs('last_seen_at'),
   },
   (t) => ({
     userIdIdx: index('sessions_user_id_idx').on(t.userId),
