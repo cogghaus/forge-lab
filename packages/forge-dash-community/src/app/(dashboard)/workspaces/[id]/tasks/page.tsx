@@ -2,7 +2,6 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { hubFetch, type HubGoal, type HubTask, type HubWorkspace } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
-import { NewTaskButton } from '../new-task-button';
 import { TaskListWithPanel } from './_components/task-list-with-panel';
 
 interface Props {
@@ -27,7 +26,6 @@ export default async function WorkspaceTaskListPage({ params, searchParams }: Pr
 
   if (!wsRes.ok) redirect('/workspaces');
 
-  const workspace = wsRes.data;
   const allTasks = tasksRes.ok ? tasksRes.data.tasks : [];
   const goals = goalsRes.ok ? goalsRes.data.goals : [];
 
@@ -41,24 +39,6 @@ export default async function WorkspaceTaskListPage({ params, searchParams }: Pr
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <Link
-          href="/workspaces"
-          className="text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-        >
-          Workspaces
-        </Link>
-        <span className="text-zinc-300 dark:text-zinc-700">/</span>
-        <Link
-          href={`/workspaces/${workspaceId}`}
-          className="min-w-0 truncate text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-        >
-          {workspace.name}
-        </Link>
-        <span className="text-zinc-300 dark:text-zinc-700">/</span>
-        <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">Tasks</h1>
-      </div>
-
       {/* Active filters */}
       {(activeGoal ?? status) && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -101,13 +81,10 @@ export default async function WorkspaceTaskListPage({ params, searchParams }: Pr
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          {tasks.length} of {allTasks.length} task{allTasks.length !== 1 ? 's' : ''}
-          {tasks.length !== allTasks.length ? ' (filtered)' : ''}
-        </p>
-        <NewTaskButton workspaceId={workspaceId} workspaceSlug={workspace.slug} goals={goals} />
-      </div>
+      <p className="text-sm text-zinc-500 dark:text-zinc-400">
+        {tasks.length} of {allTasks.length} task{allTasks.length !== 1 ? 's' : ''}
+        {tasks.length !== allTasks.length ? ' (filtered)' : ''}
+      </p>
 
       <TaskListWithPanel tasks={tasks} workspaceId={workspaceId} goals={goals} />
     </div>

@@ -225,7 +225,6 @@ export default async function TaskDetailPage({ params }: Props) {
 
   if (!wsRes.ok || !taskRes.ok) redirect(`/workspaces/${workspaceId}`);
 
-  const workspace = wsRes.data;
   const task = taskRes.data;
   const history = historyRes.ok ? historyRes.data.history : [];
   const allComments = commentsRes.ok ? commentsRes.data.comments : [];
@@ -271,15 +270,11 @@ export default async function TaskDetailPage({ params }: Props) {
       <TaskDetailRefresh workspaceId={workspaceId} />
 
       <div className="flex flex-wrap items-center gap-2">
-        <Link href="/workspaces" className="text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100">
-          Workspaces
-        </Link>
-        <span className="text-zinc-300 dark:text-zinc-700">/</span>
         <Link
-          href={`/workspaces/${workspaceId}`}
+          href={`/workspaces/${workspaceId}/tasks`}
           className="text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
         >
-          {workspace.name}
+          Tasks
         </Link>
         <span className="text-zinc-300 dark:text-zinc-700">/</span>
         {parentTask && (
