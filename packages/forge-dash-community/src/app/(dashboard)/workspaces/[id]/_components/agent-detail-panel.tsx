@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { HubActivityEvent, HubAgentPerf, HubDevice, HubTask } from '@/lib/hub';
 import { AgentStopButton } from './agent-stop-button';
+import { AgentPersonalityButton } from './agent-personality-button';
 
 // ---------------------------------------------------------------------------
 // Agent detail right-rail — opens over the workspace view when ?agent=<deviceId>
@@ -218,6 +219,13 @@ export function AgentDetailPanel({ workspaceId, device, tasks, activity, perf }:
             </ul>
           )}
         </div>
+
+        {/* Personality */}
+        {device.agentId && (
+          <div className="px-4 py-3.5 border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+            <AgentPersonalityButton agentId={device.agentId} />
+          </div>
+        )}
       </div>
     </div>
   );

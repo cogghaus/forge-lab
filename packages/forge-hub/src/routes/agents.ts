@@ -3,9 +3,16 @@ import { and, count, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizz
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
+import { loadBuiltinRegistry, type PersonalityRegistry } from '@forge-lab/agents';
 import type { Db } from '../db/index.js';
 import { requireUser, requireWorkspaceMember, getWorkspace, getUser } from '../auth/middleware.js';
 import { parseDateRange } from '../utils/date-range.js';
+
+// Built-in personalities load once from disk (markdown shipped in the image).
+let personalityRegistry: Promise<PersonalityRegistry> | null = null;
+function getPersonalityRegistry(): Promise<PersonalityRegistry> {
+  return (personalityRegistry ??= loadBuiltinRegistry());
+}
 
 const CreateAgentInputSchema = z.object({
   name: z.string().min(1).max(100),
@@ -30,6 +37,22 @@ export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
       .orderBy(schema.agents.createdAt);
     return { agents };
   });
+
+  // Built-in personality for an agent persona (e.g. 'architect'). 404 when the
+  // persona has no personality file (some workers don't define one).
+  fastify.get<{ Params: { agentId: string } }>(
+    '/agents/:agentId/personality',
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const reg = await getPersonalityRegistry();
+      const p = reg.get(req.params.agentId);
+      if (!p) {
+        await reply.code(404).send({ error: 'no_personality' });
+        return;
+      }
+      return { id: p.id, name: p.name, description: p.description, systemPrompt: p.systemPrompt };
+    },
+  );
 
   fastify.post('/agents', { preHandler: requireUser }, async (req, reply) => {
     const body = CreateAgentInputSchema.parse(req.body);
