@@ -88,26 +88,12 @@ export default async function TriagePage({ params }: Props) {
 
   if (!wsRes.ok) redirect('/workspaces');
 
-  const workspace = wsRes.data;
   const log = logRes.ok ? logRes.data : { comments: [], inboxCount: 0 };
   const allTasks = tasksRes.ok ? tasksRes.data.tasks : [];
   const inboxTasks = allTasks.filter(t => t.status === 'pending_dispatcher_action');
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Link href="/workspaces" className="text-default-500 hover:text-foreground text-sm">
-          Workspaces
-        </Link>
-        <span className="text-default-400">/</span>
-        <Link href={`/workspaces/${workspaceId}`} className="text-default-500 hover:text-foreground text-sm">
-          {workspace.name}
-        </Link>
-        <span className="text-default-400">/</span>
-        <h1 className="text-2xl font-bold">Triage</h1>
-      </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.5fr] gap-6">
         {/* ── FM Inbox ── */}
         <section>

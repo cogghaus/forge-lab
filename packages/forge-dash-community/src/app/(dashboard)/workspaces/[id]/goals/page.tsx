@@ -144,36 +144,6 @@ export default async function WorkspaceGoalsPage({ params }: Props) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <Link
-          href="/workspaces"
-          className="text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-        >
-          Workspaces
-        </Link>
-        <span className="text-zinc-300 dark:text-zinc-700">/</span>
-        <Link
-          href={`/workspaces/${workspaceId}`}
-          className="min-w-0 truncate text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-        >
-          {workspace.name}
-        </Link>
-        <span className="text-zinc-300 dark:text-zinc-700">/</span>
-        <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">Goals</h1>
-      </div>
-
-      <div className="flex items-center gap-4 border-b border-zinc-200 dark:border-zinc-800">
-        <Link
-          href={`/workspaces/${workspaceId}/tasks`}
-          className="pb-2 text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-        >
-          Tasks
-        </Link>
-        <span className="border-b-2 border-[#FF6B2B] pb-2 text-sm font-medium text-[#FF6B2B]">
-          Goals
-        </span>
-      </div>
-
       <div className="flex flex-wrap items-center justify-between gap-4">
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
           {goals.length} goal{goals.length !== 1 ? 's' : ''}
