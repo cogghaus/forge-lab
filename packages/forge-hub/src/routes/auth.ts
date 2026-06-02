@@ -6,7 +6,13 @@ import { LoginInputSchema, schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import type { HubConfig } from '../config.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
-import { createSession, deleteSession } from '../auth/sessions.js';
+import {
+  createSession,
+  deleteSession,
+  listSessions,
+  revokeSessionById,
+  revokeOtherSessions,
+} from '../auth/sessions.js';
 import { requireUser, getUser } from '../auth/middleware.js';
 import { TokenBucketStore, createTokenBucketPreHandler } from '../rate-limit/index.js';
 import type { EmailService } from '../email/index.js';
@@ -75,7 +81,10 @@ export function registerAuthRoutes(
       await reply.code(401).send({ error: 'invalid_credentials' });
       return;
     }
-    const session = await createSession(db, user.id, config.sessionTtlHours);
+    const session = await createSession(db, user.id, config.sessionTtlHours, {
+      userAgent: req.headers['user-agent'] ?? null,
+      ipAddress: req.ip ?? null,
+    });
     await reply
       .setCookie('session', session.token, {
         path: '/',
@@ -216,9 +225,47 @@ export function registerAuthRoutes(
     return { ok: true };
   });
 
+  // ---- Session management (a user's own authorized logins) ----------------
+
+  function sessionCookie(req: { cookies?: Record<string, string | undefined> }): string | undefined {
+    return (req as unknown as { cookies?: Record<string, string | undefined> }).cookies?.['session'];
+  }
+
+  fastify.get('/auth/sessions', { preHandler: requireUser }, async (req, reply) => {
+    const user = getUser(req);
+    const token = sessionCookie(req);
+    if (!token) {
+      await reply.code(401).send({ error: 'no_session' });
+      return;
+    }
+    const sessions = await listSessions(db, user.id, token);
+    return { sessions };
+  });
+
+  fastify.delete('/auth/sessions/:sessionId', { preHandler: requireUser }, async (req, reply) => {
+    const user = getUser(req);
+    const { sessionId } = req.params as { sessionId: string };
+    const revoked = await revokeSessionById(db, user.id, sessionId);
+    if (!revoked) {
+      await reply.code(404).send({ error: 'not_found' });
+      return;
+    }
+    await reply.code(200).send({ ok: true });
+  });
+
+  fastify.post('/auth/sessions/revoke-others', { preHandler: requireUser }, async (req, reply) => {
+    const user = getUser(req);
+    const token = sessionCookie(req);
+    if (!token) {
+      await reply.code(401).send({ error: 'no_session' });
+      return;
+    }
+    const revoked = await revokeOtherSessions(db, user.id, token);
+    await reply.code(200).send({ ok: true, revoked });
+  });
+
   fastify.post('/auth/logout', async (req, reply) => {
-    const cookies = (req as unknown as { cookies?: Record<string, string | undefined> }).cookies;
-    const token = cookies?.['session'];
+    const token = sessionCookie(req);
     if (token) await deleteSession(db, token);
     await reply.clearCookie('session', { path: '/' }).code(200).send({ ok: true });
   });

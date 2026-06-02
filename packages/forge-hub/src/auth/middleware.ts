@@ -2,7 +2,7 @@ import type { onRequestHookHandler, preHandlerHookHandler } from 'fastify';
 import { and, eq } from 'drizzle-orm';
 import { schema, type WorkspaceRole, rankAtLeast } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
-import { verifySession } from './sessions.js';
+import { verifySession, touchSession } from './sessions.js';
 import { hashToken } from './tokens.js';
 
 export interface AuthUser {
@@ -53,6 +53,8 @@ export function populateAuth(db: Db): onRequestHookHandler {
           .get();
         if (user) {
           req.authUser = { id: user.id, email: user.email, role: user.role };
+          // Bump last_seen_at (throttled inside) so session lists show real activity.
+          void touchSession(db, cookieToken).catch(() => {});
         }
       }
     }
