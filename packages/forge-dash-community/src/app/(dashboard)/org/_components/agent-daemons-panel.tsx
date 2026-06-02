@@ -32,16 +32,15 @@ function platformLabel(platform: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// DevicesPanel
+// AgentDaemonsPanel — manage the agent daemon device registrations (rename,
+// rotate token, deregister). Org-level: these are the daemons, not user logins.
 // ---------------------------------------------------------------------------
 
-export interface DevicesPanelProps {
+export interface AgentDaemonsPanelProps {
   devices: HubDevice[];
-  /** Count of pending_agent tasks -- shown as queue depth in the header. */
-  queueDepth?: number;
 }
 
-export function DevicesPanel({ devices: initialDevices, queueDepth = 0 }: DevicesPanelProps) {
+export function AgentDaemonsPanel({ devices: initialDevices }: AgentDaemonsPanelProps) {
   const router = useRouter();
   const [devices, setDevices] = useState<HubDevice[]>(initialDevices);
   const [showDeregistered, setShowDeregistered] = useState(false);
@@ -90,17 +89,8 @@ export function DevicesPanel({ devices: initialDevices, queueDepth = 0 }: Device
           className="font-mono text-[10px] uppercase tracking-[0.1em]"
           style={{ color: 'rgba(245,240,235,0.4)' }}
         >
-          Devices
+          Agent daemons
         </span>
-
-        {queueDepth > 0 && (
-          <span
-            className="font-mono text-[10px] px-1 rounded"
-            style={{ color: '#FFB547', background: 'rgba(255,181,71,0.12)' }}
-          >
-            {queueDepth} queued
-          </span>
-        )}
 
         {activeDevices.length > 0 && (
           <span

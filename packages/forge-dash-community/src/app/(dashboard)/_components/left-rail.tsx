@@ -133,17 +133,6 @@ function railItem(active: boolean) {
   );
 }
 
-function subItem(active: boolean, disabled = false) {
-  return (
-    'flex items-center gap-2 pl-7 pr-3 py-[4px] rounded-md text-[12px] transition-colors ' +
-    (disabled
-      ? 'text-[rgba(245,240,235,0.2)]'
-      : active
-        ? 'text-[rgba(245,240,235,0.7)]'
-        : 'text-[rgba(245,240,235,0.35)] hover:bg-white/[0.03] hover:text-[rgba(245,240,235,0.6)] cursor-pointer')
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -172,29 +161,7 @@ export function LeftRail({
   const wsMatch = pathname.match(/^\/workspaces\/([^/]+)/);
   const activeWsId = wsMatch?.[1] ?? null;
 
-  const [expandedWsId, setExpandedWsId] = useState<string | null>(activeWsId);
-
-  useEffect(() => {
-    if (activeWsId) setExpandedWsId(activeWsId);
-  }, [activeWsId]);
-
   const { devices, activeTasks, loading } = useAgentStatus(activeWsId);
-
-  function isWorkshopActive(base: string) {
-    return (
-      pathname === base ||
-      (pathname.startsWith(base + '/') &&
-        !pathname.startsWith(base + '/goals') &&
-        !pathname.startsWith(base + '/triage') &&
-        !pathname.startsWith(base + '/knowledge') &&
-        !pathname.startsWith(base + '/analytics') &&
-        !pathname.startsWith(base + '/settings'))
-    );
-  }
-
-  function isGoalsActive(base: string) {
-    return pathname.startsWith(base + '/goals');
-  }
 
   function isNavActive(path: string) {
     return pathname === path || pathname.startsWith(path + '/');
@@ -210,46 +177,14 @@ export function LeftRail({
       {/* ── WORKSPACES ── */}
       <div className={sectionLabel()}>Workspaces</div>
 
+      {/* Each workspace links straight to its overview; section navigation
+          (Tasks/Goals/Triage/...) now lives in the in-page tab rail. */}
       {workspaces.map(ws => {
-        const isExp = expandedWsId === ws.id;
         const isAct = activeWsId === ws.id;
-        const base = `/workspaces/${ws.id}`;
-        const subNavId = `ws-nav-${ws.id}`;
-
         return (
-          <div key={ws.id}>
-            <button
-              onClick={() => setExpandedWsId(isExp ? null : ws.id)}
-              className={railItem(isAct)}
-              aria-expanded={isExp}
-              aria-controls={subNavId}
-            >
-              <span className={`text-[11px] flex-shrink-0 ${isExp ? 'text-[#FF6B2B]' : 'text-white/25'}`}>
-                {isExp ? '▾' : '▸'}
-              </span>
-              <span className="flex-1 min-w-0 truncate">{ws.name}</span>
-            </button>
-
-            {isExp && (
-              <div id={subNavId} className="mb-1">
-                <Link href={base}              className={subItem(isWorkshopActive(base))}>Workshop</Link>
-                <Link href={`${base}/goals`}   className={subItem(isGoalsActive(base))}>Goals</Link>
-                <Link href={`${base}/triage`}     className={subItem(pathname === `${base}/triage`)}>Triage 🔱</Link>
-                <Link href={`${base}/knowledge`} className={subItem(pathname.startsWith(`${base}/knowledge`))}>Knowledge 📚</Link>
-                <Link href={`${base}/analytics`} className={subItem(pathname.startsWith(`${base}/analytics`))}>Analytics 📈</Link>
-                <span
-                  className={subItem(false, true)}
-                  role="menuitem"
-                  aria-disabled="true"
-                  tabIndex={-1}
-                  title="Member management coming soon"
-                >
-                  Members
-                </span>
-                <Link href={`${base}/settings`} className={subItem(pathname.startsWith(`${base}/settings`))}>Settings ⚙</Link>
-              </div>
-            )}
-          </div>
+          <Link key={ws.id} href={`/workspaces/${ws.id}`} className={railItem(isAct)}>
+            <span className="flex-1 min-w-0 truncate">{ws.name}</span>
+          </Link>
         );
       })}
 
