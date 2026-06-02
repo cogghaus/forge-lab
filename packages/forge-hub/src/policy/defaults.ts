@@ -58,6 +58,13 @@ export const BUILT_IN_RULES: readonly BuiltInRule[] = [
     priority: 200,
   },
   {
+    id: 'builtin_fm_workspace_list_allow',
+    principal: 'agent:forge-master',
+    action: 'workspace:list',
+    effect: 'allow',
+    priority: 200,
+  },
+  {
     id: 'builtin_scribe_doc_write_allow',
     principal: 'agent:scribe',
     action: 'doc:write',

@@ -55,6 +55,14 @@ export interface DaemonOptions {
    */
   dispatcherPersonality?: string;
   /**
+   * Controls which workspaces the FM triages when dispatcherMode is true.
+   * 'single' (default): triage only opts.workspaceId (back-compat).
+   * 'all': enumerate all active workspaces the device is authorized for via
+   *        GET /dispatcher/workspaces and triage each inbox in sequence.
+   *        workspaceId is optional in this mode.
+   */
+  dispatcherWorkspaceMode?: 'single' | 'all';
+  /**
    * Stale assignment TTL in minutes used when requeueing in dispatcher mode.
    * Defaults to 30.
    */
@@ -383,29 +391,84 @@ export class Daemon {
 
   /**
    * Dispatcher poll cycle (FM orchestrator mode).
-   * 1. Requeue stale assigned tasks.
-   * 2. Fetch Tier 0 context bundle.
-   * 3. Spawn FM agent if inbox is non-empty and FM is not already running.
+   *
+   * When dispatcherWorkspaceMode='single' (default): triage exactly one workspace
+   * (opts.workspaceId), preserving pre-ADR-004 behaviour.
+   *
+   * When dispatcherWorkspaceMode='all': enumerate all active workspaces the FM
+   * device is authorized for via GET /dispatcher/workspaces, then run the standard
+   * requeue+context+spawn cycle for each workspace whose inbox is non-empty.
+   * fmRunning is acquired once for the entire tick and released after all
+   * workspaces are processed. Per-workspace errors are isolated (transient errors
+   * skip that workspace; structural auth errors abort the whole tick).
    */
   private async pollDispatcher(): Promise<void> {
-    const workspaceId = this.opts.workspaceId;
-    if (!workspaceId) {
-      this.logger.error('dispatcherMode requires workspaceId');
-      return;
-    }
     if (this.fmRunning) {
       this.logger.info('fm agent already running, skipping dispatcher poll');
       return;
     }
 
+    const mode = this.opts.dispatcherWorkspaceMode ?? 'single';
+
+    let workspaceIds: string[];
+    if (mode === 'all') {
+      try {
+        const workspaces = await this.client.listWorkspaces();
+        workspaceIds = workspaces.map((w) => w.id);
+      } catch (err) {
+        // Auth failure or hub unreachable — structural, abort the whole tick.
+        this.logger.error('failed to list workspaces for dispatcher', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+    } else {
+      const workspaceId = this.opts.workspaceId;
+      if (!workspaceId) {
+        this.logger.error('dispatcherMode requires workspaceId when dispatcherWorkspaceMode is single');
+        return;
+      }
+      workspaceIds = [workspaceId];
+    }
+
+    if (workspaceIds.length === 0) {
+      return;
+    }
+
+    // Acquire fmRunning once for the entire tick — all workspace triages in this
+    // poll run sequentially under the same gate. Released after all workspaces
+    // are processed or if a structural error aborts early.
+    this.fmRunning = true;
+    try {
+      for (const workspaceId of workspaceIds) {
+        await this._triageWorkspace(workspaceId);
+      }
+    } finally {
+      // Only release fmRunning here if no FM agent was actually spawned.
+      // If an agent was spawned, fmRunning stays true until handleTaskDone resets it.
+      // We check activeInstances for any spawned FM tasks.
+      const hasPendingFm = [...this.activeInstances.keys()].some((id) => id.startsWith('_fm_'));
+      if (!hasPendingFm) {
+        this.fmRunning = false;
+      }
+    }
+  }
+
+  /**
+   * Run the requeue + context + spawn cycle for a single workspace.
+   * Transient errors (network, context fetch, spawn) are caught here and logged
+   * with workspaceId context; they do not propagate to abort sibling workspaces.
+   */
+  private async _triageWorkspace(workspaceId: string): Promise<void> {
     try {
       const staleTtl = this.opts.staleTtlMinutes ?? 30;
       const { requeued } = await this.client.requeueStaleAssigned(workspaceId, staleTtl);
       if (requeued > 0) {
-        this.logger.info('requeued stale assigned tasks', { requeued });
+        this.logger.info('requeued stale assigned tasks', { workspaceId, requeued });
       }
     } catch (err) {
       this.logger.error('stale requeue failed', {
+        workspaceId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -415,6 +478,7 @@ export class Daemon {
       ctx = await this.client.getWorkspaceContext(workspaceId);
     } catch (err) {
       this.logger.error('failed to fetch workspace context', {
+        workspaceId,
         error: err instanceof Error ? err.message : String(err),
       });
       return;
@@ -424,11 +488,16 @@ export class Daemon {
       return;
     }
 
-    this.logger.info('inbox non-empty, spawning FM agent', { count: ctx.inboxTasks.length });
+    this.logger.info('inbox non-empty, spawning FM agent', {
+      workspaceId,
+      count: ctx.inboxTasks.length,
+    });
 
     const fmAgentId = this.opts.fmAgentId ?? 'forge-master';
     const dispatcherPersonalityId = this.opts.dispatcherPersonality ?? 'forge-master';
-    const syntheticTaskId = `_fm_${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    // Include workspaceId in syntheticTaskId to prevent collision when multiple
+    // workspace triages run in the same tick.
+    const syntheticTaskId = `_fm_${Date.now()}-${workspaceId.slice(0, 8)}-${Math.random().toString(36).slice(2, 7)}`;
 
     const contextJson = JSON.stringify(ctx, null, 2);
     const doneInstruction =
@@ -441,8 +510,6 @@ export class Daemon {
     const initialPrompt = `Workspace context for triage:\n\n${contextJson}${doneInstruction}`;
 
     try {
-      this.fmRunning = true;
-
       // Compose FM system prompt inside the try block so that a composeSystemPrompt
       // error triggers the catch and resets fmRunning — preventing a deadlock where
       // fmRunning stays true forever and the dispatcher never retries.
@@ -456,9 +523,13 @@ export class Daemon {
             projectContextPath: path.join(this.opts.workdir, 'context', 'project-context.md'),
             agentOverridesDir: path.join(this.opts.workdir, 'context', 'agent-overrides'),
           });
-          this.logger.info('fm personality loaded from registry', { id: dispatcherPersonalityId });
+          this.logger.info('fm personality loaded from registry', {
+            workspaceId,
+            id: dispatcherPersonalityId,
+          });
         } else {
           this.logger.info('fm personality not found in registry, using fallback', {
+            workspaceId,
             id: dispatcherPersonalityId,
           });
         }
@@ -482,13 +553,12 @@ export class Daemon {
         initialPrompt,
       );
       this.activeInstances.set(syntheticTaskId, { instance, runtimeId: this.opts.defaultRuntimeId });
-      this.logger.info('fm agent spawned', { syntheticTaskId, fmAgentId });
+      this.logger.info('fm agent spawned', { workspaceId, syntheticTaskId, fmAgentId });
     } catch (err) {
-      this.fmRunning = false;
-      // The synthetic marker is written before spawn(); remove it so a spawn
-      // failure doesn't orphan it in .forge/tasks.
+      // Spawn failure for this workspace: clean up its marker file.
       await cleanupTaskFiles(this.opts.workdir, syntheticTaskId).catch(() => {});
       this.logger.error('failed to spawn FM agent', {
+        workspaceId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
