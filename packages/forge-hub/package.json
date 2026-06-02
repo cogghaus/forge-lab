@@ -30,6 +30,7 @@
     "@fastify/cookie": "^11.0.2",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/websocket": "^11.2.0",
+    "@forge-lab/agents": "workspace:*",
     "@forge-lab/core": "workspace:*",
     "@libsql/client": "^0.17.3",
     "bcryptjs": "^3.0.3",

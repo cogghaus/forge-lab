@@ -152,6 +152,14 @@ export interface HubDevice {
   status: 'active' | 'deregistered';
 }
 
+/** A built-in agent personality (markdown system prompt + metadata). */
+export interface HubPersonality {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+}
+
 /** One of a user's authorized logins (browser/app session). */
 export interface HubSession {
   id: string;
