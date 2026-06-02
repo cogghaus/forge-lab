@@ -1,17 +1,17 @@
-# forge-lab agent daemons.
+# forge-lab agent daemons — single shared fleet (ADR-004).
 #
-# One image (vibe-forge-daemon), nine agent identities. Each daemon connects to
-# the hub over the shared internal network and spawns `claude` per task.
+# One image (vibe-forge-daemon), nine agent identities. The FM runs in
+# scope=all mode and triages all active workspaces; workers run unscoped and
+# claim tasks across all workspaces their owning account is a member of.
 #
 # Prereqs on accserver:
-#   1. The main stack (deploy/compose.yml, project "deploy") is up, so the
-#      network `deploy_vibe-forge-internal` and `forge-hub` exist.
-#   2. Claude OAuth creds seeded at /datapool/docker/vibe-forge/claude
-#      (owned by uid 1001 so the in-container `forge` user can refresh tokens).
-#   3. deploy/.env.daemons filled with the workspace id + 9 device tokens.
+#   1. The main stack (deploy/compose.yml, project "deploy") is up.
+#   2. Claude OAuth creds at /datapool/docker/vibe-forge/claude-home (uid 1001).
+#   3. deploy/.env.daemons filled with 9 device tokens (no workspace ID required).
+#   4. The owning account is a member of every workspace to be served.
 #
 # Usage (from a checkout on accserver):
-#   docker compose -p deploy \
+#   docker compose -p forge-daemons \
 #     -f deploy/daemons.compose.yml \
 #     --env-file deploy/.env.daemons \
 #     up -d --build
@@ -26,7 +26,7 @@ x-daemon-common: &daemon-common
   restart: unless-stopped
   environment: &daemon-env
     FORGE_DAEMON_HUB_URL: "http://forge-hub:3000"
-    FORGE_DAEMON_WORKSPACE_ID: "${FORGE_DAEMON_WORKSPACE_ID:?set in .env.daemons}"
+    # No workspace pin — workers run unscoped across all member workspaces.
     FORGE_DAEMON_DEFAULT_RUNTIME: "background"
     FORGE_DAEMON_SKIP_PERMISSIONS: "true"
     FORGE_DAEMON_MAX_CONCURRENT_TASKS: "1"
@@ -44,6 +44,7 @@ services:
       <<: *daemon-env
       FORGE_DAEMON_AGENT_ID: "forge-master"
       FORGE_DAEMON_DISPATCHER_MODE: "true"
+      FORGE_DAEMON_DISPATCHER_SCOPE: "all"
       FORGE_DAEMON_STALE_TTL_MINUTES: "30"
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_FM_TOKEN:?}"
       # Dispatcher mode ignores MAX_CONCURRENT_TASKS (it does not claim worker

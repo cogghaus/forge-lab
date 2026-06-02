@@ -226,6 +226,36 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
   );
 
   // ---------------------------------------------------------------------------
+  // Dispatcher workspace enumeration — returns workspace IDs the FM device is
+  // authorized to triage. Orchestrator-device-only (Heimdall workspace:list).
+  // Excludes archived and deleted workspaces (active memberships only).
+  // ---------------------------------------------------------------------------
+
+  fastify.get(
+    '/dispatcher/workspaces',
+    { preHandler: requireDevice },
+    async (req, reply) => {
+      const device = getDevice(req);
+      if (device.deviceType !== 'orchestrator') {
+        await reply.code(403).send({ error: 'orchestrator_required' });
+        return;
+      }
+      const rows = await db
+        .select({ id: schema.workspaces.id })
+        .from(schema.workspaces)
+        .innerJoin(
+          schema.workspaceMembers,
+          and(
+            eq(schema.workspaceMembers.workspaceId, schema.workspaces.id),
+            eq(schema.workspaceMembers.userId, device.userId),
+          ),
+        )
+        .where(eq(schema.workspaces.status, 'active'));
+      return rows;
+    },
+  );
+
+  // ---------------------------------------------------------------------------
   // FM Tier 0 context bundle — one call gives FM everything it needs to triage.
   // Device-auth-only (orchestrator type required). FM daemons call this on startup
   // and before each triage cycle.
