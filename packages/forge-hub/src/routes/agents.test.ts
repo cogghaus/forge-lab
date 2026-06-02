@@ -169,11 +169,11 @@ describe('/agents routes', () => {
     expect(body.systemPrompt.length).toBeGreaterThan(0);
   });
 
-  it('GET /agents/:agentId/personality returns 404 for an agent with no personality file', async () => {
+  it('GET /agents/:agentId/personality returns 404 for an unknown agent', async () => {
     const { cookie } = await setup(hub);
     const res = await hub.fastify.inject({
       method: 'GET',
-      url: '/agents/anvil/personality',
+      url: '/agents/no-such-agent/personality',
       headers: { cookie },
     });
     expect(res.statusCode).toBe(404);
