@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { Button, Textarea } from '@heroui/react';
 import { cancelTaskAction, retryTaskAction, updateTaskStatusAction } from '@/actions/tasks';
 
 interface Props {
@@ -12,10 +11,22 @@ interface Props {
   action: 'cancel' | 'retry';
 }
 
+const baseBtn =
+  'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50';
+const neutralBtn =
+  `${baseBtn} border-zinc-300 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800`;
+const dangerBtn =
+  `${baseBtn} border-[#FF4757]/40 text-[#FF4757] hover:bg-[#FF4757]/10`;
+const brandBtn =
+  `${baseBtn} border-[#FF6B2B]/40 text-[#FF6B2B] hover:bg-[#FF6B2B]/10`;
+
+function Spinner() {
+  return <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-r-transparent" />;
+}
+
 export function TaskActionButton({ workspaceId, taskId, taskTitle, taskStatus, action }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Cancel-specific expand state
   const [expanded, setExpanded] = useState(false);
   const [reason, setReason] = useState('');
 
@@ -24,10 +35,8 @@ export function TaskActionButton({ workspaceId, taskId, taskTitle, taskStatus, a
     setError(null);
     let result: { error?: string };
     if (taskStatus === 'failed') {
-      // Retry failed task → pending_dispatcher_action (FM re-triage)
       result = await retryTaskAction(workspaceId, taskId);
     } else {
-      // Requeue cancelled task → pending_agent (skip FM triage)
       result = await updateTaskStatusAction(workspaceId, taskId, 'pending_agent');
     }
     setLoading(false);
@@ -50,21 +59,15 @@ export function TaskActionButton({ workspaceId, taskId, taskTitle, taskStatus, a
   if (action === 'retry') {
     return (
       <div className="flex flex-col items-end gap-1">
-        <Button
-          size="sm"
-          color="primary"
-          variant="flat"
-          isLoading={loading}
-          onPress={handleRetry}
-        >
+        <button type="button" className={brandBtn} disabled={loading} onClick={() => { void handleRetry(); }}>
+          {loading && <Spinner />}
           {taskStatus === 'failed' ? 'Retry task' : 'Requeue task'}
-        </Button>
-        {error && <p className="text-xs text-danger">{error}</p>}
+        </button>
+        {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
       </div>
     );
   }
 
-  // Cancel action: inline expand panel
   const isInProgress = taskStatus === 'in_progress';
   const confirmText = isInProgress
     ? `Cancel ${taskTitle}? The running agent will be signalled to stop at its next checkpoint.`
@@ -73,51 +76,39 @@ export function TaskActionButton({ workspaceId, taskId, taskTitle, taskStatus, a
   return (
     <div className="flex flex-col items-end gap-1">
       {!expanded ? (
-        <Button
-          size="sm"
-          color="danger"
-          variant="flat"
-          onPress={() => setExpanded(true)}
-        >
+        <button type="button" className={dangerBtn} onClick={() => setExpanded(true)}>
           Cancel task
-        </Button>
+        </button>
       ) : (
-        <div className="flex flex-col gap-2 items-end w-64 border border-danger/20 rounded-xl p-3 bg-danger/5">
-          <p className="text-xs text-default-500 w-full">{confirmText}</p>
-          <Textarea
-            size="sm"
+        <div className="flex w-64 flex-col items-end gap-2 rounded-xl border border-[#FF4757]/20 bg-[#FF4757]/5 p-3">
+          <p className="w-full text-xs text-zinc-500 dark:text-zinc-400">{confirmText}</p>
+          <textarea
             placeholder="Reason (optional)"
             value={reason}
-            onValueChange={setReason}
+            onChange={(e) => setReason(e.target.value)}
             maxLength={500}
-            isDisabled={loading}
-            minRows={2}
-            className="w-full"
+            disabled={loading}
+            rows={2}
+            className="w-full resize-y rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-[#FF6B2B] focus:ring-1 focus:ring-[#FF6B2B]/40 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500"
           />
           <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="flat"
-              color="default"
-              isDisabled={loading}
-              onPress={() => { setExpanded(false); setReason(''); setError(null); }}
+            <button
+              type="button"
+              className={neutralBtn}
+              disabled={loading}
+              onClick={() => { setExpanded(false); setReason(''); setError(null); }}
             >
               Back
-            </Button>
-            <Button
-              size="sm"
-              color="danger"
-              variant="flat"
-              isLoading={loading}
-              onPress={handleCancelConfirm}
-            >
+            </button>
+            <button type="button" className={dangerBtn} disabled={loading} onClick={() => { void handleCancelConfirm(); }}>
+              {loading && <Spinner />}
               Confirm cancel
-            </Button>
+            </button>
           </div>
-          {error && <p className="text-xs text-danger w-full">{error}</p>}
+          {error && <p className="w-full text-xs text-red-600 dark:text-red-400">{error}</p>}
         </div>
       )}
-      {!expanded && error && <p className="text-xs text-danger">{error}</p>}
+      {!expanded && error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
     </div>
   );
 }

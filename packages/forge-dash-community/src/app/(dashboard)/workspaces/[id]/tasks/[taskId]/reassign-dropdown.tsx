@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Select, SelectItem } from '@heroui/react';
 import { reassignTaskAction } from '@/actions/tasks';
+import { fieldClass } from '@/lib/form-ui';
 import type { HubAgent } from '@/lib/hub';
 
 interface Props {
@@ -12,27 +12,20 @@ interface Props {
   agents: HubAgent[];
 }
 
-/** Sentinel key used to represent "return to FM queue" (agentId: null). */
+/** Sentinel value for "return to FM queue" (agentId: null). */
 const CLEAR_KEY = '__clear__';
 
 export function ReassignDropdown({ workspaceId, taskId, currentAgentId, agents }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const items: { key: string; label: string; isSpecial?: boolean }[] = [
-    { key: CLEAR_KEY, label: 'Return to FM queue', isSpecial: true },
-    ...agents.map((a) => ({ key: a.name, label: a.name })),
-  ];
-
-  // Only pre-select if the currentAgentId matches an item key — personality IDs
-  // won't match registered agent names and would cause react-aria warnings.
-  const matchedKey = currentAgentId && items.some((i) => i.key === currentAgentId)
+  const matchedKey = currentAgentId && agents.some((a) => a.name === currentAgentId)
     ? currentAgentId
-    : null;
+    : '';
 
-  async function handleChange(key: string) {
-    if (!key) return;
-    const agentId = key === CLEAR_KEY ? null : key;
+  async function handleChange(value: string) {
+    if (!value) return;
+    const agentId = value === CLEAR_KEY ? null : value;
     setLoading(true);
     setError(null);
     const result = await reassignTaskAction(workspaceId, taskId, agentId);
@@ -41,35 +34,32 @@ export function ReassignDropdown({ workspaceId, taskId, currentAgentId, agents }
   }
 
   return (
-    <div className="flex flex-col gap-1">
-      {currentAgentId && !matchedKey && (
-        <p className="text-xs text-default-400">Current: {currentAgentId}</p>
-      )}
-      <Select
-        size="sm"
-        label="Reassign agent"
-        placeholder="Choose agent or clear"
-        defaultSelectedKeys={matchedKey ? [matchedKey] : []}
-        isDisabled={loading}
-        onSelectionChange={(keys) => {
-          const val = Array.from(keys)[0];
-          if (val) handleChange(String(val));
-        }}
-        className="w-48"
-        aria-label="Reassign task to agent"
-        items={items}
-      >
-        {(item) => (
-          <SelectItem
-            key={item.key}
-            className={item.isSpecial ? 'text-default-400' : undefined}
-            textValue={item.label}
-          >
-            {item.label}
-          </SelectItem>
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor="reassign-agent" className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+        Reassign agent
+        {currentAgentId && !matchedKey && (
+          <span className="ml-2 text-zinc-400 dark:text-zinc-500">current: {currentAgentId}</span>
         )}
-      </Select>
-      {error && <p className="text-xs text-danger">{error}</p>}
+      </label>
+      <select
+        id="reassign-agent"
+        defaultValue={matchedKey}
+        disabled={loading}
+        onChange={(e) => { void handleChange(e.target.value); }}
+        className={`${fieldClass(false)} w-56`}
+        aria-label="Reassign task to agent"
+      >
+        <option value="" disabled>
+          Choose agent or clear
+        </option>
+        <option value={CLEAR_KEY}>Return to FM queue</option>
+        {agents.map((a) => (
+          <option key={a.id} value={a.name}>
+            {a.name}
+          </option>
+        ))}
+      </select>
+      {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
     </div>
   );
 }
