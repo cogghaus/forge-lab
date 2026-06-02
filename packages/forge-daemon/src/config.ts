@@ -62,6 +62,11 @@ const ConfigSchema = z.object({
   // Must match an id registered in the PersonalityRegistry.
   // Defaults to 'forge-master'. Ignored in worker mode.
   dispatcherPersonality: z.string().optional(),
+  // Controls which workspaces FM triages when dispatcherMode is true.
+  // 'single' (default): triage only the workspace set via workspaceId (back-compat).
+  // 'all': enumerate all active workspaces the device's owning account is a member of
+  //        and triage each inbox in sequence. workspaceId is optional in this mode.
+  dispatcherWorkspaceMode: z.enum(['single', 'all']).default('single'),
 });
 
 export type DaemonConfig = z.infer<typeof ConfigSchema>;
@@ -85,5 +90,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     gitUserName: env['FORGE_DAEMON_GIT_NAME'],
     gitUserEmail: env['FORGE_DAEMON_GIT_EMAIL'],
     dispatcherPersonality: env['FORGE_DAEMON_DISPATCHER_PERSONALITY'],
+    dispatcherWorkspaceMode: env['FORGE_DAEMON_DISPATCHER_SCOPE'],
   });
 }

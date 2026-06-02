@@ -1200,3 +1200,139 @@ describe('GET /workspaces/:workspaceId/dispatcher-log', () => {
     expect(body.comments).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /dispatcher/workspaces — FM workspace enumeration (ADR-004)
+// ---------------------------------------------------------------------------
+
+describe('GET /dispatcher/workspaces', () => {
+  let hub: Hub;
+  let cookie: string;
+  let fmToken: string;
+  let workerToken: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+
+    const fmRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' },
+    });
+    fmToken = (fmRes.json() as { token: string }).token;
+
+    const workerRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'furnace-worker', agentId: 'furnace', deviceType: 'worker' },
+    });
+    workerToken = (workerRes.json() as { token: string }).token;
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('returns 401 without device auth', async () => {
+    const res = await hub.fastify.inject({ method: 'GET', url: '/dispatcher/workspaces' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 401 with user session (not device token)', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/dispatcher/workspaces',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 403 for worker-type device', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/dispatcher/workspaces',
+      headers: { authorization: `Bearer ${workerToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+  });
+
+  it('returns empty array when no workspaces exist', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/dispatcher/workspaces',
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]);
+  });
+
+  it('returns workspace IDs where the owning account is a member', async () => {
+    const ws1Id = await createWorkspace(hub, cookie, { name: 'Workspace One', slug: 'ws-one' });
+    const ws2Id = await createWorkspace(hub, cookie, { name: 'Workspace Two', slug: 'ws-two' });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/dispatcher/workspaces',
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = (res.json() as { id: string }[]).map((w) => w.id);
+    expect(ids).toContain(ws1Id);
+    expect(ids).toContain(ws2Id);
+  });
+
+  it('excludes archived workspaces', async () => {
+    const activeId = await createWorkspace(hub, cookie, { name: 'Active WS', slug: 'active-ws' });
+    const archivedId = await createWorkspace(hub, cookie, { name: 'Archived WS', slug: 'archived-ws' });
+
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${archivedId}`,
+      headers: { cookie },
+      payload: { status: 'archived' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/dispatcher/workspaces',
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = (res.json() as { id: string }[]).map((w) => w.id);
+    expect(ids).toContain(activeId);
+    expect(ids).not.toContain(archivedId);
+  });
+
+  it('excludes workspaces the owning account is not a member of', async () => {
+    const ownedId = await createWorkspace(hub, cookie, { name: 'Owned WS', slug: 'owned-ws' });
+
+    // Workspace owned by a second user — FM device owner has no membership
+    const { userId: otherId } = await setupSecondUser(hub);
+    const otherWsId = nanoid();
+    await hub.db.insert(schema.workspaces).values({
+      id: otherWsId,
+      name: 'Other WS',
+      slug: 'other-ws',
+      ownerUserId: otherId,
+    });
+    await hub.db.insert(schema.workspaceMembers).values({
+      workspaceId: otherWsId,
+      userId: otherId,
+      role: 'owner',
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/dispatcher/workspaces',
+      headers: { authorization: `Bearer ${fmToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = (res.json() as { id: string }[]).map((w) => w.id);
+    expect(ids).toContain(ownedId);
+    expect(ids).not.toContain(otherWsId);
+  });
+});

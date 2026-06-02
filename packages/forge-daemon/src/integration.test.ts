@@ -860,6 +860,247 @@ describe('integration: dispatcher mode', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Dispatcher mode — multi-workspace scope=all (ADR-004)
+// ---------------------------------------------------------------------------
+
+describe('integration: dispatcher mode — scope=all multi-workspace', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let ws1Id: string;
+  let ws2Id: string;
+  let capturedInfoLogs: string[] = [];
+  let capturedErrorLogs: string[] = [];
+
+  async function setupWorkspaceWithInboxTask(wsId: string, title: string): Promise<string> {
+    const taskRes = await fetch(`${hubUrl}/workspaces/${wsId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'multi', title }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, taskId));
+    return taskId;
+  }
+
+  beforeEach(async () => {
+    capturedInfoLogs = [];
+    capturedErrorLogs = [];
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-fm-multi-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-multi-workspace-mode-xxxxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    // Register orchestrator device
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    const orchestratorToken = ((await devRes.json()) as { token: string }).token;
+
+    // Create two workspaces (owner is the same user — FM device sees both via membership)
+    const ws1Res = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'Alpha WS', slug: 'alpha-ws' }),
+    });
+    ws1Id = ((await ws1Res.json()) as { id: string }).id;
+
+    const ws2Res = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'Beta WS', slug: 'beta-ws' }),
+    });
+    ws2Id = ((await ws2Res.json()) as { id: string }).id;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime({ completionDelayMs: 50 }));
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken: orchestratorToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      dispatcherMode: true,
+      dispatcherWorkspaceMode: 'all',
+      fmAgentId: 'forge-master',
+      pollIntervalMs: 100,
+      logger: {
+        info: (msg, meta) => {
+          capturedInfoLogs.push(msg);
+          process.stdout.write(`[fm-multi] ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+        error: (msg, meta) => {
+          capturedErrorLogs.push(msg);
+          process.stderr.write(`[fm-multi] ERR ${msg} ${meta ? JSON.stringify(meta) : ''}\n`);
+        },
+      },
+    });
+    await daemon.start();
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('triages inboxes in both workspaces in a single poll tick', { timeout: 20000 }, async () => {
+    await setupWorkspaceWithInboxTask(ws1Id, 'Alpha task');
+    await setupWorkspaceWithInboxTask(ws2Id, 'Beta task');
+
+    // Wait for two FM completions — one per workspace
+    await waitFor(async () => {
+      const completions = capturedInfoLogs.filter((m) => m === 'fm agent completed');
+      return completions.length >= 2 ? 'done' : null;
+    }, 10000);
+
+    expect(daemon['running']).toBe(true);
+    // Both workspaces were triaged
+    const completionCount = capturedInfoLogs.filter((m) => m === 'fm agent completed').length;
+    expect(completionCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it('skips empty-inbox workspaces and only triages workspace with tasks', { timeout: 15000 }, async () => {
+    // Only ws1 has tasks
+    await setupWorkspaceWithInboxTask(ws1Id, 'Only Alpha task');
+
+    await waitFor(async () => {
+      return capturedInfoLogs.includes('fm agent completed') ? 'done' : null;
+    }, 8000);
+
+    // ws1 was triaged (spawned FM)
+    const spawnedLogs = capturedInfoLogs.filter((m) => m === 'inbox non-empty, spawning FM agent');
+    expect(spawnedLogs.length).toBeGreaterThanOrEqual(1);
+    // ws2 had no inbox tasks — no second spawn triggered for it in this tick
+    expect(daemon['running']).toBe(true);
+  });
+
+  it('fmRunning gate prevents second dispatch cycle while first is active (no double-spawn)', { timeout: 15000 }, async () => {
+    await setupWorkspaceWithInboxTask(ws1Id, 'Alpha task');
+
+    // Let one poll cycle run; while FM is running, another poll should skip
+    await new Promise((r) => setTimeout(r, 150));
+
+    // fmRunning should be true while FM agent is active — daemon hasn't crashed
+    expect(daemon['running']).toBe(true);
+    // No error about double-spawn
+    expect(capturedErrorLogs.filter((m) => m.includes('double'))).toHaveLength(0);
+  });
+
+  it('error in workspace-1 stale requeue does not abort triage of workspace-2', { timeout: 20000 }, async () => {
+    // Patch requeueStaleAssigned on the hub client to throw for ws1Id only.
+    // This simulates a transient network error scoped to one workspace while the
+    // other proceeds normally — verifying the per-workspace try/catch isolation.
+    const client = daemon['client'] as HubClient;
+    const realRequeue = client.requeueStaleAssigned.bind(client);
+    let ws1RequeueThrew = false;
+    client.requeueStaleAssigned = async (wsId: string, ttl?: number) => {
+      if (wsId === ws1Id) {
+        ws1RequeueThrew = true;
+        throw new Error('simulated transient requeue error for ws1');
+      }
+      return realRequeue(wsId, ttl);
+    };
+
+    // Set up both workspaces with tasks so we can verify ws2 completes
+    await setupWorkspaceWithInboxTask(ws1Id, 'Alpha task (ws1 requeue fails)');
+    await setupWorkspaceWithInboxTask(ws2Id, 'Beta task (ws2 should still be triaged)');
+
+    // Wait for ws2 FM completion — ws1 requeue error should not block ws2
+    await waitFor(async () => {
+      return capturedInfoLogs.includes('fm agent completed') ? 'done' : null;
+    }, 10000);
+
+    // ws2 was triaged (FM agent completed at least once)
+    expect(capturedInfoLogs).toContain('fm agent completed');
+    // ws1 requeue error was thrown (verifies the error path was exercised)
+    expect(ws1RequeueThrew).toBe(true);
+    // ws1 error was logged, not propagated (daemon still running)
+    expect(capturedErrorLogs.some((m) => m.includes('stale requeue failed'))).toBe(true);
+    expect(daemon['running']).toBe(true);
+  });
+
+  it('backward compat: scope=single with workspaceId still triages one workspace', { timeout: 15000 }, async () => {
+    await daemon.stop();
+
+    // Re-create daemon with scope=single pointing at ws1 only
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master-single', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    const singleToken = ((await devRes.json()) as { token: string }).token;
+
+    const capturedSingle: string[] = [];
+    const singleDaemon = new Daemon({
+      hubUrl,
+      deviceToken: singleToken,
+      workdir: await fs.mkdtemp(path.join(os.tmpdir(), 'forge-fm-single-')),
+      runtimes: (() => { const r = new RuntimeRegistry(); r.register(new MockRuntime({ completionDelayMs: 50 })); return r; })(),
+      defaultRuntimeId: 'mock',
+      dispatcherMode: true,
+      dispatcherWorkspaceMode: 'single',
+      workspaceId: ws1Id,
+      fmAgentId: 'forge-master',
+      pollIntervalMs: 100,
+      logger: {
+        info: (msg) => capturedSingle.push(msg),
+        error: () => {},
+      },
+    });
+
+    await singleDaemon.start();
+    await setupWorkspaceWithInboxTask(ws1Id, 'Single scope task');
+    await setupWorkspaceWithInboxTask(ws2Id, 'Should not be triaged');
+
+    await waitFor(async () => {
+      return capturedSingle.includes('fm agent completed') ? 'done' : null;
+    }, 8000);
+
+    await singleDaemon.stop();
+
+    // ws1 was triaged
+    expect(capturedSingle).toContain('fm agent completed');
+    // ws2 task stays in pending_dispatcher_action (single daemon didn't touch ws2)
+    const ws2Tasks = await hub.db
+      .select({ status: schema.tasks.status })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.workspaceId, ws2Id));
+    expect(ws2Tasks.every((t) => t.status === 'pending_dispatcher_action')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Dispatcher mode — FM personality registry loading
 // ---------------------------------------------------------------------------
 

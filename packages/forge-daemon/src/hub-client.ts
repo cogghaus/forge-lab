@@ -224,6 +224,11 @@ export class HubClient extends EventEmitter {
   // FM / orchestrator methods
   // ---------------------------------------------------------------------------
 
+  /** List workspaces the FM device is authorized to triage. Requires orchestrator device token. */
+  listWorkspaces(): Promise<{ id: string }[]> {
+    return this.request<{ id: string }[]>('GET', '/dispatcher/workspaces');
+  }
+
   /** Assign a task to a specific agentId. Requires orchestrator device token. */
   async assignTask(workspaceId: string, taskId: string, agentId: string): Promise<void> {
     await this.request<{ ok: boolean }>(
