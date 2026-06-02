@@ -159,9 +159,6 @@ export default function WorkspaceSettingsPage() {
   if (loadError) {
     return (
       <div className="max-w-lg">
-        <div className="flex items-center gap-3 mb-8">
-          <h1 className="font-mono text-[18px] font-bold">Settings</h1>
-        </div>
         <div
           className="rounded-[10px] px-5 py-10 text-center"
           style={{ background: '#111116', border: '1px solid rgba(255,255,255,0.06)' }}
@@ -176,18 +173,11 @@ export default function WorkspaceSettingsPage() {
 
   return (
     <div className="max-w-lg">
-      {/* Page header */}
-      <div className="flex items-center gap-3 mb-8">
-        <h1 className="font-mono text-[18px] font-bold">Settings</h1>
-        {workspace && (
-          <span
-            className="font-mono text-[11px]"
-            style={{ color: 'rgba(245,240,235,0.3)' }}
-          >
-            {workspace.slug}
-          </span>
-        )}
-      </div>
+      {workspace && (
+        <div className="mb-6 font-mono text-[11px]" style={{ color: 'rgba(245,240,235,0.3)' }}>
+          {workspace.slug}
+        </div>
+      )}
 
       {/* General settings form */}
       <section className="mb-8">

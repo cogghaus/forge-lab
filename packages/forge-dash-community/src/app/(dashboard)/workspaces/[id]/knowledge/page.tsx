@@ -93,50 +93,34 @@ export default async function KnowledgePage({ params, searchParams }: Props) {
 
   if (!wsRes.ok) redirect('/workspaces');
 
-  const workspace = wsRes.data;
   const docs = docsRes.ok ? docsRes.data.docs : [];
 
   const base = `/workspaces/${workspaceId}`;
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Link href="/workspaces" className="text-default-500 hover:text-foreground text-sm">
-            Workspaces
-          </Link>
-          <span className="text-default-400">/</span>
-          <Link href={base} className="text-default-500 hover:text-foreground text-sm">
-            {workspace.name}
-          </Link>
-          <span className="text-default-400">/</span>
-          <h1 className="text-2xl font-bold">Knowledge</h1>
-        </div>
-
-        {/* Show all / active toggle */}
-        <div className="flex items-center gap-2 text-sm">
-          <Link
-            href={`${base}/knowledge${activeCategory ? `?category=${activeCategory}` : ''}`}
-            className={`px-3 py-1.5 rounded-lg transition-colors ${
-              !showAll
-                ? 'bg-white/10 text-foreground'
-                : 'text-default-400 hover:text-foreground'
-            }`}
-          >
-            Active
-          </Link>
-          <Link
-            href={`${base}/knowledge?${activeCategory ? `category=${activeCategory}&` : ''}status=all`}
-            className={`px-3 py-1.5 rounded-lg transition-colors ${
-              showAll
-                ? 'bg-white/10 text-foreground'
-                : 'text-default-400 hover:text-foreground'
-            }`}
-          >
-            All
-          </Link>
-        </div>
+      {/* Show all / active toggle */}
+      <div className="flex items-center justify-end gap-2 text-sm">
+        <Link
+          href={`${base}/knowledge${activeCategory ? `?category=${activeCategory}` : ''}`}
+          className={`rounded-lg px-3 py-1.5 transition-colors ${
+            !showAll
+              ? 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100'
+              : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+          }`}
+        >
+          Active
+        </Link>
+        <Link
+          href={`${base}/knowledge?${activeCategory ? `category=${activeCategory}&` : ''}status=all`}
+          className={`rounded-lg px-3 py-1.5 transition-colors ${
+            showAll
+              ? 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100'
+              : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+          }`}
+        >
+          All
+        </Link>
       </div>
 
       {/* Category tabs */}
@@ -146,7 +130,7 @@ export default async function KnowledgePage({ params, searchParams }: Props) {
           className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
             activeCategory === null
               ? 'bg-[#FF6B2B]/20 text-[#FF6B2B] border border-[#FF6B2B]/30'
-              : 'text-default-400 hover:text-foreground border border-white/[0.06] hover:border-white/[0.12]'
+              : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 border border-white/[0.06] hover:border-white/[0.12]'
           }`}
         >
           All
@@ -158,7 +142,7 @@ export default async function KnowledgePage({ params, searchParams }: Props) {
             className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
               activeCategory === cat.id
                 ? 'bg-[#FF6B2B]/20 text-[#FF6B2B] border border-[#FF6B2B]/30'
-                : 'text-default-400 hover:text-foreground border border-white/[0.06] hover:border-white/[0.12]'
+                : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 border border-white/[0.06] hover:border-white/[0.12]'
             }`}
           >
             {cat.label}

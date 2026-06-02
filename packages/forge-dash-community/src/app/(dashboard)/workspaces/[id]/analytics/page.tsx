@@ -188,12 +188,7 @@ export default function WorkspaceAnalyticsPage() {
 
   return (
     <div className="max-w-2xl">
-      {/* Page header */}
-      <div className="flex items-center gap-3 mb-6">
-        <h1 className="font-mono text-[18px] font-bold">Analytics</h1>
-      </div>
-
-      {/* Tab nav */}
+      {/* Sub-tab nav (Overview / Agents) */}
       <div
         className="flex gap-1 mb-5 p-1 rounded-lg"
         style={{ background: 'rgba(255,255,255,0.04)', width: 'fit-content' }}

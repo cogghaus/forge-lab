@@ -1,6 +1,6 @@
 {
   "name": "@forge-lab/forge-dash-community",
-  "version": "0.8.10",
+  "version": "0.8.11",
   "private": true,
   "scripts": {
     "dev": "next dev --port 3001 --hostname 0.0.0.0",
