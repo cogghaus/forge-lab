@@ -3,6 +3,8 @@ import { redirect } from 'next/navigation';
 import {
   hubFetch,
   type HubActivityEvent,
+  type HubAgentPerf,
+  type HubAgentPerfResponse,
   type HubDevice,
   type HubGoal,
   type HubTask,
@@ -78,6 +80,18 @@ export default async function WorkspaceTasksPage({
   const selectedDevice = selectedAgentId
     ? devices.find((d) => d.id === selectedAgentId) ?? null
     : null;
+
+  // 7-day performance for the selected agent's persona (keyed by agentId).
+  let selectedPerf: HubAgentPerf | null = null;
+  if (selectedDevice?.agentId) {
+    const perfRes = await hubFetch<HubAgentPerfResponse>(
+      `/agents/performance?workspaceId=${workspaceId}&window=7`,
+      { cookie: cookieHeader },
+    );
+    if (perfRes.ok) {
+      selectedPerf = perfRes.data.agents.find((a) => a.agentId === selectedDevice.agentId) ?? null;
+    }
+  }
 
   return (
     <div className="flex items-start gap-6">
@@ -174,6 +188,7 @@ export default async function WorkspaceTasksPage({
         device={selectedDevice}
         tasks={tasks}
         activity={activity}
+        perf={selectedPerf}
       />
     )}
     </div>
