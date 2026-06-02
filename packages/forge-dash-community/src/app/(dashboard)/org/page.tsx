@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { hubFetch, type HubMe, type HubWorkspace } from '@/lib/hub';
+import { hubFetch, type HubDevice, type HubMe, type HubWorkspace } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
+import { AgentDaemonsPanel } from './_components/agent-daemons-panel';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -79,9 +80,10 @@ export default async function OrgPage() {
   if (!session) redirect('/login');
 
   const cookieHeader = `${SESSION_COOKIE}=${session}`;
-  const [meRes, workspacesRes] = await Promise.all([
+  const [meRes, workspacesRes, devicesRes] = await Promise.all([
     hubFetch<HubMe>('/auth/me', { cookie: cookieHeader }),
     hubFetch<{ workspaces: HubWorkspace[] }>('/workspaces', { cookie: cookieHeader }),
+    hubFetch<{ devices: HubDevice[] }>('/devices', { cookie: cookieHeader }),
   ]);
 
   if (!meRes.ok) redirect('/login');
@@ -89,6 +91,7 @@ export default async function OrgPage() {
   const me = meRes.data;
   const workspaces = workspacesRes.ok ? (workspacesRes.data?.workspaces ?? []) : [];
   const workspacesFetchFailed = !workspacesRes.ok;
+  const devices = devicesRes.ok ? (devicesRes.data?.devices ?? []) : [];
 
   return (
     <div className="max-w-2xl">
@@ -184,6 +187,32 @@ export default async function OrgPage() {
               ))}
             </ul>
           )}
+        </div>
+      </section>
+
+      {/* Agent daemons — register, rename, rotate tokens, deregister */}
+      <section className="mt-8">
+        <h2
+          className="font-mono text-[13px] font-semibold mb-3"
+          style={{ color: 'rgba(245,240,235,0.6)' }}
+        >
+          Agent daemons
+        </h2>
+        <AgentDaemonsPanel devices={devices} />
+        <div
+          className="mt-3 rounded-[10px] px-5 py-4"
+          style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.05)' }}
+        >
+          <p className="font-mono text-[11px] mb-1.5" style={{ color: 'rgba(245,240,235,0.4)' }}>
+            Register a daemon
+          </p>
+          <p className="font-mono text-[11px]" style={{ color: 'rgba(245,240,235,0.22)' }}>
+            Use{' '}
+            <code className="px-1 rounded" style={{ background: 'rgba(255,255,255,0.06)' }}>
+              forge-daemon register
+            </code>{' '}
+            from your agent host to create a new device token and link it to your account.
+          </p>
         </div>
       </section>
     </div>

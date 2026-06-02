@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { nanoid } from 'nanoid';
+import { eq } from 'drizzle-orm';
 import { schema } from '@forge-lab/core';
 import { createHub, type Hub } from '../app.js';
 import { TEST_HUB_CONFIG, setupAdmin } from '../test-utils.js';
+import { createSession, listSessions } from '../auth/sessions.js';
 
 
 describe('POST /auth/register', () => {
@@ -614,5 +616,35 @@ describe('Session management (/auth/sessions)', () => {
     const { sessions } = res.json() as { sessions: { current: boolean }[] };
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.current).toBe(true);
+  });
+
+  it('caps a user\'s sessions on repeated logins (GC + prune)', async () => {
+    const { id: userId } = await setupAdmin(hub); // 1 session from the login
+    let lastToken = '';
+    for (let i = 0; i < 25; i++) {
+      const s = await createSession(hub.db, userId, 24, { userAgent: `client-${i}` });
+      lastToken = s.token;
+    }
+    const sessions = await listSessions(hub.db, userId, lastToken);
+    // Unbounded growth is prevented: count never exceeds the cap (20).
+    expect(sessions.length).toBe(20);
+    // The most recent login is retained and flagged current.
+    expect(sessions.some((s) => s.current)).toBe(true);
+  });
+
+  it('prunes expired sessions on login', async () => {
+    const { id: userId } = await setupAdmin(hub);
+    // An already-expired session (negative TTL).
+    await createSession(hub.db, userId, -1, { userAgent: 'stale' });
+    // A fresh login triggers pruneUserSessions, deleting the expired row.
+    const fresh = await createSession(hub.db, userId, 24, { userAgent: 'fresh' });
+    const rows = await hub.db
+      .select()
+      .from(schema.sessions)
+      .where(eq(schema.sessions.userId, userId))
+      .all();
+    expect(rows.some((r) => r.userAgent === 'stale')).toBe(false);
+    expect(rows.some((r) => r.userAgent === 'fresh')).toBe(true);
+    expect(fresh.token).toBeTruthy();
   });
 });
