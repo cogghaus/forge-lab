@@ -1,4 +1,4 @@
-import { eq, and, gt, ne, lt, or, isNull } from 'drizzle-orm';
+import { eq, and, gt, ne, lt, or, isNull, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
@@ -18,6 +18,43 @@ export interface SessionMeta {
 
 /** Only bump last_seen_at when it's at least this stale, to avoid a write per request. */
 const TOUCH_THROTTLE_MS = 5 * 60 * 1000;
+
+/** Max non-expired sessions kept per user; older ones are pruned on new login. */
+const SESSION_CAP = 20;
+
+/**
+ * Housekeeping run on each login: delete the user's expired sessions, then if
+ * they still have more than SESSION_CAP, drop the oldest (by last activity) so
+ * programmatic / repeated logins can't grow the table unbounded.
+ */
+export async function pruneUserSessions(db: Db, userId: string): Promise<void> {
+  await db
+    .delete(schema.sessions)
+    .where(and(eq(schema.sessions.userId, userId), lt(schema.sessions.expiresAt, new Date())))
+    .run();
+
+  const rows = await db
+    .select({
+      id: schema.sessions.id,
+      lastSeenAt: schema.sessions.lastSeenAt,
+      createdAt: schema.sessions.createdAt,
+    })
+    .from(schema.sessions)
+    .where(eq(schema.sessions.userId, userId))
+    .all();
+
+  if (rows.length <= SESSION_CAP) return;
+
+  const overflow = rows
+    .map((r) => ({ id: r.id, ts: (r.lastSeenAt ?? r.createdAt).getTime() }))
+    .sort((a, b) => b.ts - a.ts) // newest first
+    .slice(SESSION_CAP)
+    .map((r) => r.id);
+
+  if (overflow.length > 0) {
+    await db.delete(schema.sessions).where(inArray(schema.sessions.id, overflow)).run();
+  }
+}
 
 export async function createSession(
   db: Db,
@@ -39,6 +76,8 @@ export async function createSession(
     ipAddress: meta.ipAddress ?? null,
     lastSeenAt: now,
   });
+  // Housekeeping: GC expired + cap the user's session count (best-effort).
+  await pruneUserSessions(db, userId).catch(() => {});
   return { id, userId, token, expiresAt };
 }
 
