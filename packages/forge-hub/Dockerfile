@@ -8,23 +8,27 @@ WORKDIR /app
 # Copy lockfile + workspace manifests for layer caching
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json ./
 COPY tsconfig.base.json ./
-# Packages we build
-COPY packages/forge-core/package.json  packages/forge-core/tsconfig.json  packages/forge-core/tsconfig.build.json  packages/forge-core/
-COPY packages/forge-hub/package.json   packages/forge-hub/tsconfig.json   packages/forge-hub/tsconfig.build.json   packages/forge-hub/
+# Packages we build (core, agents, hub)
+COPY packages/forge-core/package.json    packages/forge-core/tsconfig.json    packages/forge-core/tsconfig.build.json    packages/forge-core/
+COPY packages/forge-hub/package.json     packages/forge-hub/tsconfig.json     packages/forge-hub/tsconfig.build.json     packages/forge-hub/
+COPY packages/forge-agents/package.json  packages/forge-agents/tsconfig.json  packages/forge-agents/tsconfig.build.json  packages/forge-agents/
 # Other workspace members — package.json only (pnpm workspace resolution)
-COPY packages/forge-agents/package.json          packages/forge-agents/
 COPY packages/forge-daemon/package.json          packages/forge-daemon/
 COPY packages/forge-dash-community/package.json  packages/forge-dash-community/
 
 # Full install (dev deps needed for tsc)
 RUN pnpm install --frozen-lockfile
 
-# Copy source for the two packages we build
+# Copy source for the packages we build (+ agents personalities the hub serves)
 COPY packages/forge-core/src/ packages/forge-core/src/
 COPY packages/forge-hub/src/  packages/forge-hub/src/
+COPY packages/forge-agents/src/ packages/forge-agents/src/
+COPY packages/forge-agents/personalities/ packages/forge-agents/personalities/
 
-# Build core first (hub depends on it), then hub
-RUN pnpm --filter @forge-lab/core build && pnpm --filter @forge-lab/hub build
+# Build core first, then agents (hub imports it), then hub
+RUN pnpm --filter @forge-lab/core build \
+  && pnpm --filter @forge-lab/agents build \
+  && pnpm --filter @forge-lab/hub build
 
 # ── Stage 2: production deps only ────────────────────────────────────
 FROM node:20-slim AS deps
@@ -58,14 +62,19 @@ COPY --from=deps /app/pnpm-workspace.yaml ./
 
 # Production node_modules
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/packages/forge-core/node_modules ./packages/forge-core/node_modules
-COPY --from=deps /app/packages/forge-hub/node_modules  ./packages/forge-hub/node_modules
+COPY --from=deps /app/packages/forge-core/node_modules   ./packages/forge-core/node_modules
+COPY --from=deps /app/packages/forge-hub/node_modules    ./packages/forge-hub/node_modules
+COPY --from=deps /app/packages/forge-agents/node_modules ./packages/forge-agents/node_modules
 
 # Built output + package.json (for module resolution)
 COPY --from=build /app/packages/forge-core/dist        ./packages/forge-core/dist
 COPY --from=build /app/packages/forge-core/package.json ./packages/forge-core/
 COPY --from=build /app/packages/forge-hub/dist          ./packages/forge-hub/dist
 COPY --from=build /app/packages/forge-hub/package.json  ./packages/forge-hub/
+# Agents: built dist + the personality markdown the hub serves
+COPY --from=build /app/packages/forge-agents/dist          ./packages/forge-agents/dist
+COPY --from=build /app/packages/forge-agents/personalities ./packages/forge-agents/personalities
+COPY --from=build /app/packages/forge-agents/package.json  ./packages/forge-agents/
 
 # libsql data directory
 RUN mkdir -p /data && chown node:node /data

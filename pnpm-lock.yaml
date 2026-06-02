@@ -168,6 +168,9 @@ importers:
       '@fastify/websocket':
         specifier: ^11.2.0
         version: 11.2.0
+      '@forge-lab/agents':
+        specifier: workspace:*
+        version: link:../forge-agents
       '@forge-lab/core':
         specifier: workspace:*
         version: link:../forge-core

@@ -151,6 +151,34 @@ describe('/agents routes', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('GET /agents/:agentId/personality requires auth', async () => {
+    const res = await hub.fastify.inject({ method: 'GET', url: '/agents/architect/personality' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('GET /agents/:agentId/personality returns a built-in personality', async () => {
+    const { cookie } = await setup(hub);
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/agents/architect/personality',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { id: string; name: string; systemPrompt: string };
+    expect(body.id).toBe('architect');
+    expect(body.systemPrompt.length).toBeGreaterThan(0);
+  });
+
+  it('GET /agents/:agentId/personality returns 404 for an agent with no personality file', async () => {
+    const { cookie } = await setup(hub);
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/agents/anvil/personality',
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
   it('POST /agents requires auth', async () => {
     const res = await hub.fastify.inject({
       method: 'POST',
