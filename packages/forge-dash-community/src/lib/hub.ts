@@ -152,6 +152,18 @@ export interface HubDevice {
   status: 'active' | 'deregistered';
 }
 
+/** One of a user's authorized logins (browser/app session). */
+export interface HubSession {
+  id: string;
+  userAgent: string | null;
+  ipAddress: string | null;
+  createdAt: string;
+  lastSeenAt: string | null;
+  expiresAt: string;
+  /** True for the session making the current request. */
+  current: boolean;
+}
+
 /** A single dispatcher decision comment from the FM triage log. */
 export interface HubDispatcherComment {
   id: string;

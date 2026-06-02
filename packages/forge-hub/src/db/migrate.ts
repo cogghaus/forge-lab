@@ -310,6 +310,16 @@ ALTER TABLE workspaces ADD COLUMN repo_url TEXT;
 ALTER TABLE workspaces ADD COLUMN repo_branch TEXT;
 `,
   },
+  {
+    name: '0010_session_metadata',
+    sql: `
+-- Session metadata so users can see and revoke their own logins.
+-- user_agent and ip are captured at login, last_seen_at is bumped on use.
+ALTER TABLE sessions ADD COLUMN user_agent TEXT;
+ALTER TABLE sessions ADD COLUMN ip_address TEXT;
+ALTER TABLE sessions ADD COLUMN last_seen_at INTEGER;
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {
