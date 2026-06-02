@@ -12,7 +12,7 @@ import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
 import { NewTaskButton } from './new-task-button';
 import { GoalKanban } from './_components/goal-kanban';
 import { ActivityStreamPanel } from './_components/activity-stream';
-import { DevicesPanel } from './_components/devices-panel';
+import { AgentDetailPanel } from './_components/agent-detail-panel';
 
 const ONLINE_THRESHOLD_MS = 5 * 60 * 1000;
 
@@ -31,8 +31,15 @@ function Stat({ label, value, color }: { label: string; value: number | string; 
   );
 }
 
-export default async function WorkspaceTasksPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function WorkspaceTasksPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ agent?: string }>;
+}) {
   const { id: workspaceId } = await params;
+  const { agent: selectedAgentId } = await searchParams;
   const session = await getSessionCookie();
   if (!session) redirect('/login');
 
@@ -68,8 +75,13 @@ export default async function WorkspaceTasksPage({ params }: { params: Promise<{
     done: countStatus(tasks, ['completed']),
   };
 
+  const selectedDevice = selectedAgentId
+    ? devices.find((d) => d.id === selectedAgentId) ?? null
+    : null;
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex items-start gap-6">
+    <div className="flex min-w-0 flex-1 flex-col gap-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
@@ -118,19 +130,13 @@ export default async function WorkspaceTasksPage({ params }: { params: Promise<{
       {/* Goal kanban */}
       <GoalKanban tasks={tasks} goals={goals} workspaceId={workspaceId} />
 
-      {/* Activity stream + Devices panels — collapses to one column on small screens */}
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[1fr_260px]">
-        <ActivityStreamPanel
-          activity={activity}
-          isLive={tasks.some((t) => t.status === 'in_progress')}
-          workspaceId={workspaceId}
-          deviceNames={new Map(devices.map((d) => [d.id, d.name]))}
-        />
-        <DevicesPanel
-          devices={devices}
-          queueDepth={tasks.filter((t) => t.status === 'pending_agent').length}
-        />
-      </div>
+      {/* Activity stream */}
+      <ActivityStreamPanel
+        activity={activity}
+        isLive={tasks.some((t) => t.status === 'in_progress')}
+        workspaceId={workspaceId}
+        deviceNames={new Map(devices.map((d) => [d.id, d.name]))}
+      />
 
       {/* Secondary navigation */}
       <div className="flex flex-wrap items-center gap-2">
@@ -160,6 +166,16 @@ export default async function WorkspaceTasksPage({ params }: { params: Promise<{
           Goal tree
         </Link>
       </div>
+    </div>
+
+    {selectedDevice && (
+      <AgentDetailPanel
+        workspaceId={workspaceId}
+        device={selectedDevice}
+        tasks={tasks}
+        activity={activity}
+      />
+    )}
     </div>
   );
 }
