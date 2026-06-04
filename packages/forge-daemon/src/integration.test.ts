@@ -932,8 +932,8 @@ describe('integration: dispatcher circuit breaker', () => {
       pollIntervalMs: 80,
       fmCooldownMs: 0, // disabled so circuit breaker cycles run back-to-back
       logger: {
-        info: (msg, meta) => { capturedInfoLogs.push(msg); },
-        error: (msg, meta) => { capturedErrorLogs.push(msg); },
+        info: (msg) => { capturedInfoLogs.push(msg); },
+        error: (msg) => { capturedErrorLogs.push(msg); },
       },
     });
     await daemon.start();
