@@ -199,4 +199,25 @@ export const BUILT_IN_RULES: readonly BuiltInRule[] = [
     effect: 'deny',
     priority: 10,
   },
+
+  // ── Priority 50: user device management allows ───────────────────────────
+  // Added in Phase 2 alongside Heimdall enforcement on device endpoints.
+  // Admins can override with a higher-priority deny rule if needed.
+
+  {
+    id: 'builtin_user_device_deregister_allow',
+    principal: 'user:*',
+    action: 'device:deregister',
+    resourceType: 'device',
+    effect: 'allow',
+    priority: 50,
+  },
+  {
+    id: 'builtin_user_device_rotate_token_allow',
+    principal: 'user:*',
+    action: 'device:rotate-token',
+    resourceType: 'device',
+    effect: 'allow',
+    priority: 50,
+  },
 ];
