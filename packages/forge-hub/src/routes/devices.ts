@@ -7,6 +7,7 @@ import type { Db } from '../db/index.js';
 import { requireUser, getUser } from '../auth/middleware.js';
 import { generateToken, hashToken } from '../auth/tokens.js';
 import { TokenBucketStore, createTokenBucketPreHandler } from '../rate-limit/index.js';
+import { checkPolicy } from '../policy/engine.js';
 
 const RenameDeviceBodySchema = z.object({
   name: z
@@ -89,6 +90,17 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): DeviceRo
       return;
     }
 
+    const deregDecision = await checkPolicy(
+      { type: 'user', id: user.id },
+      'device:deregister',
+      { type: 'device', id: deviceId },
+      { db },
+    );
+    if (!deregDecision.allowed) {
+      await reply.code(403).send({ error: 'policy_denied', action: 'device:deregister', principal: deregDecision.principal });
+      return;
+    }
+
     await db
       .update(schema.devices)
       .set({ status: 'deregistered' })
@@ -165,6 +177,17 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): DeviceRo
 
       if (device.status === 'deregistered') {
         await reply.code(410).send({ error: 'device_deregistered' });
+        return;
+      }
+
+      const rotateDecision = await checkPolicy(
+        { type: 'user', id: user.id },
+        'device:rotate-token',
+        { type: 'device', id: deviceId },
+        { db },
+      );
+      if (!rotateDecision.allowed) {
+        await reply.code(403).send({ error: 'policy_denied', action: 'device:rotate-token', principal: rotateDecision.principal });
         return;
       }
 

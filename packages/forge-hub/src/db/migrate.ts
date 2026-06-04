@@ -320,6 +320,29 @@ ALTER TABLE sessions ADD COLUMN ip_address TEXT;
 ALTER TABLE sessions ADD COLUMN last_seen_at INTEGER;
 `,
   },
+  {
+    name: '0011_policy_rules',
+    sql: `
+-- Heimdall Phase 2: DB-backed policy rule overrides.
+-- workspace_id IS NULL means global (applies to all workspaces).
+-- Rows are never hard-deleted. Use archived_at to retire a rule.
+CREATE TABLE policy_rules (
+  id                  TEXT    PRIMARY KEY,
+  workspace_id        TEXT    REFERENCES workspaces(id) ON DELETE CASCADE,
+  principal           TEXT    NOT NULL,
+  action              TEXT    NOT NULL,
+  resource_type       TEXT,
+  resource_condition  TEXT,
+  effect              TEXT    NOT NULL CHECK (effect IN ('allow', 'deny')),
+  priority            INTEGER NOT NULL DEFAULT 0,
+  archived_at         INTEGER,
+  created_at          INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+
+CREATE INDEX policy_rules_workspace_idx ON policy_rules (workspace_id);
+CREATE INDEX policy_rules_action_idx    ON policy_rules (action);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {
