@@ -977,6 +977,67 @@ describe('integration: dispatcher circuit breaker', () => {
     expect(daemon['running']).toBe(true);
   });
 
+  it('fmSpawnAttempts does not increment during cooldown — quarantine budget preserved', { timeout: 20000 }, async () => {
+    // Use a fresh daemon with cooldown=300ms and MAX_TRIAGE_ATTEMPTS=3.
+    // FM should spawn 3 times (at t=0, t=300ms, t=600ms) before quarantine —
+    // NOT after 1 spawn (which would happen if sightings incremented during cooldown polls).
+    await daemon.stop();
+    const devRes2 = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master-oi', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    const oiToken = ((await devRes2.json()) as { token: string }).token;
+    const wsRes2 = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'OI WS', slug: 'oi-test' }),
+    });
+    const oiWsId = ((await wsRes2.json()) as { id: string }).id;
+
+    const runtimes3 = new RuntimeRegistry();
+    runtimes3.register(new MockRuntime({ completionDelayMs: 20 }));
+    const oiDaemon = new Daemon({
+      hubUrl,
+      deviceToken: oiToken,
+      workdir,
+      runtimes: runtimes3,
+      defaultRuntimeId: 'mock',
+      workspaceId: oiWsId,
+      dispatcherMode: true,
+      fmAgentId: 'forge-master',
+      pollIntervalMs: 50,
+      fmCooldownMs: 300, // short cooldown for test speed
+      logger: {
+        info: (msg) => { capturedInfoLogs.push(msg); },
+        error: (msg) => { capturedErrorLogs.push(msg); },
+      },
+    });
+
+    const taskRes2 = await fetch(`${hubUrl}/workspaces/${oiWsId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'oi', title: 'Ordering invariant task' }),
+    });
+    const { id: oiTaskId } = (await taskRes2.json()) as { id: string };
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, oiTaskId));
+
+    await oiDaemon.start();
+
+    // Wait for quarantine to fire
+    await waitFor(async () => capturedErrorLogs.some((m) => m.includes('quarantined')) ? 'done' : null, 10000);
+
+    // FM must have spawned exactly MAX_TRIAGE_ATTEMPTS (3) times before quarantine —
+    // not fewer (which would mean cooldown polls consumed the budget).
+    const spawnCount = capturedInfoLogs.filter((m) => m === 'fm agent spawned').length;
+    expect(spawnCount).toBe(3);
+
+    await oiDaemon.stop();
+  });
+
   it('cooldown prevents FM re-spawn within the configured window', { timeout: 20000 }, async () => {
     // Use a fresh daemon with a 500ms cooldown so the test completes quickly.
     await daemon.stop();

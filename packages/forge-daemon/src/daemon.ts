@@ -176,10 +176,11 @@ export class Daemon {
    */
   private readonly taskRetries = new Map<string, number>();
   /**
-   * Per-task count of consecutive triage cycles where the task was seen in the
-   * inbox without progressing. Cleared when the task leaves the inbox.
+   * Per-task count of FM spawn attempts where the task was still in the inbox
+   * after FM completed. Increments only when FM actually spawns (not on cooldown
+   * or fmRunning skips). Cleared when the task leaves the inbox.
    */
-  private readonly inboxSightings = new Map<string, number>();
+  private readonly fmSpawnAttempts = new Map<string, number>();
   /**
    * Task IDs permanently skipped by the dispatcher after exceeding
    * MAX_TRIAGE_ATTEMPTS consecutive failed triage cycles. Human action required.
@@ -517,35 +518,16 @@ export class Daemon {
       return;
     }
 
-    // Circuit breaker: tasks that appear in the inbox for more than MAX_TRIAGE_ATTEMPTS
-    // consecutive FM cycles without progressing are quarantined. FM cannot route them
-    // (likely malformed IDs or missing required fields) — human action required.
-    const currentInboxIds = new Set(ctx.inboxTasks.map((t) => t.id));
-    for (const taskId of this.inboxSightings.keys()) {
-      if (!currentInboxIds.has(taskId)) this.inboxSightings.delete(taskId);
-    }
-    for (const task of ctx.inboxTasks) {
-      if (this.quarantinedTaskIds.has(task.id)) continue;
-      const count = (this.inboxSightings.get(task.id) ?? 0) + 1;
-      if (count > Daemon.MAX_TRIAGE_ATTEMPTS) {
-        this.quarantinedTaskIds.add(task.id);
-        this.inboxSightings.delete(task.id);
-        this.logger.error('task stuck in inbox — quarantined; human action required', {
-          taskId: task.id,
-          workspaceId,
-          attempts: Daemon.MAX_TRIAGE_ATTEMPTS,
-        });
-      } else {
-        this.inboxSightings.set(task.id, count);
-      }
-    }
-    const routableTasks = ctx.inboxTasks.filter((t) => !this.quarantinedTaskIds.has(t.id));
-    if (routableTasks.length === 0) {
+    // Fast-path: if every inbox task is already quarantined, nothing to do.
+    const preFilterRoutable = ctx.inboxTasks.filter((t) => !this.quarantinedTaskIds.has(t.id));
+    if (preFilterRoutable.length === 0) {
       return;
     }
 
     // Cooldown: enforce a minimum gap between FM spawns per workspace to cap
     // the blast radius of any triage loop that slips past the circuit breaker.
+    // Check BEFORE updating fmSpawnAttempts so cooldown skips do not consume
+    // the quarantine budget — only actual FM spawns count as attempts.
     const cooldownMs = this.opts.fmCooldownMs ?? 60_000;
     if (cooldownMs > 0) {
       const lastSpawn = this.lastFmSpawnAt.get(workspaceId) ?? 0;
@@ -558,6 +540,34 @@ export class Daemon {
         return;
       }
     }
+
+    // Circuit breaker: increment fmSpawnAttempts only for tasks that will be
+    // included in this spawn (cooldown has already been cleared above). Tasks
+    // that survive more than MAX_TRIAGE_ATTEMPTS spawns without progressing are
+    // quarantined — FM cannot route them and human action is required.
+    const currentInboxIds = new Set(ctx.inboxTasks.map((t) => t.id));
+    for (const taskId of this.fmSpawnAttempts.keys()) {
+      if (!currentInboxIds.has(taskId)) this.fmSpawnAttempts.delete(taskId);
+    }
+    for (const task of preFilterRoutable) {
+      const count = (this.fmSpawnAttempts.get(task.id) ?? 0) + 1;
+      if (count > Daemon.MAX_TRIAGE_ATTEMPTS) {
+        this.quarantinedTaskIds.add(task.id);
+        this.fmSpawnAttempts.delete(task.id);
+        this.logger.error('task stuck in inbox — quarantined; human action required', {
+          taskId: task.id,
+          workspaceId,
+          attempts: Daemon.MAX_TRIAGE_ATTEMPTS,
+        });
+      } else {
+        this.fmSpawnAttempts.set(task.id, count);
+      }
+    }
+    const routableTasks = ctx.inboxTasks.filter((t) => !this.quarantinedTaskIds.has(t.id));
+    if (routableTasks.length === 0) {
+      return;
+    }
+
     this.lastFmSpawnAt.set(workspaceId, Date.now());
 
     this.logger.info('inbox non-empty, spawning FM agent', {

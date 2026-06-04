@@ -58,6 +58,9 @@ const ConfigSchema = z.object({
   gitToken: z.string().optional(),
   gitUserName: z.string().optional(),
   gitUserEmail: z.string().optional(),
+  // Minimum milliseconds between FM agent spawns per workspace (cooldown window).
+  // Limits blast radius of runaway triage loops. Set to 0 to disable. Default: 60000.
+  fmCooldownMs: z.coerce.number().int().min(0).optional(),
   // Personality ID to use for the FM agent spawned in dispatcher mode.
   // Must match an id registered in the PersonalityRegistry.
   // Defaults to 'forge-master'. Ignored in worker mode.
@@ -91,5 +94,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     gitUserEmail: env['FORGE_DAEMON_GIT_EMAIL'],
     dispatcherPersonality: env['FORGE_DAEMON_DISPATCHER_PERSONALITY'],
     dispatcherWorkspaceMode: env['FORGE_DAEMON_DISPATCHER_SCOPE'],
+    fmCooldownMs: env['FORGE_DAEMON_FM_COOLDOWN_MS'],
   });
 }
