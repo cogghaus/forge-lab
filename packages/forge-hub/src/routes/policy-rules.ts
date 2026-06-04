@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, count, eq, isNull } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
@@ -13,13 +13,28 @@ const VALID_ACTIONS = [
   'context:read', 'workspace:list',
 ] as const;
 
-const VALID_RESOURCE_TYPES = ['task', 'doc', 'device', 'workspace', null] as const;
+const MAX_RULES_PER_WORKSPACE = 100;
 
 const CreatePolicyRuleSchema = z.object({
-  principal: z.string().min(1).max(200),
+  principal: z
+    .string()
+    .min(1)
+    .max(200)
+    .regex(
+      /^(agent|role|user|device):[a-zA-Z0-9*_-]+$/,
+      'principal must match agent:X, role:X, user:*, or device:X',
+    ),
   action: z.enum(VALID_ACTIONS),
   resourceType: z.enum(['task', 'doc', 'device', 'workspace']).nullable().optional(),
-  resourceCondition: z.string().max(2000).nullable().optional(),
+  resourceCondition: z
+    .string()
+    .max(2000)
+    .refine(
+      (v) => { try { JSON.parse(v); return true; } catch { return false; } },
+      'resourceCondition must be valid JSON',
+    )
+    .nullable()
+    .optional(),
   effect: z.enum(['allow', 'deny']),
   priority: z.number().int().min(0).max(999).default(0),
 });
@@ -52,6 +67,14 @@ export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void
     async (req, reply) => {
       const { id: workspaceId } = getWorkspace(req);
       const body = CreatePolicyRuleSchema.parse(req.body);
+      const countRows = await db
+        .select({ activeCount: count() })
+        .from(schema.policyRules)
+        .where(and(eq(schema.policyRules.workspaceId, workspaceId), isNull(schema.policyRules.archivedAt)));
+      const activeCount = countRows[0]?.activeCount ?? 0;
+      if (activeCount >= MAX_RULES_PER_WORKSPACE) {
+        return reply.code(422).send({ error: 'rule_limit_exceeded', max: MAX_RULES_PER_WORKSPACE });
+      }
       const id = nanoid();
       await db.insert(schema.policyRules).values({
         id,
@@ -130,6 +153,14 @@ export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void
       const user = getUser(req);
       if (user.role !== 'admin') return reply.code(403).send({ error: 'admin_required' });
       const body = CreatePolicyRuleSchema.parse(req.body);
+      const globalCountRows = await db
+        .select({ activeGlobalCount: count() })
+        .from(schema.policyRules)
+        .where(and(isNull(schema.policyRules.workspaceId), isNull(schema.policyRules.archivedAt)));
+      const activeGlobalCount = globalCountRows[0]?.activeGlobalCount ?? 0;
+      if (activeGlobalCount >= MAX_RULES_PER_WORKSPACE) {
+        return reply.code(422).send({ error: 'rule_limit_exceeded', max: MAX_RULES_PER_WORKSPACE });
+      }
       const id = nanoid();
       await db.insert(schema.policyRules).values({
         id,

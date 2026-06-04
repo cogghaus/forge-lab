@@ -142,6 +142,47 @@ describe('policy rules API', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('POST validates principal format — missing colon separator returns 400', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/policy-rules`,
+      headers: { cookie },
+      payload: { principal: 'agent-scribe', action: 'task:assign', effect: 'deny', priority: 100 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST validates resourceCondition must be valid JSON', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/policy-rules`,
+      headers: { cookie },
+      payload: { principal: 'agent:anvil', action: 'task:assign', effect: 'deny', priority: 100, resourceCondition: 'not-json' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('POST returns 422 when workspace rule cap (100) is exceeded', async () => {
+    // Create 100 rules (just verify the cap enforces — use a loop but stop at 101)
+    for (let i = 0; i < 100; i++) {
+      const r = await hub.fastify.inject({
+        method: 'POST',
+        url: `/workspaces/${workspaceId}/policy-rules`,
+        headers: { cookie },
+        payload: { principal: 'agent:anvil', action: 'task:assign', effect: 'deny', priority: i },
+      });
+      expect(r.statusCode).toBe(201);
+    }
+    const over = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/policy-rules`,
+      headers: { cookie },
+      payload: { principal: 'agent:anvil', action: 'task:assign', effect: 'deny', priority: 999 },
+    });
+    expect(over.statusCode).toBe(422);
+    expect((over.json() as { error: string }).error).toBe('rule_limit_exceeded');
+  });
+
   // ── global rules ───────────────────────────────────────────────────────
 
   it('POST /policy-rules creates a global rule (admin user)', async () => {
