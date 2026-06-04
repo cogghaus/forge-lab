@@ -86,6 +86,7 @@ async function main(): Promise<void> {
     ...(config.gitUserEmail !== undefined && { gitUserEmail: config.gitUserEmail }),
     ...(config.dispatcherPersonality !== undefined && { dispatcherPersonality: config.dispatcherPersonality }),
     dispatcherWorkspaceMode: config.dispatcherWorkspaceMode,
+    ...(config.fmCooldownMs !== undefined && { fmCooldownMs: config.fmCooldownMs }),
     logger,
   });
 

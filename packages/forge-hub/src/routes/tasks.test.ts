@@ -122,6 +122,16 @@ describe('/workspaces/:workspaceId/tasks', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('POST with digit-containing projectPrefix returns 400', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'v4l', title: 'Digit in prefix' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('POST requires workspace membership', async () => {
     const res = await hub.fastify.inject({
       method: 'POST',

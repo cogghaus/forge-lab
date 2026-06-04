@@ -114,6 +114,25 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_MAX_CONCURRENT_TASKS: '0' })).toThrow();
   });
 
+  it('fmCooldownMs is undefined when not set', () => {
+    const cfg = loadConfig(REQUIRED);
+    expect(cfg.fmCooldownMs).toBeUndefined();
+  });
+
+  it('FORGE_DAEMON_FM_COOLDOWN_MS sets fmCooldownMs', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_FM_COOLDOWN_MS: '30000' });
+    expect(cfg.fmCooldownMs).toBe(30000);
+  });
+
+  it('FORGE_DAEMON_FM_COOLDOWN_MS=0 is valid (disables cooldown)', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_FM_COOLDOWN_MS: '0' });
+    expect(cfg.fmCooldownMs).toBe(0);
+  });
+
+  it('FORGE_DAEMON_FM_COOLDOWN_MS=-1 throws (min 0)', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_FM_COOLDOWN_MS: '-1' })).toThrow();
+  });
+
   it('throws on missing required fields', () => {
     expect(() => loadConfig({})).toThrow();
   });
