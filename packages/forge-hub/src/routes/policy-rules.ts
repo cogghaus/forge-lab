@@ -14,6 +14,7 @@ const VALID_ACTIONS = [
 ] as const;
 
 const MAX_RULES_PER_WORKSPACE = 100;
+const VALID_RESOURCE_TYPES = ['task', 'doc', 'device', 'workspace'] as const;
 
 const CreatePolicyRuleSchema = z.object({
   principal: z
@@ -25,7 +26,7 @@ const CreatePolicyRuleSchema = z.object({
       'principal must match agent:X, role:X, user:*, or device:X',
     ),
   action: z.enum(VALID_ACTIONS),
-  resourceType: z.enum(['task', 'doc', 'device', 'workspace']).nullable().optional(),
+  resourceType: z.enum(VALID_RESOURCE_TYPES).nullable().optional(),
   resourceCondition: z
     .string()
     .max(2000)
