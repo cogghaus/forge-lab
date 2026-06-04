@@ -367,3 +367,34 @@ export const workspaceDocs = sqliteTable(
     workspaceKeyIdx: uniqueIndex('workspace_docs_key_idx').on(t.workspaceId, t.key),
   }),
 );
+
+/**
+ * Workspace-scoped (or global) policy rule overrides for the Heimdall engine.
+ * workspace_id IS NULL = global (applies to all workspaces).
+ * Rows are never hard-deleted; use archived_at to retire a rule.
+ */
+export const policyRules = sqliteTable(
+  'policy_rules',
+  {
+    id: text('id').primaryKey(),
+    /** NULL = global rule (applies across all workspaces). */
+    workspaceId: text('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** Principal selector: "agent:scribe", "role:worker", "user:*", etc. */
+    principal: text('principal').notNull(),
+    /** Action verb: "doc:write", "task:assign", etc. */
+    action: text('action').notNull(),
+    /** Optional resource type filter. NULL = any resource type. */
+    resourceType: text('resource_type'),
+    /** Optional JSON condition. NULL = no condition (always matches). */
+    resourceCondition: text('resource_condition'),
+    effect: text('effect', { enum: ['allow', 'deny'] }).notNull(),
+    priority: integer('priority').notNull().default(0),
+    /** Set to retire a rule without deleting it (preserves audit trail). */
+    archivedAt: timestampMs('archived_at'),
+    createdAt: timestampMs('created_at').notNull().default(nowDefault),
+  },
+  (t) => ({
+    workspaceIdx: index('policy_rules_workspace_idx').on(t.workspaceId),
+    actionIdx: index('policy_rules_action_idx').on(t.action),
+  }),
+);

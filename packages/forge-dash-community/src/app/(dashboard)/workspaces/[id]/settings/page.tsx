@@ -31,6 +31,13 @@ export default function WorkspaceSettingsPage() {
   const [dangerError, setDangerError] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState('');
 
+  // Policy rules state
+  type PolicyRule = { id: string; principal: string; action: string; effect: 'allow' | 'deny'; priority: number; resourceType: string | null };
+  const [policyRules, setPolicyRules] = useState<PolicyRule[]>([]);
+  const [ruleForm, setRuleForm] = useState({ principal: '', action: 'task:assign', effect: 'deny' as 'allow' | 'deny', priority: '100' });
+  const [ruleCreating, setRuleCreating] = useState(false);
+  const [ruleError, setRuleError] = useState('');
+
   // Load workspace
   useEffect(() => {
     fetch(`/api/hub/workspaces/${workspaceId}`)
@@ -51,6 +58,41 @@ export default function WorkspaceSettingsPage() {
       if (savedTimerRef.current !== null) clearTimeout(savedTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    fetch(`/api/hub/workspaces/${workspaceId}/policy-rules`)
+      .then(async (res) => { if (res.ok) setPolicyRules(((await res.json()) as { rules: PolicyRule[] }).rules); })
+      .catch(() => {});
+  }, [workspaceId]);
+
+  async function handleCreateRule(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ruleForm.principal.trim()) return;
+    setRuleCreating(true); setRuleError('');
+    try {
+      const res = await fetch(`/api/hub/workspaces/${workspaceId}/policy-rules`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ principal: ruleForm.principal.trim(), action: ruleForm.action, effect: ruleForm.effect, priority: Number(ruleForm.priority) }),
+      });
+      if (!res.ok) { setRuleError('Failed to create rule'); return; }
+      const { rule } = (await res.json()) as { rule: PolicyRule };
+      setPolicyRules((prev) => [...prev, rule]);
+      setRuleForm({ principal: '', action: 'task:assign', effect: 'deny', priority: '100' });
+    } catch { setRuleError('Network error'); }
+    finally { setRuleCreating(false); }
+  }
+
+  async function handleArchiveRule(ruleId: string) {
+    try {
+      const res = await fetch(`/api/hub/workspaces/${workspaceId}/policy-rules/${ruleId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archived: true }),
+      });
+      if (res.ok) setPolicyRules((prev) => prev.filter((r) => r.id !== ruleId));
+    } catch { /* non-fatal */ }
+  }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -412,6 +454,90 @@ export default function WorkspaceSettingsPage() {
           </div>
         </section>
       )}
+
+      {/* Policy Rules */}
+      <section>
+        <h2 className="font-mono text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'rgba(245,240,235,0.4)' }}>
+          Policy Rules
+        </h2>
+        <div className="rounded-xl p-5 space-y-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+          <p className="font-mono text-[11px]" style={{ color: 'rgba(245,240,235,0.45)' }}>
+            Workspace-scoped Heimdall overrides. Higher priority beats built-in rules.
+          </p>
+
+          {/* Existing rules */}
+          {policyRules.length > 0 && (
+            <div className="space-y-2">
+              {policyRules.map((rule) => (
+                <div key={rule.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <span className="font-mono text-[11px]" style={{ color: 'rgba(245,240,235,0.7)' }}>
+                    <span style={{ color: rule.effect === 'deny' ? '#F87171' : '#4ADE80' }}>{rule.effect}</span>
+                    {' '}{rule.principal} {rule.action}{rule.resourceType ? ` (${rule.resourceType})` : ''}{' '}
+                    <span style={{ color: 'rgba(245,240,235,0.35)' }}>@{rule.priority}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { void handleArchiveRule(rule.id); }}
+                    className="font-mono text-[10px] px-2 py-1 rounded transition-colors"
+                    style={{ color: 'rgba(245,240,235,0.4)', background: 'transparent' }}
+                  >
+                    archive
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Create rule form */}
+          <form onSubmit={(e) => { void handleCreateRule(e); }} className="flex flex-wrap gap-2 items-end">
+            <input
+              type="text"
+              value={ruleForm.principal}
+              onChange={(e) => setRuleForm((f) => ({ ...f, principal: e.target.value }))}
+              placeholder="principal (e.g. agent:anvil)"
+              className="px-3 py-2 rounded-md text-xs font-mono outline-none flex-1 min-w-40"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(245,240,235,0.85)' }}
+            />
+            <select
+              value={ruleForm.action}
+              onChange={(e) => setRuleForm((f) => ({ ...f, action: e.target.value }))}
+              className="px-3 py-2 rounded-md text-xs font-mono outline-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(245,240,235,0.85)' }}
+            >
+              {['task:assign','task:claim','task:cancel','task:retry','doc:write','doc:update','doc:supersede','device:deregister','device:rotate-token'].map((a) => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+            <select
+              value={ruleForm.effect}
+              onChange={(e) => setRuleForm((f) => ({ ...f, effect: e.target.value as 'allow' | 'deny' }))}
+              className="px-3 py-2 rounded-md text-xs font-mono outline-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(245,240,235,0.85)' }}
+            >
+              <option value="deny">deny</option>
+              <option value="allow">allow</option>
+            </select>
+            <input
+              type="number"
+              value={ruleForm.priority}
+              onChange={(e) => setRuleForm((f) => ({ ...f, priority: e.target.value }))}
+              placeholder="priority"
+              min={0} max={999}
+              className="w-20 px-3 py-2 rounded-md text-xs font-mono outline-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(245,240,235,0.85)' }}
+            />
+            <button
+              type="submit"
+              disabled={ruleCreating || !ruleForm.principal.trim()}
+              className="px-4 py-2 rounded-md text-xs font-mono transition-colors disabled:opacity-40"
+              style={{ background: '#FF6B2B', color: '#1A1A1F' }}
+            >
+              {ruleCreating ? 'Adding...' : 'Add rule'}
+            </button>
+          </form>
+          {ruleError && <span className="font-mono text-[11px]" style={{ color: '#F87171' }}>{ruleError}</span>}
+        </div>
+      </section>
     </div>
   );
 }

@@ -1,14 +1,16 @@
 /**
- * Heimdall policy engine — Phase 1.
+ * Heimdall policy engine — Phase 2.
  *
- * Evaluates the built-in rule set in priority order. First matching rule
- * (principal + action + resource type + condition all satisfied) wins.
- * Default deny when no rule matches.
+ * Evaluates built-in rules merged with DB-backed workspace/global overrides,
+ * in priority order. First matching rule wins. Default deny when no rule matches.
  *
- * Phase 2 will add DB-backed rule loading after the built-in check, with
- * the same evaluation loop — no algorithmic changes needed.
+ * DB rules are loaded per-request for the relevant workspace. They overlay the
+ * built-in set: a DB rule at priority 300 overrides any built-in rule at <= 300.
+ * Archived rules (archived_at IS NOT NULL) are excluded from evaluation.
  */
 
+import { and, isNull, or, eq } from 'drizzle-orm';
+import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { BUILT_IN_RULES, type BuiltInRule, type WorkspaceRole } from './defaults.js';
 import { resolvePrincipals, matchesPrincipal } from './principals.js';
@@ -39,8 +41,9 @@ export interface PolicyDecision {
   /**
    * The rule that triggered the decision.
    * null = default-deny (no rule matched).
+   * ruleId is always set; the `condition` field is only present on built-in rules.
    */
-  rule: BuiltInRule | null;
+  rule: { id: string; principal: string; action: string; effect: 'allow' | 'deny'; priority: number } | null;
   /**
    * The resolved principal string that matched the rule
    * (e.g. "agent:scribe", "role:worker").
@@ -71,14 +74,21 @@ function roleRank(role: WorkspaceRole | undefined): number {
 }
 
 function evaluateCondition(
-  rule: BuiltInRule,
+  rule: BuiltInRule | DbRule,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   principal: any, // PolicyPrincipal — imported via engine.ts re-export
   resource: PolicyResource,
 ): boolean {
-  if (!rule.condition) return true; // no condition = always matches
+  // DB rules: resourceCondition is a JSON expression. Phase 2 only evaluates
+  // NULL conditions (unconditional match). JSON conditions are a Phase 3 extension.
+  if ('resourceCondition' in rule && !('condition' in rule)) {
+    return rule.resourceCondition === null;
+  }
 
-  const condition = rule.condition;
+  const builtIn = rule as BuiltInRule;
+  if (!builtIn.condition) return true; // no condition = always matches
+
+  const condition = builtIn.condition;
 
   switch (condition.type) {
     case 'workspace_member': {
@@ -105,8 +115,60 @@ function evaluateCondition(
 // Main entry point
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// DB rule loading
+// ---------------------------------------------------------------------------
+
+interface DbRule {
+  id: string;
+  principal: string;
+  action: string;
+  resourceType: string | null;
+  resourceCondition: string | null;
+  effect: 'allow' | 'deny';
+  priority: number;
+}
+
+async function loadDbRules(db: Db, workspaceId: string | undefined): Promise<DbRule[]> {
+  // Load global rules (workspace_id IS NULL) and workspace-scoped rules together.
+  // Archived rules are excluded.
+  const rows = await db
+    .select({
+      id: schema.policyRules.id,
+      principal: schema.policyRules.principal,
+      action: schema.policyRules.action,
+      resourceType: schema.policyRules.resourceType,
+      resourceCondition: schema.policyRules.resourceCondition,
+      effect: schema.policyRules.effect,
+      priority: schema.policyRules.priority,
+    })
+    .from(schema.policyRules)
+    .where(
+      workspaceId
+        ? and(
+            isNull(schema.policyRules.archivedAt),
+            or(
+              isNull(schema.policyRules.workspaceId),
+              eq(schema.policyRules.workspaceId, workspaceId),
+            ),
+          )
+        : and(
+            isNull(schema.policyRules.archivedAt),
+            isNull(schema.policyRules.workspaceId),
+          ),
+    );
+  return rows as DbRule[];
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
+
 /**
  * Evaluate whether a principal is allowed to perform an action on a resource.
+ *
+ * Built-in rules are merged with active DB rules. DB rules at higher priority
+ * override built-ins. Archived rules are excluded.
  *
  * The audit log write is fire-and-forget — the call never throws due to DB
  * failures. Pass `ctx.db` to enable audit logging; omit for pure evaluation.
@@ -114,7 +176,7 @@ function evaluateCondition(
  * @param principal - Resolved principal (built via buildDevicePrincipal or inline)
  * @param action    - Action verb, e.g. "task:assign", "doc:write"
  * @param resource  - Target resource with type and relevant attributes
- * @param ctx       - Optional DB + workspaceId for audit log
+ * @param ctx       - Optional DB + workspaceId for audit log and DB rule loading
  */
 export async function checkPolicy(
   principal: import('./principals.js').PolicyPrincipal,
@@ -124,8 +186,24 @@ export async function checkPolicy(
 ): Promise<PolicyDecision> {
   const resolved = resolvePrincipals(principal);
 
+  // Load DB rules and merge with built-ins. DB rules can override built-ins by
+  // using a higher priority value.
+  let dbRules: DbRule[] = [];
+  if (ctx.db) {
+    try {
+      dbRules = await loadDbRules(ctx.db, ctx.workspaceId);
+    } catch {
+      // DB rule load failure is non-fatal — fall through to built-ins only.
+      process.stderr.write(`[heimdall] DB rule load failed for workspace=${ctx.workspaceId ?? 'global'}\n`);
+    }
+  }
+
+  // Unify built-in and DB rules into a single candidate pool.
+  type AnyRule = BuiltInRule | (DbRule & { condition?: undefined });
+  const allRules: AnyRule[] = [...BUILT_IN_RULES, ...dbRules];
+
   // Collect candidate rules matching principal + action + resource type.
-  const candidates = BUILT_IN_RULES.filter((r) => {
+  const candidates = allRules.filter((r) => {
     if (!matchesPrincipal(r.principal, resolved)) return false;
     if (r.action !== action) return false;
     if (r.resourceType && r.resourceType !== resource.type) return false;
@@ -142,7 +220,7 @@ export async function checkPolicy(
   });
 
   // Find first rule whose condition is satisfied.
-  let matchedRule: BuiltInRule | null = null;
+  let matchedRule: AnyRule | null = null;
   for (const rule of candidates) {
     if (evaluateCondition(rule, principal, resource)) {
       matchedRule = rule;
