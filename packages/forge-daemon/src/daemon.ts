@@ -68,6 +68,12 @@ export interface DaemonOptions {
    */
   staleTtlMinutes?: number;
   /**
+   * Minimum milliseconds between FM agent spawns for the same workspace.
+   * Limits blast radius of runaway triage loops. Defaults to 60000 (1 minute).
+   * Set to 0 to disable.
+   */
+  fmCooldownMs?: number;
+  /**
    * Maximum number of tasks running concurrently on this daemon instance.
    * When activeInstances reaches this limit, incoming task events are skipped
    * until a slot opens. Default: no limit (all tasks claimed immediately).
@@ -169,6 +175,23 @@ export class Daemon {
    * Cleared on completion or when the task is failed.
    */
   private readonly taskRetries = new Map<string, number>();
+  /**
+   * Per-task count of FM spawn attempts where the task was still in the inbox
+   * after FM completed. Increments only when FM actually spawns (not on cooldown
+   * or fmRunning skips). Cleared when the task leaves the inbox.
+   */
+  private readonly fmSpawnAttempts = new Map<string, number>();
+  /**
+   * Task IDs permanently skipped by the dispatcher after exceeding
+   * MAX_TRIAGE_ATTEMPTS consecutive failed triage cycles. Human action required.
+   */
+  private readonly quarantinedTaskIds = new Set<string>();
+  /** FM spawns at most this many times for the same stuck task before quarantining. */
+  private static readonly MAX_TRIAGE_ATTEMPTS = 3;
+  /** Timestamp (ms) of last FM spawn per workspace. Enforces fmCooldownMs. */
+  private readonly lastFmSpawnAt = new Map<string, number>();
+  /** Maps synthetic FM task ID → workspaceId so dead-FM recovery can clear the cooldown. */
+  private readonly fmTaskWorkspace = new Map<string, string>();
   private readonly gitOps: GitOps;
 
   constructor(opts: DaemonOptions) {
@@ -280,6 +303,13 @@ export class Daemon {
       // fmRunning stuck true and wedge the dispatcher forever. Reset it so the
       // next poll can re-spawn FM, and remove the orphaned synthetic marker.
       if (taskId.startsWith('_fm_')) {
+        // A crashed FM (no done file) should be allowed to re-spawn immediately —
+        // clear the cooldown so recovery isn't blocked by the runaway-loop throttle.
+        const wsId = this.fmTaskWorkspace.get(taskId);
+        if (wsId) {
+          this.lastFmSpawnAt.delete(wsId);
+          this.fmTaskWorkspace.delete(taskId);
+        }
         this.fmRunning = false;
         await cleanupTaskFiles(this.opts.workdir, taskId).catch(() => {});
         continue;
@@ -488,9 +518,61 @@ export class Daemon {
       return;
     }
 
+    // Fast-path: if every inbox task is already quarantined, nothing to do.
+    const preFilterRoutable = ctx.inboxTasks.filter((t) => !this.quarantinedTaskIds.has(t.id));
+    if (preFilterRoutable.length === 0) {
+      return;
+    }
+
+    // Cooldown: enforce a minimum gap between FM spawns per workspace to cap
+    // the blast radius of any triage loop that slips past the circuit breaker.
+    // Check BEFORE updating fmSpawnAttempts so cooldown skips do not consume
+    // the quarantine budget — only actual FM spawns count as attempts.
+    const cooldownMs = this.opts.fmCooldownMs ?? 60_000;
+    if (cooldownMs > 0) {
+      const lastSpawn = this.lastFmSpawnAt.get(workspaceId) ?? 0;
+      const elapsed = Date.now() - lastSpawn;
+      if (elapsed < cooldownMs) {
+        this.logger.info('fm spawn skipped — cooldown active', {
+          workspaceId,
+          remainingMs: cooldownMs - elapsed,
+        });
+        return;
+      }
+    }
+
+    // Circuit breaker: increment fmSpawnAttempts only for tasks that will be
+    // included in this spawn (cooldown has already been cleared above). Tasks
+    // that survive more than MAX_TRIAGE_ATTEMPTS spawns without progressing are
+    // quarantined — FM cannot route them and human action is required.
+    const currentInboxIds = new Set(ctx.inboxTasks.map((t) => t.id));
+    for (const taskId of this.fmSpawnAttempts.keys()) {
+      if (!currentInboxIds.has(taskId)) this.fmSpawnAttempts.delete(taskId);
+    }
+    for (const task of preFilterRoutable) {
+      const count = (this.fmSpawnAttempts.get(task.id) ?? 0) + 1;
+      if (count > Daemon.MAX_TRIAGE_ATTEMPTS) {
+        this.quarantinedTaskIds.add(task.id);
+        this.fmSpawnAttempts.delete(task.id);
+        this.logger.error('task stuck in inbox — quarantined; human action required', {
+          taskId: task.id,
+          workspaceId,
+          attempts: Daemon.MAX_TRIAGE_ATTEMPTS,
+        });
+      } else {
+        this.fmSpawnAttempts.set(task.id, count);
+      }
+    }
+    const routableTasks = ctx.inboxTasks.filter((t) => !this.quarantinedTaskIds.has(t.id));
+    if (routableTasks.length === 0) {
+      return;
+    }
+
+    this.lastFmSpawnAt.set(workspaceId, Date.now());
+
     this.logger.info('inbox non-empty, spawning FM agent', {
       workspaceId,
-      count: ctx.inboxTasks.length,
+      count: routableTasks.length,
     });
 
     const fmAgentId = this.opts.fmAgentId ?? 'forge-master';
@@ -553,6 +635,7 @@ export class Daemon {
         initialPrompt,
       );
       this.activeInstances.set(syntheticTaskId, { instance, runtimeId: this.opts.defaultRuntimeId });
+      this.fmTaskWorkspace.set(syntheticTaskId, workspaceId);
       this.logger.info('fm agent spawned', { workspaceId, syntheticTaskId, fmAgentId });
     } catch (err) {
       // Spawn failure for this workspace: clean up its marker file.
@@ -866,6 +949,7 @@ export class Daemon {
         });
       }
       this.activeInstances.delete(taskId);
+      this.fmTaskWorkspace.delete(taskId);
       this.fmRunning = false;
       this.logger.info('fm agent completed', { taskId, result: result.result });
       return;

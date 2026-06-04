@@ -860,6 +860,248 @@ describe('integration: dispatcher mode', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Dispatcher mode — circuit breaker (stuck-task quarantine)
+// ---------------------------------------------------------------------------
+
+describe('integration: dispatcher circuit breaker', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let sessionCookie: string;
+  let workspaceId: string;
+  const capturedInfoLogs: string[] = [];
+  const capturedErrorLogs: string[] = [];
+
+  beforeEach(async () => {
+    capturedInfoLogs.length = 0;
+    capturedErrorLogs.length = 0;
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-cb-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-circuit-breaker-xxxxxxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    const orchestratorToken = ((await devRes.json()) as { token: string }).token;
+
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'CB Test WS', slug: 'cb-test' }),
+    });
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime({ completionDelayMs: 30 }));
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken: orchestratorToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      workspaceId,
+      dispatcherMode: true,
+      fmAgentId: 'forge-master',
+      pollIntervalMs: 80,
+      fmCooldownMs: 0, // disabled so circuit breaker cycles run back-to-back
+      logger: {
+        info: (msg, meta) => { capturedInfoLogs.push(msg); },
+        error: (msg, meta) => { capturedErrorLogs.push(msg); },
+      },
+    });
+    await daemon.start();
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('quarantines a task stuck in inbox after MAX_TRIAGE_ATTEMPTS FM cycles and stops spawning', { timeout: 30000 }, async () => {
+    // Create task and force it to pending_dispatcher_action. MockRuntime FM writes
+    // its done file without changing task status — task stays stuck in the inbox.
+    const taskRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'cb', title: 'Stuck task' }),
+    });
+    const { id: taskId } = (await taskRes.json()) as { id: string };
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, taskId));
+
+    // Wait until the quarantine error is logged (MAX_TRIAGE_ATTEMPTS+1 FM cycles)
+    await waitFor(async () => {
+      return capturedErrorLogs.some((m) => m.includes('quarantined')) ? 'done' : null;
+    }, 15000);
+
+    // FM ran at most MAX_TRIAGE_ATTEMPTS times before quarantine
+    const spawnCount = capturedInfoLogs.filter((m) => m === 'fm agent spawned').length;
+    expect(spawnCount).toBeGreaterThanOrEqual(1);
+    expect(spawnCount).toBeLessThanOrEqual(3);
+
+    // After quarantine, FM should not spawn again — wait two more poll cycles and check count is stable
+    await new Promise((r) => setTimeout(r, 300));
+    const spawnCountAfter = capturedInfoLogs.filter((m) => m === 'fm agent spawned').length;
+    expect(spawnCountAfter).toBe(spawnCount);
+
+    expect(daemon['running']).toBe(true);
+  });
+
+  it('fmSpawnAttempts does not increment during cooldown — quarantine budget preserved', { timeout: 20000 }, async () => {
+    // Use a fresh daemon with cooldown=300ms and MAX_TRIAGE_ATTEMPTS=3.
+    // FM should spawn 3 times (at t=0, t=300ms, t=600ms) before quarantine —
+    // NOT after 1 spawn (which would happen if sightings incremented during cooldown polls).
+    await daemon.stop();
+    const devRes2 = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master-oi', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    const oiToken = ((await devRes2.json()) as { token: string }).token;
+    const wsRes2 = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'OI WS', slug: 'oi-test' }),
+    });
+    const oiWsId = ((await wsRes2.json()) as { id: string }).id;
+
+    const runtimes3 = new RuntimeRegistry();
+    runtimes3.register(new MockRuntime({ completionDelayMs: 20 }));
+    const oiDaemon = new Daemon({
+      hubUrl,
+      deviceToken: oiToken,
+      workdir,
+      runtimes: runtimes3,
+      defaultRuntimeId: 'mock',
+      workspaceId: oiWsId,
+      dispatcherMode: true,
+      fmAgentId: 'forge-master',
+      pollIntervalMs: 50,
+      fmCooldownMs: 300, // short cooldown for test speed
+      logger: {
+        info: (msg) => { capturedInfoLogs.push(msg); },
+        error: (msg) => { capturedErrorLogs.push(msg); },
+      },
+    });
+
+    const taskRes2 = await fetch(`${hubUrl}/workspaces/${oiWsId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'oi', title: 'Ordering invariant task' }),
+    });
+    const { id: oiTaskId } = (await taskRes2.json()) as { id: string };
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, oiTaskId));
+
+    await oiDaemon.start();
+
+    // Wait for quarantine to fire
+    await waitFor(async () => capturedErrorLogs.some((m) => m.includes('quarantined')) ? 'done' : null, 10000);
+
+    // FM must have spawned exactly MAX_TRIAGE_ATTEMPTS (3) times before quarantine —
+    // not fewer (which would mean cooldown polls consumed the budget).
+    const spawnCount = capturedInfoLogs.filter((m) => m === 'fm agent spawned').length;
+    expect(spawnCount).toBe(3);
+
+    await oiDaemon.stop();
+  });
+
+  it('cooldown prevents FM re-spawn within the configured window', { timeout: 20000 }, async () => {
+    // Use a fresh daemon with a 500ms cooldown so the test completes quickly.
+    await daemon.stop();
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'forge-master-cd', agentId: 'forge-master', deviceType: 'orchestrator' }),
+    });
+    const cdToken = ((await devRes.json()) as { token: string }).token;
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'CD WS', slug: 'cd-test' }),
+    });
+    const cdWsId = ((await wsRes.json()) as { id: string }).id;
+
+    const runtimes2 = new RuntimeRegistry();
+    runtimes2.register(new MockRuntime({ completionDelayMs: 20 }));
+    const cdDaemon = new Daemon({
+      hubUrl,
+      deviceToken: cdToken,
+      workdir,
+      runtimes: runtimes2,
+      defaultRuntimeId: 'mock',
+      workspaceId: cdWsId,
+      dispatcherMode: true,
+      fmAgentId: 'forge-master',
+      pollIntervalMs: 50,
+      fmCooldownMs: 500,
+      logger: {
+        info: (msg) => { capturedInfoLogs.push(msg); },
+        error: () => {},
+      },
+    });
+
+    // Create inbox task
+    const taskRes = await fetch(`${hubUrl}/workspaces/${cdWsId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'cd', title: 'Cooldown task' }),
+    });
+    const { id: cdTaskId } = (await taskRes.json()) as { id: string };
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, cdTaskId));
+
+    await cdDaemon.start();
+
+    // Wait for first spawn, then wait less than the cooldown window
+    await waitFor(async () => capturedInfoLogs.includes('fm agent spawned') ? 'done' : null, 5000);
+    const countAfterFirst = capturedInfoLogs.filter((m) => m === 'fm agent spawned').length;
+
+    // Poll for 200ms — well within the 500ms cooldown. FM must NOT spawn again.
+    await new Promise((r) => setTimeout(r, 200));
+    const countDuringCooldown = capturedInfoLogs.filter((m) => m === 'fm agent spawned').length;
+    expect(countDuringCooldown).toBe(countAfterFirst);
+    expect(capturedInfoLogs).toContain('fm spawn skipped — cooldown active');
+
+    await cdDaemon.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Dispatcher mode — multi-workspace scope=all (ADR-004)
 // ---------------------------------------------------------------------------
 
