@@ -2,6 +2,17 @@ import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
 import type { CreateTaskInput, EventEnvelope, Task } from '@forge-lab/core';
 
+export interface TaskInstruction {
+  id: string;
+  taskId: string;
+  workspaceId: string | null;
+  priority: 'redirect' | 'stop';
+  body: string;
+  createdBy: string;
+  acknowledgedAt: string | null;
+  createdAt: string;
+}
+
 export interface WorkspaceContext {
   workspaceId: string;
   docs: unknown[];
@@ -218,6 +229,20 @@ export class HubClient extends EventEmitter {
 
   async failTask(id: string, reason?: string): Promise<void> {
     await this.request<{ ok: boolean }>('POST', `/tasks/${id}/fail`, { reason });
+  }
+
+  listInstructions(taskId: string): Promise<{ instructions: TaskInstruction[] }> {
+    return this.request<{ instructions: TaskInstruction[] }>(
+      'GET',
+      `/tasks/${encodeURIComponent(taskId)}/instructions`,
+    );
+  }
+
+  async ackInstruction(taskId: string, instrId: string): Promise<void> {
+    await this.request<{ ok: boolean }>(
+      'POST',
+      `/tasks/${encodeURIComponent(taskId)}/instructions/${encodeURIComponent(instrId)}/ack`,
+    );
   }
 
   // ---------------------------------------------------------------------------

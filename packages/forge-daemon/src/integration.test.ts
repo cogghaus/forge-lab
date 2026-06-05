@@ -3405,3 +3405,132 @@ describe('integration: repo-bound worker (dev-capability)', () => {
     })).toThrow(/maxConcurrentTasks=1/);
   });
 });
+
+describe('integration: cancel in_progress task stops the agent', () => {
+  let hub: Hub;
+  let daemon: Daemon;
+  let workdir: string;
+  let hubUrl: string;
+  let deviceToken: string;
+  let sessionCookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-cancel-'));
+
+    hub = await createHub({
+      config: {
+        port: 0,
+        host: '127.0.0.1',
+        databaseUrl: ':memory:',
+        sessionSecret: 'test-secret-for-cancel-test-xxxxxxxxxxx',
+        sessionTtlHours: 24,
+        bcryptCost: 10,
+        cookieSecure: false,
+        appBaseUrl: 'http://localhost:3001',
+      },
+    });
+    hubUrl = await hub.fastify.listen({ port: 0, host: '127.0.0.1' });
+
+    const regRes = await fetch(`${hubUrl}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    expect(regRes.status).toBe(201);
+
+    const loginRes = await fetch(`${hubUrl}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'admin@example.com', password: 'password123' }),
+    });
+    expect(loginRes.status).toBe(200);
+    sessionCookie = loginRes.headers.get('set-cookie')!.split(';')[0]!;
+
+    const wsRes = await fetch(`${hubUrl}/workspaces`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'Cancel Test Workspace', slug: 'cancel-ws' }),
+    });
+    expect(wsRes.status).toBe(201);
+    workspaceId = ((await wsRes.json()) as { id: string }).id;
+
+    const devRes = await fetch(`${hubUrl}/devices`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ name: 'cancel-device', hostname: 'test-host', platform: 'linux' }),
+    });
+    expect(devRes.status).toBe(201);
+    deviceToken = ((await devRes.json()) as { token: string }).token;
+
+    // Long delay so the task stays in_progress while we cancel it.
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new MockRuntime({ completionDelayMs: 30_000 }));
+    daemon = new Daemon({
+      hubUrl,
+      deviceToken,
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      workspaceId,
+      pollIntervalMs: 100,
+    });
+    await daemon.start();
+  }, 15000);
+
+  afterEach(async () => {
+    await daemon.stop();
+    await hub.close();
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  it('cancel while in_progress: hub stays cancelled, stop instruction acknowledged', { timeout: 20000 }, async () => {
+    const createRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'fl', title: 'Cancellable task' }),
+    });
+    expect(createRes.status).toBe(201);
+    const { id: taskId } = (await createRes.json()) as { id: string };
+
+    // Force to pending_agent so the daemon can claim it directly.
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
+
+    // Wait until daemon claims the task (in_progress).
+    await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+      if (!res.ok) return null;
+      const t = (await res.json()) as { status: string };
+      return t.status === 'in_progress' ? t : null;
+    }, 10000);
+
+    // Cancel via hub API — inserts a stop instruction.
+    const cancelRes = await fetch(`${hubUrl}/workspaces/${workspaceId}/tasks/${taskId}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ reason: 'test cancel' }),
+    });
+    expect(cancelRes.status).toBe(200);
+
+    // Task status must stay cancelled (not flip to failed or completed).
+    // Wait for the daemon's poll to process the stop instruction.
+    await new Promise((r) => setTimeout(r, 1000));
+
+    const finalRes = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+    expect(finalRes.status).toBe(200);
+    const finalTask = (await finalRes.json()) as { status: string };
+    expect(finalTask.status).toBe('cancelled');
+
+    // Stop instruction must be acknowledged by the daemon.
+    const instrRes = await fetch(`${hubUrl}/tasks/${taskId}/instructions`, {
+      headers: { cookie: sessionCookie },
+    });
+    expect(instrRes.status).toBe(200);
+    const { instructions } = (await instrRes.json()) as {
+      instructions: Array<{ priority: string; acknowledgedAt: string | null }>;
+    };
+    const stopInstr = instructions.find((i) => i.priority === 'stop');
+    expect(stopInstr).toBeDefined();
+    expect(stopInstr!.acknowledgedAt).not.toBeNull();
+  });
+});
