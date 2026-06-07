@@ -102,7 +102,7 @@ export async function verifySession(
 
 export async function deleteSession(db: Db, token: string): Promise<void> {
   const tokenHash = hashToken(token);
-  await db.delete(schema.sessions).where(eq(schema.sessions.tokenHash, tokenHash));
+  await db.delete(schema.sessions).where(eq(schema.sessions.tokenHash, tokenHash)).run();
 }
 
 export interface SessionListItem {
@@ -174,6 +174,15 @@ export async function revokeOtherSessions(
   const res = await db
     .delete(schema.sessions)
     .where(and(eq(schema.sessions.userId, userId), ne(schema.sessions.tokenHash, currentHash)))
+    .run();
+  return res.rowsAffected;
+}
+
+/** Deletes all expired sessions across all users. Run periodically to reclaim space. */
+export async function pruneExpiredSessionsGlobal(db: Db): Promise<number> {
+  const res = await db
+    .delete(schema.sessions)
+    .where(lt(schema.sessions.expiresAt, new Date()))
     .run();
   return res.rowsAffected;
 }
