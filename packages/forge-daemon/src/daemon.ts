@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { EventEnvelope, RuntimeInstance, Task } from '@forge-lab/core';
 import { composeSystemPrompt } from '@forge-lab/agents';
 import type { PersonalityRegistry } from '@forge-lab/agents';
-import { HubClient } from './hub-client.js';
+import { HubClient, type TaskInstruction } from './hub-client.js';
 import { RuntimeRegistry } from './runtime/registry.js';
 import {
   cleanupTaskFiles,
@@ -284,6 +284,13 @@ export class Daemon {
     // Snapshot: the worker self-heal path below may re-spawn a task (mutating
     // activeInstances), which must not perturb this iteration.
     for (const [taskId, active] of [...this.activeInstances]) {
+      // Check stop instructions before isAlive so a cancelled task doesn't
+      // fall through to the dead-worker path and get marked failed.
+      if (!taskId.startsWith('_fm_')) {
+        const wasKilled = await this.checkStopInstruction(taskId, active);
+        if (wasKilled) continue;
+      }
+
       const runtime = this.runtimes.get(active.runtimeId);
       const alive = await runtime.isAlive(active.instance);
       if (alive) continue;
@@ -417,6 +424,58 @@ export class Daemon {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * Check if the hub has a pending stop instruction for an active task.
+   * Returns true (and handles cleanup) when a stop instruction is found;
+   * returns false when there is nothing to do. Errors are swallowed so a
+   * transient hub failure does not break the poll cycle.
+   */
+  private async checkStopInstruction(taskId: string, active: ActiveInstance): Promise<boolean> {
+    let res: { instructions: TaskInstruction[] };
+    try {
+      res = await this.client.listInstructions(taskId);
+    } catch (err) {
+      this.logger.error('failed to fetch instructions', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+
+    const stop = res.instructions.find(
+      (i) => i.priority === 'stop' && i.acknowledgedAt === null,
+    );
+    if (!stop) return false;
+
+    this.logger.info('stop instruction received — killing agent', { taskId, instrId: stop.id });
+
+    try {
+      await this.client.ackInstruction(taskId, stop.id);
+    } catch (err) {
+      this.logger.error('failed to ack stop instruction', {
+        taskId,
+        instrId: stop.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const runtime = this.runtimes.get(active.runtimeId);
+    try {
+      await runtime.stop(active.instance);
+    } catch (err) {
+      this.logger.error('failed to stop runtime instance', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    this.activeInstances.delete(taskId);
+    this.taskRetries.delete(taskId);
+    await cleanupTaskFiles(this.opts.workdir, taskId).catch(() => {});
+    this.logger.info('agent killed by stop instruction', { taskId });
+    return true;
   }
 
   /**
