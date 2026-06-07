@@ -178,6 +178,15 @@ export async function revokeOtherSessions(
   return res.rowsAffected;
 }
 
+/** Deletes all expired sessions across all users. Run periodically to reclaim space. */
+export async function pruneExpiredSessionsGlobal(db: Db): Promise<number> {
+  const res = await db
+    .delete(schema.sessions)
+    .where(lt(schema.sessions.expiresAt, new Date()))
+    .run();
+  return res.rowsAffected;
+}
+
 /** Bumps last_seen_at for the session owning `token`, throttled to one write per window. */
 export async function touchSession(db: Db, token: string): Promise<void> {
   const tokenHash = hashToken(token);

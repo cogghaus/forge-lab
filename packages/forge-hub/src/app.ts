@@ -7,6 +7,7 @@ import { openDatabase, type Db, type DbHandle } from './db/index.js';
 import { runMigrations } from './db/migrate.js';
 import type { HubConfig } from './config.js';
 import { populateAuth } from './auth/middleware.js';
+import { pruneExpiredSessionsGlobal } from './auth/sessions.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { TokenBucketStore } from './rate-limit/index.js';
 import { createEmailService, type EmailService } from './email/index.js';
@@ -43,6 +44,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
     : undefined;
   const authRateLimitStore = new TokenBucketStore();
   let deviceRouteHandles: DeviceRouteHandles | undefined;
+  let sessionGcTimer: ReturnType<typeof setInterval> | undefined;
   const handle: DbHandle = openDatabase(config.databaseUrl);
   await runMigrations(handle.raw);
 
@@ -104,6 +106,15 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
 
   await fastify.ready();
 
+  if (process.env['NODE_ENV'] !== 'test') {
+    pruneExpiredSessionsGlobal(handle.db).catch(() => {});
+    sessionGcTimer = setInterval(
+      () => pruneExpiredSessionsGlobal(handle.db).catch(() => {}),
+      60 * 60 * 1000,
+    );
+    sessionGcTimer.unref();
+  }
+
   return {
     fastify,
     db: handle.db,
@@ -111,6 +122,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
     config,
     ...(emailService ? { emailService } : {}),
     close: async () => {
+      if (sessionGcTimer) clearInterval(sessionGcTimer);
       await fastify.close();
       handle.close();
       authRateLimitStore.destroy();
