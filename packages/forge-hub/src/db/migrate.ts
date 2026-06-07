@@ -348,7 +348,7 @@ CREATE INDEX policy_rules_action_idx    ON policy_rules (action);
     sql: `
 -- Heimdall Phase 3: immutable audit log of policy rule mutations.
 -- workspace_id IS NULL = global rule change. Never hard-deleted.
-CREATE TABLE policy_rule_changes (
+CREATE TABLE IF NOT EXISTS policy_rule_changes (
   id           TEXT    PRIMARY KEY,
   rule_id      TEXT    NOT NULL,
   workspace_id TEXT,
@@ -358,8 +358,8 @@ CREATE TABLE policy_rule_changes (
   snapshot     TEXT    NOT NULL
 );
 
-CREATE INDEX policy_rule_changes_rule_idx ON policy_rule_changes (rule_id, changed_at DESC);
-CREATE INDEX policy_rule_changes_user_idx ON policy_rule_changes (changed_by, changed_at DESC);
+CREATE INDEX IF NOT EXISTS policy_rule_changes_rule_idx ON policy_rule_changes (rule_id, changed_at DESC);
+CREATE INDEX IF NOT EXISTS policy_rule_changes_user_idx ON policy_rule_changes (changed_by, changed_at DESC);
 `,
   },
 ];

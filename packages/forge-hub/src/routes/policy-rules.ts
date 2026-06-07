@@ -75,7 +75,7 @@ async function recordRuleChange(
 }
 
 export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void {
-  // GET /workspaces/:workspaceId/policy-rules — list active rules (workspace + global)
+  // GET /workspaces/:workspaceId/policy-rules — list active workspace-scoped rules
   fastify.get<{ Params: { workspaceId: string } }>(
     '/workspaces/:workspaceId/policy-rules',
     { preHandler: requireWorkspaceMember(db, 'admin') },
