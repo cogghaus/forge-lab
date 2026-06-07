@@ -102,7 +102,7 @@ export async function verifySession(
 
 export async function deleteSession(db: Db, token: string): Promise<void> {
   const tokenHash = hashToken(token);
-  await db.delete(schema.sessions).where(eq(schema.sessions.tokenHash, tokenHash));
+  await db.delete(schema.sessions).where(eq(schema.sessions.tokenHash, tokenHash)).run();
 }
 
 export interface SessionListItem {

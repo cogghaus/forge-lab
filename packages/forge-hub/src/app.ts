@@ -107,7 +107,9 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
   await fastify.ready();
 
   if (process.env['NODE_ENV'] !== 'test') {
-    pruneExpiredSessionsGlobal(handle.db).catch(() => {});
+    pruneExpiredSessionsGlobal(handle.db).catch((err) =>
+      fastify.log.warn(err, 'session GC startup failed'),
+    );
     sessionGcTimer = setInterval(
       () => pruneExpiredSessionsGlobal(handle.db).catch(() => {}),
       60 * 60 * 1000,

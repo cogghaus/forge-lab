@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { openDatabase, type DbHandle } from '../db/index.js';
 import { runMigrations } from '../db/migrate.js';
 import { createSession, pruneExpiredSessionsGlobal } from './sessions.js';
 import { hashPassword } from './password.js';
+import { hashToken } from './tokens.js';
 import { schema } from '@forge-lab/core';
 import { nanoid } from 'nanoid';
 
@@ -24,7 +25,7 @@ async function insertExpiredSession(handle: DbHandle, userId: string): Promise<v
   await handle.db.insert(schema.sessions).values({
     id: nanoid(),
     userId,
-    tokenHash: nanoid(),
+    tokenHash: hashToken(nanoid()),
     expiresAt: new Date(Date.now() - 60_000), // 1 minute in the past
     lastSeenAt: null,
     userAgent: null,
@@ -37,6 +38,10 @@ describe('pruneExpiredSessionsGlobal', () => {
 
   beforeEach(async () => {
     handle = await freshHandle();
+  });
+
+  afterEach(() => {
+    handle.close();
   });
 
   it('deletes expired sessions across all users', async () => {
