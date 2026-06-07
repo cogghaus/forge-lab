@@ -79,6 +79,16 @@ describe('validateCondition', () => {
   it('rejects and with empty conditions', () => {
     expect(() => validateCondition({ op: 'and', conditions: [] })).toThrow('non-empty');
   });
+
+  it('rejects in with more than 20 values', () => {
+    expect(() =>
+      validateCondition({
+        op: 'in',
+        field: 'resource.id',
+        values: Array.from({ length: 21 }, (_, i) => String(i)),
+      }),
+    ).toThrow('must not exceed 20');
+  });
 });
 
 describe('evalCondition', () => {

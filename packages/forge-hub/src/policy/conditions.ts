@@ -46,6 +46,8 @@ export function validateCondition(expr: unknown, depth = 0, leafCount = { n: 0 }
         throw new Error('"in" requires string[] "values"');
       }
       if ((e['values'] as unknown[]).length === 0) throw new Error('"in" values must not be empty');
+      if ((e['values'] as unknown[]).length > MAX_LEAVES)
+        throw new Error(`"in" values must not exceed ${MAX_LEAVES} items`);
     }
   } else if (op === 'and' || op === 'or') {
     const conditions = e['conditions'];
