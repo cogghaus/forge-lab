@@ -6,9 +6,8 @@
 #
 # Prereqs on accserver:
 #   1. The main stack (deploy/compose.yml, project "deploy") is up.
-#   2. Claude OAuth creds at /datapool/docker/vibe-forge/claude-home (uid 1001).
-#   3. deploy/.env.daemons filled with 9 device tokens (no workspace ID required).
-#   4. The owning account is a member of every workspace to be served.
+#   2. deploy/.env.daemons filled with ANTHROPIC_API_KEY + 9 device tokens.
+#   3. The owning account is a member of every workspace to be served.
 #
 # Usage (from a checkout on accserver):
 #   docker compose -p forge-daemons \
@@ -30,9 +29,7 @@ x-daemon-common: &daemon-common
     FORGE_DAEMON_DEFAULT_RUNTIME: "background"
     FORGE_DAEMON_SKIP_PERMISSIONS: "true"
     FORGE_DAEMON_MAX_CONCURRENT_TASKS: "1"
-  volumes:
-    # Shared OAuth creds (read-write: claude refreshes tokens in place).
-    - /datapool/docker/vibe-forge/claude-home:/home/forge
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:?}"
   networks:
     - vibe-forge-internal
 
@@ -50,7 +47,6 @@ services:
       # Dispatcher mode ignores MAX_CONCURRENT_TASKS (it does not claim worker
       # tasks); inherit the anchor's "1" rather than empty (which fails parse).
     volumes:
-      - /datapool/docker/vibe-forge/claude-home:/home/forge
       - daemon-fm-workdir:/workdir
 
   forge-architect:
@@ -61,7 +57,6 @@ services:
       FORGE_DAEMON_AGENT_ID: "architect"
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_ARCHITECT_TOKEN:?}"
     volumes:
-      - /datapool/docker/vibe-forge/claude-home:/home/forge
       - daemon-architect-workdir:/workdir
 
   forge-furnace:
@@ -72,7 +67,6 @@ services:
       FORGE_DAEMON_AGENT_ID: "furnace"
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_FURNACE_TOKEN:?}"
     volumes:
-      - /datapool/docker/vibe-forge/claude-home:/home/forge
       - daemon-furnace-workdir:/workdir
 
   forge-anvil:
@@ -83,7 +77,6 @@ services:
       FORGE_DAEMON_AGENT_ID: "anvil"
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_ANVIL_TOKEN:?}"
     volumes:
-      - /datapool/docker/vibe-forge/claude-home:/home/forge
       - daemon-anvil-workdir:/workdir
 
   forge-crucible:
@@ -94,7 +87,6 @@ services:
       FORGE_DAEMON_AGENT_ID: "crucible"
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_CRUCIBLE_TOKEN:?}"
     volumes:
-      - /datapool/docker/vibe-forge/claude-home:/home/forge
       - daemon-crucible-workdir:/workdir
 
   forge-oracle:
@@ -105,7 +97,6 @@ services:
       FORGE_DAEMON_AGENT_ID: "oracle"
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_ORACLE_TOKEN:?}"
     volumes:
-      - /datapool/docker/vibe-forge/claude-home:/home/forge
       - daemon-oracle-workdir:/workdir
 
   forge-scribe:
@@ -116,7 +107,6 @@ services:
       FORGE_DAEMON_AGENT_ID: "scribe"
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_SCRIBE_TOKEN:?}"
     volumes:
-      - /datapool/docker/vibe-forge/claude-home:/home/forge
       - daemon-scribe-workdir:/workdir
 
   forge-herald:
@@ -127,7 +117,6 @@ services:
       FORGE_DAEMON_AGENT_ID: "herald"
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_HERALD_TOKEN:?}"
     volumes:
-      - /datapool/docker/vibe-forge/claude-home:/home/forge
       - daemon-herald-workdir:/workdir
 
   forge-temper:
@@ -138,7 +127,6 @@ services:
       FORGE_DAEMON_AGENT_ID: "temper"
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_TEMPER_TOKEN:?}"
     volumes:
-      - /datapool/docker/vibe-forge/claude-home:/home/forge
       - daemon-temper-workdir:/workdir
 
 networks:
