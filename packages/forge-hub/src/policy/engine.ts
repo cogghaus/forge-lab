@@ -1,5 +1,5 @@
 /**
- * Heimdall policy engine — Phase 2.
+ * Heimdall policy engine — Phase 3.
  *
  * Evaluates built-in rules merged with DB-backed workspace/global overrides,
  * in priority order. First matching rule wins. Default deny when no rule matches.
@@ -7,6 +7,15 @@
  * DB rules are loaded per-request for the relevant workspace. They overlay the
  * built-in set: a DB rule at priority 300 overrides any built-in rule at <= 300.
  * Archived rules (archived_at IS NOT NULL) are excluded from evaluation.
+ *
+ * DB rules with a non-null resourceCondition are evaluated via the condition
+ * expression evaluator (conditions.ts). Invalid stored conditions fail closed
+ * (rule does not match) rather than crashing the evaluation.
+ *
+ * Fail-open on DB load: if DB rule loading fails (transient I/O error), the
+ * engine falls back to built-in rules only. This is intentional — deny-on-fail
+ * would break all agent work during DB hiccups. The failure is logged via
+ * ctx.log so it surfaces in the application log stream.
  */
 
 import { and, isNull, or, eq } from 'drizzle-orm';
@@ -15,6 +24,7 @@ import type { Db } from '../db/index.js';
 import { BUILT_IN_RULES, type BuiltInRule, type WorkspaceRole } from './defaults.js';
 import { resolvePrincipals, matchesPrincipal } from './principals.js';
 import { logDecision } from './audit.js';
+import { parseCondition, evalCondition } from './conditions.js';
 
 // Re-export principal type so callers import from one place.
 export type { PolicyPrincipal } from './principals.js';
@@ -55,6 +65,8 @@ export interface PolicyDecision {
 export interface PolicyContext {
   db?: Db;
   workspaceId?: string;
+  /** Optional structured logger. Receives warn-level messages on non-fatal failures. */
+  log?: (msg: string, data?: Record<string, unknown>) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,10 +91,15 @@ function evaluateCondition(
   principal: any, // PolicyPrincipal — imported via engine.ts re-export
   resource: PolicyResource,
 ): boolean {
-  // DB rules: resourceCondition is a JSON expression. Phase 2 only evaluates
-  // NULL conditions (unconditional match). JSON conditions are a Phase 3 extension.
+  // DB rules: evaluate resourceCondition expression if present; null = unconditional.
   if ('resourceCondition' in rule && !('condition' in rule)) {
-    return rule.resourceCondition === null;
+    if (rule.resourceCondition === null) return true;
+    try {
+      return evalCondition(parseCondition(rule.resourceCondition), resource);
+    } catch {
+      // Malformed condition stored in DB — fail closed (rule does not match).
+      return false;
+    }
   }
 
   const builtIn = rule as BuiltInRule;
@@ -127,6 +144,7 @@ interface DbRule {
   resourceCondition: string | null;
   effect: 'allow' | 'deny';
   priority: number;
+  createdAt: Date;
 }
 
 async function loadDbRules(db: Db, workspaceId: string | undefined): Promise<DbRule[]> {
@@ -141,6 +159,7 @@ async function loadDbRules(db: Db, workspaceId: string | undefined): Promise<DbR
       resourceCondition: schema.policyRules.resourceCondition,
       effect: schema.policyRules.effect,
       priority: schema.policyRules.priority,
+      createdAt: schema.policyRules.createdAt,
     })
     .from(schema.policyRules)
     .where(
@@ -192,9 +211,12 @@ export async function checkPolicy(
   if (ctx.db) {
     try {
       dbRules = await loadDbRules(ctx.db, ctx.workspaceId);
-    } catch {
-      // DB rule load failure is non-fatal — fall through to built-ins only.
-      process.stderr.write(`[heimdall] DB rule load failed for workspace=${ctx.workspaceId ?? 'global'}\n`);
+    } catch (err) {
+      // DB rule load failure is non-fatal — fall through to built-ins only (fail-open).
+      // Intentional: deny-on-fail would halt all agent work during transient DB errors.
+      const msg = '[heimdall] DB rule load failed — evaluating built-ins only';
+      if (ctx.log) ctx.log(msg, { workspaceId: ctx.workspaceId, err: String(err) });
+      else process.stderr.write(JSON.stringify({ level: 'warn', msg, workspaceId: ctx.workspaceId, err: String(err) }) + '\n');
     }
   }
 
@@ -210,13 +232,15 @@ export async function checkPolicy(
     return true;
   });
 
-  // Sort by priority DESC. On tie, deny > allow.
+  // Sort: priority DESC → deny before allow (same priority) → createdAt ASC (deterministic).
   candidates.sort((a, b) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
-    // Same priority: deny fires before allow (conservative).
     if (a.effect === 'deny' && b.effect === 'allow') return -1;
     if (a.effect === 'allow' && b.effect === 'deny') return 1;
-    return 0;
+    // Tertiary: oldest rule first (deterministic within same priority+effect).
+    const aTime = 'createdAt' in a ? (a.createdAt as Date).getTime() : 0;
+    const bTime = 'createdAt' in b ? (b.createdAt as Date).getTime() : 0;
+    return aTime - bTime;
   });
 
   // Find first rule whose condition is satisfied.

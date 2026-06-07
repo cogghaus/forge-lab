@@ -16,7 +16,7 @@ async function freshHandle(): Promise<DbHandle> {
 async function insertUser(handle: DbHandle, email: string): Promise<string> {
   const id = nanoid();
   const passwordHash = await hashPassword('password123', 4);
-  await handle.db.insert(schema.users).values({ id, email, passwordHash, role: 'member' });
+  await handle.db.insert(schema.users).values({ id, email, passwordHash, role: 'user' });
   return id;
 }
 

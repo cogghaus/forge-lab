@@ -343,6 +343,25 @@ CREATE INDEX policy_rules_workspace_idx ON policy_rules (workspace_id);
 CREATE INDEX policy_rules_action_idx    ON policy_rules (action);
 `,
   },
+  {
+    name: '0012_heimdall_phase3',
+    sql: `
+-- Heimdall Phase 3: immutable audit log of policy rule mutations.
+-- workspace_id IS NULL = global rule change. Never hard-deleted.
+CREATE TABLE policy_rule_changes (
+  id           TEXT    PRIMARY KEY,
+  rule_id      TEXT    NOT NULL,
+  workspace_id TEXT,
+  action       TEXT    NOT NULL CHECK (action IN ('create', 'archive')),
+  changed_by   TEXT    NOT NULL,
+  changed_at   INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  snapshot     TEXT    NOT NULL
+);
+
+CREATE INDEX policy_rule_changes_rule_idx ON policy_rule_changes (rule_id, changed_at DESC);
+CREATE INDEX policy_rule_changes_user_idx ON policy_rule_changes (changed_by, changed_at DESC);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {
