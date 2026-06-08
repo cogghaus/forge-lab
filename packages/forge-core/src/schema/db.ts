@@ -398,3 +398,24 @@ export const policyRules = sqliteTable(
     actionIdx: index('policy_rules_action_idx').on(t.action),
   }),
 );
+
+/**
+ * Immutable audit log of policy rule mutations (create / archive).
+ * Never hard-deleted. workspace_id IS NULL = global rule change.
+ */
+export const policyRuleChanges = sqliteTable(
+  'policy_rule_changes',
+  {
+    id: text('id').primaryKey(),
+    ruleId: text('rule_id').notNull(),
+    workspaceId: text('workspace_id'),
+    action: text('action', { enum: ['create', 'archive'] }).notNull(),
+    changedBy: text('changed_by').notNull(),
+    changedAt: timestampMs('changed_at').notNull().default(nowDefault),
+    snapshot: text('snapshot').notNull(),
+  },
+  (t) => ({
+    ruleIdx: index('policy_rule_changes_rule_idx').on(t.ruleId, t.changedAt),
+    userIdx: index('policy_rule_changes_user_idx').on(t.changedBy, t.changedAt),
+  }),
+);
