@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { and, count, eq, isNull } from 'drizzle-orm';
+import { and, count, desc, eq, isNull, lt } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { requireWorkspaceMember, getWorkspace, requireUser, getUser } from '../auth/middleware.js';
+import { parseCondition, validateCondition } from '../policy/conditions.js';
 
 const VALID_ACTIONS = [
   'task:assign', 'task:claim', 'task:cancel', 'task:retry', 'task:complete', 'task:fail',
@@ -13,7 +14,8 @@ const VALID_ACTIONS = [
   'context:read', 'workspace:list',
 ] as const;
 
-const MAX_RULES_PER_WORKSPACE = 100;
+const MAX_WORKSPACE_RULES = 100;
+const MAX_GLOBAL_RULES = 50;
 const VALID_RESOURCE_TYPES = ['task', 'doc', 'device', 'workspace'] as const;
 
 const CreatePolicyRuleSchema = z.object({
@@ -30,18 +32,50 @@ const CreatePolicyRuleSchema = z.object({
   resourceCondition: z
     .string()
     .max(2000)
-    .refine(
-      (v) => { try { JSON.parse(v); return true; } catch { return false; } },
-      'resourceCondition must be valid JSON',
-    )
+    .superRefine((val, ctx) => {
+      try {
+        validateCondition(parseCondition(val));
+      } catch (e) {
+        ctx.addIssue({ code: 'custom', message: String(e) });
+      }
+    })
     .nullable()
     .optional(),
   effect: z.enum(['allow', 'deny']),
   priority: z.number().int().min(0).max(999).default(0),
 });
 
+const ChangeQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  before: z.coerce.number().int().optional(),
+});
+
+async function recordRuleChange(
+  db: Db,
+  entry: {
+    ruleId: string;
+    workspaceId: string | null;
+    action: 'create' | 'archive';
+    changedBy: string;
+    snapshot: object;
+  },
+): Promise<void> {
+  try {
+    await db.insert(schema.policyRuleChanges).values({
+      id: nanoid(),
+      ruleId: entry.ruleId,
+      workspaceId: entry.workspaceId,
+      action: entry.action,
+      changedBy: entry.changedBy,
+      snapshot: JSON.stringify(entry.snapshot),
+    });
+  } catch {
+    // Non-fatal — audit write failure must not block the mutation response.
+  }
+}
+
 export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void {
-  // GET /workspaces/:workspaceId/policy-rules — list active rules (workspace + global)
+  // GET /workspaces/:workspaceId/policy-rules — list active workspace-scoped rules
   fastify.get<{ Params: { workspaceId: string } }>(
     '/workspaces/:workspaceId/policy-rules',
     { preHandler: requireWorkspaceMember(db, 'admin') },
@@ -67,14 +101,15 @@ export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void
     { preHandler: requireWorkspaceMember(db, 'admin') },
     async (req, reply) => {
       const { id: workspaceId } = getWorkspace(req);
+      const user = getUser(req);
       const body = CreatePolicyRuleSchema.parse(req.body);
       const countRows = await db
         .select({ activeCount: count() })
         .from(schema.policyRules)
         .where(and(eq(schema.policyRules.workspaceId, workspaceId), isNull(schema.policyRules.archivedAt)));
       const activeCount = countRows[0]?.activeCount ?? 0;
-      if (activeCount >= MAX_RULES_PER_WORKSPACE) {
-        return reply.code(422).send({ error: 'rule_limit_exceeded', max: MAX_RULES_PER_WORKSPACE });
+      if (activeCount >= MAX_WORKSPACE_RULES) {
+        return reply.code(422).send({ error: 'rule_limit_exceeded', max: MAX_WORKSPACE_RULES });
       }
       const id = nanoid();
       await db.insert(schema.policyRules).values({
@@ -92,6 +127,7 @@ export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void
         .from(schema.policyRules)
         .where(eq(schema.policyRules.id, id))
         .get();
+      void recordRuleChange(db, { ruleId: id, workspaceId, action: 'create', changedBy: user.id, snapshot: rule! });
       return reply.code(201).send({ rule });
     },
   );
@@ -102,6 +138,7 @@ export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void
     { preHandler: requireWorkspaceMember(db, 'admin') },
     async (req, reply) => {
       const { id: workspaceId } = getWorkspace(req);
+      const user = getUser(req);
       const { ruleId } = req.params;
       const body = z.object({ archived: z.literal(true) }).parse(req.body);
       void body;
@@ -117,15 +154,40 @@ export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void
         .get();
       if (!rule) return reply.code(404).send({ error: 'not_found' });
       if (rule.archivedAt) return reply.code(409).send({ error: 'already_archived' });
-      await db
+      const result = await db
         .update(schema.policyRules)
         .set({ archivedAt: new Date() })
-        .where(eq(schema.policyRules.id, ruleId));
+        .where(and(eq(schema.policyRules.id, ruleId), isNull(schema.policyRules.archivedAt)))
+        .run();
+      if (result.rowsAffected === 0) return reply.code(404).send({ error: 'not_found' });
+      void recordRuleChange(db, { ruleId, workspaceId, action: 'archive', changedBy: user.id, snapshot: rule });
       return reply.code(200).send({ archived: true });
     },
   );
 
-  // GET /policy-rules — list global rules (admin users only, owner check)
+  // GET /workspaces/:workspaceId/policy-rules/changes — workspace rule change history
+  fastify.get<{ Params: { workspaceId: string }; Querystring: Record<string, string> }>(
+    '/workspaces/:workspaceId/policy-rules/changes',
+    { preHandler: requireWorkspaceMember(db, 'admin') },
+    async (req, reply) => {
+      const { id: workspaceId } = getWorkspace(req);
+      const query = ChangeQuerySchema.parse(req.query);
+      const changes = await db
+        .select()
+        .from(schema.policyRuleChanges)
+        .where(
+          and(
+            eq(schema.policyRuleChanges.workspaceId, workspaceId),
+            query.before ? lt(schema.policyRuleChanges.changedAt, new Date(query.before)) : undefined,
+          ),
+        )
+        .orderBy(desc(schema.policyRuleChanges.changedAt))
+        .limit(query.limit);
+      return { changes };
+    },
+  );
+
+  // GET /policy-rules — list global rules (admin users only)
   fastify.get(
     '/policy-rules',
     { preHandler: requireUser },
@@ -159,8 +221,8 @@ export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void
         .from(schema.policyRules)
         .where(and(isNull(schema.policyRules.workspaceId), isNull(schema.policyRules.archivedAt)));
       const activeGlobalCount = globalCountRows[0]?.activeGlobalCount ?? 0;
-      if (activeGlobalCount >= MAX_RULES_PER_WORKSPACE) {
-        return reply.code(422).send({ error: 'rule_limit_exceeded', max: MAX_RULES_PER_WORKSPACE });
+      if (activeGlobalCount >= MAX_GLOBAL_RULES) {
+        return reply.code(422).send({ error: 'rule_limit_exceeded', max: MAX_GLOBAL_RULES });
       }
       const id = nanoid();
       await db.insert(schema.policyRules).values({
@@ -178,6 +240,7 @@ export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void
         .from(schema.policyRules)
         .where(eq(schema.policyRules.id, id))
         .get();
+      void recordRuleChange(db, { ruleId: id, workspaceId: null, action: 'create', changedBy: user.id, snapshot: rule! });
       return reply.code(201).send({ rule });
     },
   );
@@ -204,11 +267,37 @@ export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void
         .get();
       if (!rule) return reply.code(404).send({ error: 'not_found' });
       if (rule.archivedAt) return reply.code(409).send({ error: 'already_archived' });
-      await db
+      const result = await db
         .update(schema.policyRules)
         .set({ archivedAt: new Date() })
-        .where(eq(schema.policyRules.id, ruleId));
+        .where(and(eq(schema.policyRules.id, ruleId), isNull(schema.policyRules.archivedAt)))
+        .run();
+      if (result.rowsAffected === 0) return reply.code(404).send({ error: 'not_found' });
+      void recordRuleChange(db, { ruleId, workspaceId: null, action: 'archive', changedBy: user.id, snapshot: rule });
       return reply.code(200).send({ archived: true });
+    },
+  );
+
+  // GET /policy-rules/changes — global rule change history (admin only)
+  fastify.get<{ Querystring: Record<string, string> }>(
+    '/policy-rules/changes',
+    { preHandler: requireUser },
+    async (req, reply) => {
+      const user = getUser(req);
+      if (user.role !== 'admin') return reply.code(403).send({ error: 'admin_required' });
+      const query = ChangeQuerySchema.parse(req.query);
+      const changes = await db
+        .select()
+        .from(schema.policyRuleChanges)
+        .where(
+          and(
+            isNull(schema.policyRuleChanges.workspaceId),
+            query.before ? lt(schema.policyRuleChanges.changedAt, new Date(query.before)) : undefined,
+          ),
+        )
+        .orderBy(desc(schema.policyRuleChanges.changedAt))
+        .limit(query.limit);
+      return { changes };
     },
   );
 }
