@@ -169,7 +169,7 @@ export function registerPolicyRuleRoutes(fastify: FastifyInstance, db: Db): void
   fastify.get<{ Params: { workspaceId: string }; Querystring: Record<string, string> }>(
     '/workspaces/:workspaceId/policy-rules/changes',
     { preHandler: requireWorkspaceMember(db, 'admin') },
-    async (req, reply) => {
+    async (req, _reply) => {
       const { id: workspaceId } = getWorkspace(req);
       const query = ChangeQuerySchema.parse(req.query);
       const changes = await db
