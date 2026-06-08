@@ -23,6 +23,7 @@ export interface WorkspaceContext {
   recentHistory: unknown[];
   dispatcherHistory: unknown[];
   queueDepth: Record<string, number>;
+  contextDocs: Array<{ id: string; name: string; content: string; updatedAt: number }>;
 }
 
 export interface HubClientOptions {

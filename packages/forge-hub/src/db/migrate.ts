@@ -362,6 +362,50 @@ CREATE INDEX IF NOT EXISTS policy_rule_changes_rule_idx ON policy_rule_changes (
 CREATE INDEX IF NOT EXISTS policy_rule_changes_user_idx ON policy_rule_changes (changed_by, changed_at DESC);
 `,
   },
+  {
+    name: '0013_workspace_context',
+    sql: `
+-- Workspace context docs: named markdown blobs injected into agent task prompts.
+-- Max 10 docs per workspace, max 10 000 UTF-8 bytes per doc (app-enforced).
+CREATE TABLE IF NOT EXISTS workspace_context (
+  id           TEXT    PRIMARY KEY,
+  workspace_id TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name         TEXT    NOT NULL,
+  content      TEXT    NOT NULL,
+  created_by   TEXT    NOT NULL,
+  created_at   INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  updated_by   TEXT    NOT NULL,
+  updated_at   INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  UNIQUE(workspace_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS workspace_context_ws_idx
+  ON workspace_context (workspace_id, updated_at DESC);
+
+-- Immutable audit log of workspace context doc mutations.
+-- snapshot is NULL on delete (doc already removed).
+CREATE TABLE IF NOT EXISTS workspace_context_changes (
+  id           TEXT    PRIMARY KEY,
+  workspace_id TEXT    NOT NULL,
+  name         TEXT    NOT NULL,
+  action       TEXT    NOT NULL CHECK (action IN ('create', 'update', 'delete')),
+  changed_by   TEXT    NOT NULL,
+  changed_at   INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  snapshot     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS workspace_context_changes_ws_idx
+  ON workspace_context_changes (workspace_id, changed_at DESC);
+`,
+  },
+  {
+    name: '0014_task_context_snapshot',
+    sql: `
+-- Baked context injected into the task at FM assignment time.
+-- JSON array of {name, content} objects. NULL = no context was available.
+ALTER TABLE tasks ADD COLUMN context_snapshot TEXT;
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {

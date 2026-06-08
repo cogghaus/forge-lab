@@ -38,6 +38,13 @@ export default function WorkspaceSettingsPage() {
   const [ruleCreating, setRuleCreating] = useState(false);
   const [ruleError, setRuleError] = useState('');
 
+  // Context docs state
+  type ContextDoc = { id: string; name: string; sizeBytes: number; updatedAt: number };
+  const [contextDocs, setContextDocs] = useState<ContextDoc[]>([]);
+  const [docForm, setDocForm] = useState({ name: '', content: '' });
+  const [docSaving, setDocSaving] = useState(false);
+  const [docError, setDocError] = useState('');
+
   // Load workspace
   useEffect(() => {
     fetch(`/api/hub/workspaces/${workspaceId}`)
@@ -62,6 +69,12 @@ export default function WorkspaceSettingsPage() {
   useEffect(() => {
     fetch(`/api/hub/workspaces/${workspaceId}/policy-rules`)
       .then(async (res) => { if (res.ok) setPolicyRules(((await res.json()) as { rules: PolicyRule[] }).rules); })
+      .catch(() => {});
+  }, [workspaceId]);
+
+  useEffect(() => {
+    fetch(`/api/hub/workspaces/${workspaceId}/context-docs`)
+      .then(async (res) => { if (res.ok) setContextDocs(((await res.json()) as { docs: ContextDoc[] }).docs); })
       .catch(() => {});
   }, [workspaceId]);
 
@@ -92,6 +105,41 @@ export default function WorkspaceSettingsPage() {
       });
       if (res.ok) setPolicyRules((prev) => prev.filter((r) => r.id !== ruleId));
     } catch { /* non-fatal */ }
+  }
+
+  async function handleUpsertDoc(e: React.FormEvent) {
+    e.preventDefault();
+    if (!docForm.name.trim() || !docForm.content.trim()) return;
+    setDocSaving(true); setDocError('');
+    try {
+      const res = await fetch(`/api/hub/workspaces/${workspaceId}/context-docs/${encodeURIComponent(docForm.name.trim())}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: docForm.content }),
+      });
+      const json = await res.json() as Record<string, unknown>;
+      if (!res.ok) {
+        const err = json['error'] as string | undefined;
+        setDocError(err === 'content_too_large' ? 'Content exceeds 10 000 bytes' : err === 'doc_limit_exceeded' ? 'Limit reached (10 docs max)' : 'Failed to save');
+        return;
+      }
+      const doc = json['doc'] as ContextDoc;
+      setContextDocs((prev) => {
+        const idx = prev.findIndex((d) => d.name === docForm.name.trim());
+        if (idx >= 0) { const next = [...prev]; next[idx] = doc; return next; }
+        return [...prev, doc];
+      });
+      setDocForm({ name: '', content: '' });
+    } catch { setDocError('Network error'); }
+    finally { setDocSaving(false); }
+  }
+
+  async function handleDeleteDoc(name: string) {
+    try {
+      const res = await fetch(`/api/hub/workspaces/${workspaceId}/context-docs/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (res.ok) setContextDocs((prev) => prev.filter((d) => d.name !== name));
+      else setDocError('Failed to delete doc');
+    } catch { setDocError('Network error'); }
   }
 
   async function handleSave(e: React.FormEvent) {
@@ -536,6 +584,67 @@ export default function WorkspaceSettingsPage() {
             </button>
           </form>
           {ruleError && <span className="font-mono text-[11px]" style={{ color: '#F87171' }}>{ruleError}</span>}
+        </div>
+      </section>
+
+      {/* Context Docs */}
+      <section>
+        <h2 className="font-mono text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: 'rgba(245,240,235,0.4)' }}>
+          Context Docs
+        </h2>
+        <div className="rounded-xl p-5 space-y-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
+          <p className="font-mono text-[11px]" style={{ color: 'rgba(245,240,235,0.45)' }}>
+            Named markdown blobs injected into agent task prompts at assignment time. Max 10 docs, 10 000 bytes each.
+          </p>
+
+          {contextDocs.length > 0 && (
+            <div className="space-y-2">
+              {contextDocs.map((doc) => (
+                <div key={doc.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <span className="font-mono text-[11px]" style={{ color: 'rgba(245,240,235,0.7)' }}>
+                    {doc.name}
+                    <span className="ml-2" style={{ color: 'rgba(245,240,235,0.35)' }}>{doc.sizeBytes} B</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { if (window.confirm(`Delete "${doc.name}"?`)) void handleDeleteDoc(doc.name); }}
+                    className="font-mono text-[10px] px-2 py-1 rounded transition-colors"
+                    style={{ color: 'rgba(245,240,235,0.4)', background: 'transparent' }}
+                  >
+                    delete
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <form onSubmit={(e) => { void handleUpsertDoc(e); }} className="flex flex-col gap-2">
+            <input
+              type="text"
+              value={docForm.name}
+              onChange={(e) => setDocForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="doc name (e.g. architecture)"
+              className="px-3 py-2 rounded-md text-xs font-mono outline-none"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(245,240,235,0.85)' }}
+            />
+            <textarea
+              value={docForm.content}
+              onChange={(e) => setDocForm((f) => ({ ...f, content: e.target.value }))}
+              placeholder="markdown content..."
+              rows={6}
+              className="px-3 py-2 rounded-md text-xs font-mono outline-none resize-y"
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(245,240,235,0.85)' }}
+            />
+            <button
+              type="submit"
+              disabled={docSaving || !docForm.name.trim() || !docForm.content.trim()}
+              className="self-start px-4 py-2 rounded-md text-xs font-mono transition-colors disabled:opacity-40"
+              style={{ background: '#FF6B2B', color: '#1A1A1F' }}
+            >
+              {docSaving ? 'Saving...' : 'Save doc'}
+            </button>
+          </form>
+          {docError && <span className="font-mono text-[11px]" style={{ color: '#F87171' }}>{docError}</span>}
         </div>
       </section>
     </div>
