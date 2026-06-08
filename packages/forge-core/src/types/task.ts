@@ -1,6 +1,16 @@
 import { z } from 'zod';
 import { TaskIdSchema } from './ids.js';
 
+export const ReviewConfigSchema = z.object({
+  reviewer: z.string().min(1).max(100),
+  targetType: z.enum(['diff', 'branch', 'pr']),
+  /** Branch name (for 'branch') or PR number (for 'pr'). Not used for 'diff' — diff goes in description. */
+  targetValue: z.string().max(500).optional(),
+  /** Optional focus notes passed to the reviewer as additional context. */
+  focus: z.string().max(2000).optional(),
+});
+export type ReviewConfig = z.infer<typeof ReviewConfigSchema>;
+
 export const TaskStatusSchema = z.enum([
   'pending_design',
   'design_review',
@@ -35,6 +45,9 @@ export const TaskSchema = z.object({
   createdAt: z.date(),
   updatedAt: z.date(),
   completedAt: z.date().nullable(),
+  taskKind: z.enum(['coding', 'review']).default('coding'),
+  /** JSON-encoded ReviewConfig. Null for coding tasks. */
+  reviewConfig: z.string().nullable().default(null),
 });
 export type Task = z.infer<typeof TaskSchema>;
 
@@ -58,6 +71,9 @@ export const CreateTaskInputSchema = z.object({
    * (e.g. Scribe) that self-create follow-up tasks and want guaranteed routing.
    */
   assignedAgentId: z.string().nullable().optional(),
+  taskKind: z.enum(['coding', 'review']).optional(),
+  /** JSON-encoded ReviewConfig. Required when taskKind is 'review'. */
+  reviewConfig: z.string().nullable().optional(),
 });
 export type CreateTaskInput = z.infer<typeof CreateTaskInputSchema>;
 

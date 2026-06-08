@@ -4,6 +4,7 @@ import type { EventEnvelope, RuntimeInstance, Task } from '@forge-lab/core';
 import { composeSystemPrompt } from '@forge-lab/agents';
 import type { PersonalityRegistry } from '@forge-lab/agents';
 import { HubClient, type TaskInstruction } from './hub-client.js';
+import { ReviewRunner } from './review-runner.js';
 import { RuntimeRegistry } from './runtime/registry.js';
 import {
   cleanupTaskFiles,
@@ -134,6 +135,15 @@ export interface DaemonOptions {
    * Default: 2.
    */
   authRetryLimit?: number;
+  /**
+   * Injectable ReviewRunner for review tasks (tests). When omitted, one is
+   * created automatically if personalityRegistry is provided.
+   */
+  reviewRunner?: ReviewRunner;
+  /** Path to the claude binary used for review task execution. Defaults to 'claude'. */
+  reviewClaudePath?: string;
+  /** Pass --dangerously-skip-permissions to claude for review tasks. */
+  reviewDangerouslySkipPermissions?: boolean;
 }
 
 export interface DaemonLogger {
@@ -193,6 +203,7 @@ export class Daemon {
   /** Maps synthetic FM task ID → workspaceId so dead-FM recovery can clear the cooldown. */
   private readonly fmTaskWorkspace = new Map<string, string>();
   private readonly gitOps: GitOps;
+  private readonly reviewRunner: ReviewRunner | null;
 
   constructor(opts: DaemonOptions) {
     this.opts = opts;
@@ -219,6 +230,22 @@ export class Daemon {
       // `undefined`, and the client defaults requestTimeoutMs to 30s anyway.
       ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
     });
+
+    if (opts.reviewRunner !== undefined) {
+      this.reviewRunner = opts.reviewRunner;
+    } else if (opts.personalityRegistry) {
+      this.reviewRunner = new ReviewRunner({
+        hubClient: this.client,
+        personalityRegistry: opts.personalityRegistry,
+        workdir: opts.workdir,
+        ...(opts.reviewClaudePath !== undefined && { claudePath: opts.reviewClaudePath }),
+        ...(opts.reviewDangerouslySkipPermissions !== undefined && {
+          dangerouslySkipPermissions: opts.reviewDangerouslySkipPermissions,
+        }),
+      });
+    } else {
+      this.reviewRunner = null;
+    }
   }
 
   get hubClient(): HubClient {
@@ -750,9 +777,39 @@ export class Daemon {
       return;
     }
 
-    // Task is now claimed — spawn the agent for it.
+    // Task is now claimed — dispatch based on task kind.
     const claimed = await this.client.getTask(taskId);
-    await this.spawnClaimedTask(claimed);
+    if (claimed.taskKind === 'review') {
+      // Fire-and-forget so the poll loop is not blocked for the review duration.
+      void this.runReviewTask(claimed);
+    } else {
+      await this.spawnClaimedTask(claimed);
+    }
+  }
+
+  private async runReviewTask(task: Task): Promise<void> {
+    this.logger.info('running review task', { taskId: task.id });
+    if (!this.reviewRunner) {
+      this.logger.error('review task claimed but no ReviewRunner configured', { taskId: task.id });
+      try {
+        await this.client.failTask(task.id, 'review tasks not supported: daemon has no personality registry');
+      } catch (err) {
+        this.logger.error('failed to fail unconfigured review task', {
+          taskId: task.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+    try {
+      await this.reviewRunner.run(task);
+      this.logger.info('review task complete', { taskId: task.id });
+    } catch (err) {
+      this.logger.error('review runner threw unexpectedly', {
+        taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**

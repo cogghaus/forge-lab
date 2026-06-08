@@ -2823,3 +2823,96 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign — user session',
     expect(emitted.find((e) => e.name === 'task.requeued')).toBeDefined();
   });
 });
+
+describe('review tasks', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('POST workspace task with taskKind=review stores taskKind and reviewConfig', async () => {
+    const reviewConfig = JSON.stringify({
+      reviewer: 'temper',
+      targetType: 'diff',
+      focus: 'Check error handling',
+    });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: {
+        projectPrefix: 'rv',
+        title: 'Review: feat/review-tasks diff',
+        description: 'diff --git a/foo.ts b/foo.ts\n--- a/foo.ts\n+++ b/foo.ts',
+        taskKind: 'review',
+        reviewConfig,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const task = await hub.db
+      .select({
+        taskKind: schema.tasks.taskKind,
+        reviewConfig: schema.tasks.reviewConfig,
+      })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.taskKind).toBe('review');
+    expect(task?.reviewConfig).toBe(reviewConfig);
+  });
+
+  it('GET workspace tasks includes taskKind and reviewConfig fields', async () => {
+    const reviewConfig = JSON.stringify({ reviewer: 'loki', targetType: 'diff' });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: {
+        projectPrefix: 'rv',
+        title: 'Review task',
+        taskKind: 'review',
+        reviewConfig,
+      },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const { tasks } = res.json() as { tasks: Array<{ taskKind: string; reviewConfig: string | null }> };
+    expect(tasks[0]?.taskKind).toBe('review');
+    expect(tasks[0]?.reviewConfig).toBe(reviewConfig);
+  });
+
+  it('POST workspace task without taskKind defaults to coding', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'rv', title: 'Normal task' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const task = await hub.db
+      .select({ taskKind: schema.tasks.taskKind, reviewConfig: schema.tasks.reviewConfig })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    expect(task?.taskKind).toBe('coding');
+    expect(task?.reviewConfig).toBeNull();
+  });
+});
