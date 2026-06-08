@@ -121,6 +121,8 @@ export const tasks = sqliteTable(
     createdAt: timestampMs('created_at').notNull().default(nowDefault),
     updatedAt: timestampMs('updated_at').notNull().default(nowDefault),
     completedAt: timestampMs('completed_at'),
+    /** JSON array of {name,content} baked at FM assignment time. NULL = no context. */
+    contextSnapshot: text('context_snapshot'),
   },
   (t) => ({
     statusIdx: index('tasks_status_idx').on(t.status),
@@ -396,6 +398,48 @@ export const policyRules = sqliteTable(
   (t) => ({
     workspaceIdx: index('policy_rules_workspace_idx').on(t.workspaceId),
     actionIdx: index('policy_rules_action_idx').on(t.action),
+  }),
+);
+
+/**
+ * Named markdown blobs attached to a workspace — injected into agent task prompts
+ * by FM at assignment time so workers start with architectural context pre-loaded.
+ * Content is capped at 10 000 UTF-8 bytes (app-enforced). Max 10 docs per workspace.
+ */
+export const workspaceContext = sqliteTable(
+  'workspace_context',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    content: text('content').notNull(),
+    createdBy: text('created_by').notNull(),
+    createdAt: timestampMs('created_at').notNull().default(nowDefault),
+    updatedBy: text('updated_by').notNull(),
+    updatedAt: timestampMs('updated_at').notNull().default(nowDefault),
+  },
+  (t) => ({
+    uniqueKey: uniqueIndex('workspace_context_name_idx').on(t.workspaceId, t.name),
+    wsIdx: index('workspace_context_ws_idx').on(t.workspaceId, t.updatedAt),
+  }),
+);
+
+/** Immutable audit log of workspace context doc mutations (create/update/delete). */
+export const workspaceContextChanges = sqliteTable(
+  'workspace_context_changes',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull(),
+    name: text('name').notNull(),
+    action: text('action', { enum: ['create', 'update', 'delete'] }).notNull(),
+    changedBy: text('changed_by').notNull(),
+    changedAt: timestampMs('changed_at').notNull().default(nowDefault),
+    snapshot: text('snapshot'),
+  },
+  (t) => ({
+    wsIdx: index('workspace_context_changes_ws_idx').on(t.workspaceId, t.changedAt),
   }),
 );
 

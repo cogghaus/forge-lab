@@ -274,6 +274,7 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
         inboxTasks,
         recentHistory,
         dispatcherHistory,
+        contextDocs,
       ] = await Promise.all([
         // Active docs in the FM-critical categories
         db
@@ -352,6 +353,14 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
           )
           .orderBy(desc(schema.taskComments.createdAt))
           .limit(CONTEXT_DISPATCHER_LIMIT),
+
+        // Agent context docs — named markdown blobs uploaded by workspace admin.
+        // Injected into FM's triage context so workers get architectural briefings.
+        db
+          .select()
+          .from(schema.workspaceContext)
+          .where(eq(schema.workspaceContext.workspaceId, workspaceId))
+          .orderBy(asc(schema.workspaceContext.updatedAt)),
       ]);
 
       // Queue depth: count of pending_agent tasks per assignedAgentId.
@@ -383,6 +392,7 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
         recentHistory,
         dispatcherHistory,
         queueDepth,
+        contextDocs,
       };
     },
   );
