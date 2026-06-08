@@ -144,6 +144,10 @@ export interface DaemonOptions {
   reviewClaudePath?: string;
   /** Pass --dangerously-skip-permissions to claude for review tasks. */
   reviewDangerouslySkipPermissions?: boolean;
+  /** Absolute path to the git repo on this worker, used to resolve branch-type review diffs. */
+  reviewDefaultRepoPath?: string;
+  /** Base branch for branch-type diff resolution. Defaults to 'main'. */
+  reviewDefaultBaseBranch?: string;
 }
 
 export interface DaemonLogger {
@@ -241,6 +245,10 @@ export class Daemon {
         ...(opts.reviewClaudePath !== undefined && { claudePath: opts.reviewClaudePath }),
         ...(opts.reviewDangerouslySkipPermissions !== undefined && {
           dangerouslySkipPermissions: opts.reviewDangerouslySkipPermissions,
+        }),
+        ...(opts.reviewDefaultRepoPath !== undefined && { defaultRepoPath: opts.reviewDefaultRepoPath }),
+        ...(opts.reviewDefaultBaseBranch !== undefined && {
+          defaultBaseBranch: opts.reviewDefaultBaseBranch,
         }),
       });
     } else {

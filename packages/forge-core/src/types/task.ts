@@ -6,8 +6,10 @@ export const ReviewConfigSchema = z.object({
   targetType: z.enum(['diff', 'branch', 'pr']),
   /** Branch name (for 'branch') or PR number (for 'pr'). Not used for 'diff' — diff goes in description. */
   targetValue: z.string().max(500).optional(),
-  /** Optional focus notes passed to the reviewer as additional context. */
-  focus: z.string().max(2000).optional(),
+  /** Absolute path to the git repo on the worker. Used for 'branch' type; overrides daemon default. */
+  repoPath: z.string().max(1000).optional(),
+  /** Base branch for diff (e.g. 'main'). Used for 'branch' type; overrides daemon default. */
+  baseBranch: z.string().max(200).optional(),
 });
 export type ReviewConfig = z.infer<typeof ReviewConfigSchema>;
 

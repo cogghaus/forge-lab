@@ -161,21 +161,24 @@ describe('ReviewRunner', () => {
     expect(client.failTask).not.toHaveBeenCalled();
   });
 
-  it('prepends focus to the prompt when reviewConfig includes focus', async () => {
+  it('resolves diff via git for branch target type and posts findings', async () => {
     const { spawner, calls, proc, spawned } = makeFakeSpawner();
+    const fakeDiff = '--- a/auth.ts\n+++ b/auth.ts\n@@ -1 +1 @@\n-old\n+new';
     const runner = new ReviewRunner({
       hubClient: client,
       personalityRegistry: registry,
       workdir: '/tmp/workdir',
       spawner,
+      defaultRepoPath: '/repo',
+      commandRunner: async (cmd, args) => {
+        if (cmd === 'git' && args[0] === 'diff') return fakeDiff;
+        throw new Error(`unexpected command: ${cmd}`);
+      },
     });
 
     const task = makeTask({
-      reviewConfig: JSON.stringify({
-        reviewer: 'loki',
-        targetType: 'diff',
-        focus: 'Focus on auth logic',
-      }),
+      reviewConfig: JSON.stringify({ reviewer: 'loki', targetType: 'branch', targetValue: 'feature/auth' }),
+      description: null,
     });
     const runPromise = runner.run(task);
     await spawned;
@@ -185,8 +188,95 @@ describe('ReviewRunner', () => {
     await runPromise;
 
     const promptArg = calls[0]!.args.at(-1)!;
+    expect(promptArg).toContain('--- a/auth.ts');
+    expect(client.postComment).toHaveBeenCalledOnce();
+    expect(client.completeTask).toHaveBeenCalledWith('rv-001', 'Review by loki complete');
+  });
+
+  it('prepends description as context for branch type review', async () => {
+    const fakeDiff = '--- a/auth.ts\n+++ b/auth.ts\n@@ -1 +1 @@\n-old\n+new';
+    const proc = makeFakeProcess();
+    const calls: SpawnRecord[] = [];
+    // Self-feeding spawner: queues data+exit in a microtask so listeners are set up first
+    const spawner: ReviewSpawner = {
+      spawn(command, args) {
+        calls.push({ command, args });
+        queueMicrotask(() => {
+          proc._stdout.push('Auth issue found.\n');
+          proc._stdout.end();
+          proc.triggerExit(0);
+        });
+        return proc;
+      },
+    };
+    const runner = new ReviewRunner({
+      hubClient: client,
+      personalityRegistry: registry,
+      workdir: '/tmp/workdir',
+      spawner,
+      commandRunner: async () => fakeDiff,
+    });
+
+    const task = makeTask({
+      reviewConfig: JSON.stringify({ reviewer: 'loki', targetType: 'branch', targetValue: 'feature/auth', repoPath: '/repo' }),
+      description: 'Focus on auth logic',
+    });
+    await runner.run(task);
+
+    const promptArg = calls[0]!.args.at(-1)!;
     expect(promptArg).toMatch(/^Focus on auth logic/);
+    expect(promptArg).toContain('--- a/auth.ts');
+    expect(client.postComment).toHaveBeenCalledOnce();
+    expect(client.completeTask).toHaveBeenCalledWith('rv-001', 'Review by loki complete');
+  });
+
+  it('resolves diff via gh pr diff for PR target type', async () => {
+    const { spawner, calls, proc, spawned } = makeFakeSpawner();
+    const fakeDiff = '--- a/foo.ts\n+++ b/foo.ts\n@@ -1 +1 @@\n-x\n+y';
+    const runner = new ReviewRunner({
+      hubClient: client,
+      personalityRegistry: registry,
+      workdir: '/tmp/workdir',
+      spawner,
+      commandRunner: async (cmd, args) => {
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'diff') return fakeDiff;
+        throw new Error(`unexpected command: ${cmd}`);
+      },
+    });
+
+    const task = makeTask({
+      reviewConfig: JSON.stringify({ reviewer: 'temper', targetType: 'pr', targetValue: '42' }),
+      description: null,
+    });
+    const runPromise = runner.run(task);
+    await spawned;
+    proc._stdout.push('Looks clean.\n');
+    proc._stdout.end();
+    proc.triggerExit(0);
+    await runPromise;
+
+    const promptArg = calls[0]!.args.at(-1)!;
     expect(promptArg).toContain('--- a/foo.ts');
+    expect(client.completeTask).toHaveBeenCalledWith('rv-001', 'Review by temper complete');
+  });
+
+  it('fails when branch targetType has no repoPath configured', async () => {
+    const { spawner } = makeFakeSpawner();
+    const runner = new ReviewRunner({
+      hubClient: client,
+      personalityRegistry: registry,
+      workdir: '/tmp/workdir',
+      spawner,
+      // no defaultRepoPath, no repoPath in config
+    });
+
+    const task = makeTask({
+      reviewConfig: JSON.stringify({ reviewer: 'temper', targetType: 'branch', targetValue: 'feature/x' }),
+    });
+    await runner.run(task);
+
+    expect(client.failTask).toHaveBeenCalledWith('rv-001', expect.stringContaining('failed to resolve diff'));
+    expect(client.postComment).not.toHaveBeenCalled();
   });
 
   it('fails the task when reviewConfig is missing', async () => {
