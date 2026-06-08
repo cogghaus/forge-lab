@@ -299,6 +299,49 @@ describe('workspace context API', () => {
     expect(result.rows).toHaveLength(1);
   });
 
+  it('PUT rejects reserved name "changes" (400)', async () => {
+    const res = await hub.fastify.inject({
+      method: 'PUT',
+      url: `/workspaces/${workspaceId}/context-docs/changes`,
+      headers: { cookie },
+      payload: { content: 'test' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  // ── cross-workspace isolation ──────────────────────────────────────────────
+  // Hub has a single-admin model (first-user-only registration). Isolation is
+  // enforced by requireWorkspaceMember: any workspace the authenticated user is
+  // not a member of returns 403, regardless of whether the workspace exists.
+
+  it('cross-workspace: GET list returns 403 for workspace user is not a member of', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/other-workspace-id/context-docs`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('cross-workspace: PUT returns 403 for workspace user is not a member of', async () => {
+    const res = await hub.fastify.inject({
+      method: 'PUT',
+      url: `/workspaces/other-workspace-id/context-docs/doc`,
+      headers: { cookie },
+      payload: { content: 'unauthorized write' },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('cross-workspace: DELETE returns 403 for workspace user is not a member of', async () => {
+    const res = await hub.fastify.inject({
+      method: 'DELETE',
+      url: `/workspaces/other-workspace-id/context-docs/doc`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
   it('migration 0014 adds context_snapshot column to tasks', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const client = (hub.db as any).$client as { execute: (opts: { sql: string }) => Promise<{ rows: Record<string, unknown>[] }> };

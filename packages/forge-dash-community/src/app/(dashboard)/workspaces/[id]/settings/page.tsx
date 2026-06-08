@@ -39,7 +39,7 @@ export default function WorkspaceSettingsPage() {
   const [ruleError, setRuleError] = useState('');
 
   // Context docs state
-  type ContextDoc = { id: string; name: string; sizeBytes: number; updatedAt: unknown };
+  type ContextDoc = { id: string; name: string; sizeBytes: number; updatedAt: number };
   const [contextDocs, setContextDocs] = useState<ContextDoc[]>([]);
   const [docForm, setDocForm] = useState({ name: '', content: '' });
   const [docSaving, setDocSaving] = useState(false);
@@ -606,7 +606,7 @@ export default function WorkspaceSettingsPage() {
                   </span>
                   <button
                     type="button"
-                    onClick={() => { void handleDeleteDoc(doc.name); }}
+                    onClick={() => { if (window.confirm(`Delete "${doc.name}"?`)) void handleDeleteDoc(doc.name); }}
                     className="font-mono text-[10px] px-2 py-1 rounded transition-colors"
                     style={{ color: 'rgba(245,240,235,0.4)', background: 'transparent' }}
                   >

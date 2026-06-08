@@ -357,7 +357,12 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
         // Agent context docs — named markdown blobs uploaded by workspace admin.
         // Injected into FM's triage context so workers get architectural briefings.
         db
-          .select()
+          .select({
+            id: schema.workspaceContext.id,
+            name: schema.workspaceContext.name,
+            content: schema.workspaceContext.content,
+            updatedAt: schema.workspaceContext.updatedAt,
+          })
           .from(schema.workspaceContext)
           .where(eq(schema.workspaceContext.workspaceId, workspaceId))
           .orderBy(asc(schema.workspaceContext.updatedAt)),

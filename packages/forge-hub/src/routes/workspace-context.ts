@@ -9,11 +9,14 @@ import { requireWorkspaceMember, getWorkspace, getUser } from '../auth/middlewar
 const MAX_DOCS = 10;
 const MAX_BYTES = 10_000;
 
+const RESERVED_NAMES = new Set(['changes']);
+
 const NameSchema = z
   .string()
   .min(1)
   .max(100)
-  .regex(/^[a-z0-9-]+$/, 'name must be lowercase alphanumeric with hyphens');
+  .regex(/^[a-z0-9-]+$/, 'name must be lowercase alphanumeric with hyphens')
+  .refine((n) => !RESERVED_NAMES.has(n), 'reserved name');
 
 const PutBodySchema = z.object({
   content: z.string().min(1),
@@ -50,8 +53,9 @@ async function recordContextChange(
       changedBy: entry.changedBy,
       snapshot: entry.snapshot !== null ? JSON.stringify(entry.snapshot) : null,
     });
-  } catch {
+  } catch (err) {
     // Non-fatal — audit write failure must not block the mutation response.
+    console.error('[workspace-context] audit write failed', err);
   }
 }
 
@@ -124,7 +128,15 @@ export function registerWorkspaceContextRoutes(fastify: FastifyInstance, db: Db)
         return reply.code(413).send({ error: 'content_too_large', maxBytes: MAX_BYTES, sizeBytes });
       }
 
+      const now = new Date();
+
       // Check whether this is a create (needs count guard) or update (upsert OK).
+      // SQLite WAL mode allows this check-then-insert race as an advisory soft limit;
+      // the UNIQUE(workspace_id, name) constraint prevents duplicate docs, and a
+      // transient overflow by one slot (two concurrent inserts of different names) is
+      // acceptable in practice. db.transaction() is incompatible with libsql :memory:
+      // clients (the client nullifies its connection after issuing BEGIN, causing
+      // subsequent requests to hit a fresh empty in-memory database).
       const existing = await db
         .select({ id: schema.workspaceContext.id })
         .from(schema.workspaceContext)
@@ -148,7 +160,7 @@ export function registerWorkspaceContextRoutes(fastify: FastifyInstance, db: Db)
       }
 
       const id = existing?.id ?? nanoid();
-      const now = new Date();
+      const isCreate = !existing;
 
       if (existing) {
         await db
@@ -167,22 +179,16 @@ export function registerWorkspaceContextRoutes(fastify: FastifyInstance, db: Db)
         });
       }
 
-      const doc = await db
-        .select()
-        .from(schema.workspaceContext)
-        .where(eq(schema.workspaceContext.id, id))
-        .get();
-
       void recordContextChange(db, {
         workspaceId,
         name,
-        action: existing ? 'update' : 'create',
+        action: isCreate ? 'create' : 'update',
         changedBy: user.id,
-        snapshot: doc!,
+        snapshot: { id, name, content, sizeBytes, updatedAt: now },
       });
 
-      return reply.code(existing ? 200 : 201).send({
-        doc: { id: doc!.id, name: doc!.name, sizeBytes, updatedAt: doc!.updatedAt },
+      return reply.code(isCreate ? 201 : 200).send({
+        doc: { id, name, sizeBytes, updatedAt: now },
       });
     },
   );
