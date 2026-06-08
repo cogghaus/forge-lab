@@ -952,6 +952,58 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign', () => {
     expect(res.statusCode).toBe(422);
     expect((res.json() as { error: string }).error).toBe('not_assignable');
   });
+
+  it('contextSnapshot is baked from workspace context docs at assignment', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createWsTask('pending_dispatcher_action');
+
+    // Upload a context doc to the workspace
+    await hub.fastify.inject({
+      method: 'PUT',
+      url: `/workspaces/${workspaceId}/context-docs/arch`,
+      headers: { cookie },
+      payload: { content: '# Architecture\nKey decisions here.' },
+    });
+
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'architect' },
+    });
+
+    const task = await hub.db
+      .select({ contextSnapshot: schema.tasks.contextSnapshot })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+
+    expect(task?.contextSnapshot).not.toBeNull();
+    const snapshot = JSON.parse(task!.contextSnapshot!) as Array<{ name: string; content: string }>;
+    expect(snapshot).toHaveLength(1);
+    expect(snapshot[0]!.name).toBe('arch');
+    expect(snapshot[0]!.content).toBe('# Architecture\nKey decisions here.');
+  });
+
+  it('contextSnapshot is null when workspace has no context docs', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createWsTask('pending_dispatcher_action');
+
+    await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'architect' },
+    });
+
+    const task = await hub.db
+      .select({ contextSnapshot: schema.tasks.contextSnapshot })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+
+    expect(task?.contextSnapshot).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

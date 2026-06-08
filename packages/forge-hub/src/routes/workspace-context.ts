@@ -31,7 +31,7 @@ const ListQuerySchema = z.object({
 
 const ChangesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
-  before: z.coerce.number().int().optional(),
+  before: z.coerce.number().int().min(1).optional(),
 });
 
 async function recordContextChange(
@@ -68,11 +68,24 @@ export function registerWorkspaceContextRoutes(fastify: FastifyInstance, db: Db)
       const { id: workspaceId } = getWorkspace(req);
       const { content: includeContent } = ListQuerySchema.parse(req.query);
 
-      const rows = await db
-        .select()
-        .from(schema.workspaceContext)
-        .where(eq(schema.workspaceContext.workspaceId, workspaceId))
-        .orderBy(desc(schema.workspaceContext.updatedAt));
+      // Conditionally project content — avoids fetching up to 100KB per request when not needed.
+      const rows = includeContent
+        ? await db
+            .select()
+            .from(schema.workspaceContext)
+            .where(eq(schema.workspaceContext.workspaceId, workspaceId))
+            .orderBy(desc(schema.workspaceContext.updatedAt))
+        : await db
+            .select({
+              id: schema.workspaceContext.id,
+              name: schema.workspaceContext.name,
+              content: schema.workspaceContext.content,
+              updatedAt: schema.workspaceContext.updatedAt,
+              updatedBy: schema.workspaceContext.updatedBy,
+            })
+            .from(schema.workspaceContext)
+            .where(eq(schema.workspaceContext.workspaceId, workspaceId))
+            .orderBy(desc(schema.workspaceContext.updatedAt));
 
       const docs = rows.map((r) => ({
         id: r.id,
@@ -184,11 +197,11 @@ export function registerWorkspaceContextRoutes(fastify: FastifyInstance, db: Db)
         name,
         action: isCreate ? 'create' : 'update',
         changedBy: user.id,
-        snapshot: { id, name, content, sizeBytes, updatedAt: now },
+        snapshot: { id, name, content, sizeBytes, updatedAt: now.getTime() },
       });
 
       return reply.code(isCreate ? 201 : 200).send({
-        doc: { id, name, sizeBytes, updatedAt: now },
+        doc: { id, name, sizeBytes, updatedAt: now.getTime() },
       });
     },
   );
@@ -225,7 +238,7 @@ export function registerWorkspaceContextRoutes(fastify: FastifyInstance, db: Db)
         name,
         action: 'delete',
         changedBy: user.id,
-        snapshot: null,
+        snapshot: { id: doc.id, name: doc.name, content: doc.content, updatedAt: doc.updatedAt },
       });
 
       return { deleted: true };

@@ -108,7 +108,7 @@ describe('workspace context API', () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it('PUT requires workspace admin (403 for non-admin)', async () => {
+  it('PUT returns 401 for unauthenticated request', async () => {
     const res = await hub.fastify.inject({
       method: 'PUT',
       url: `/workspaces/${workspaceId}/context-docs/architecture`,

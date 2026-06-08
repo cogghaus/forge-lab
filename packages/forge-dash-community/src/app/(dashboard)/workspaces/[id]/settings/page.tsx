@@ -138,7 +138,8 @@ export default function WorkspaceSettingsPage() {
     try {
       const res = await fetch(`/api/hub/workspaces/${workspaceId}/context-docs/${encodeURIComponent(name)}`, { method: 'DELETE' });
       if (res.ok) setContextDocs((prev) => prev.filter((d) => d.name !== name));
-    } catch { /* non-fatal */ }
+      else setDocError('Failed to delete doc');
+    } catch { setDocError('Network error'); }
   }
 
   async function handleSave(e: React.FormEvent) {

@@ -11,7 +11,7 @@ export async function GET(_req: NextRequest, { params }: Params): Promise<Respon
   const res = await hubFetch<unknown>(`/workspaces/${id}/context-docs/${encodeURIComponent(name)}`, {
     cookie: `${SESSION_COOKIE}=${session}`,
   });
-  if (!res.ok) return Response.json({ error: 'hub_error' }, { status: res.status || 500 });
+  if (!res.ok) return Response.json(res.data ?? { error: 'hub_error' }, { status: res.status || 500 });
   return Response.json(res.data);
 }
 
@@ -38,6 +38,6 @@ export async function DELETE(_req: NextRequest, { params }: Params): Promise<Res
     method: 'DELETE',
     cookie: `${SESSION_COOKIE}=${session}`,
   });
-  if (!res.ok) return Response.json({ error: 'hub_error' }, { status: res.status || 500 });
+  if (!res.ok) return Response.json(res.data ?? { error: 'hub_error' }, { status: res.status || 500 });
   return Response.json(res.data);
 }
