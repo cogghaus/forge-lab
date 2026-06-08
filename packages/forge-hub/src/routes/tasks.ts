@@ -421,6 +421,14 @@ export function registerTaskRoutes(
         }
 
         const source = `device:${device.id}`;
+
+        // Snapshot contextDocs at assignment time so the worker has them without a separate fetch.
+        const contextDocsRows = await db
+          .select({ name: schema.workspaceContext.name, content: schema.workspaceContext.content })
+          .from(schema.workspaceContext)
+          .where(eq(schema.workspaceContext.workspaceId, workspaceId))
+          .orderBy(asc(schema.workspaceContext.updatedAt));
+
         await db
           .update(schema.tasks)
           .set({
@@ -428,6 +436,7 @@ export function registerTaskRoutes(
             assignedAt: new Date(),
             status: 'assigned',
             updatedAt: new Date(),
+            contextSnapshot: contextDocsRows.length > 0 ? JSON.stringify(contextDocsRows) : null,
           })
           .where(eq(schema.tasks.id, taskId));
 
