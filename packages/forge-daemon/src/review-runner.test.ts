@@ -161,7 +161,9 @@ describe('ReviewRunner', () => {
     expect(taskId).toBe('rv-001');
     expect(body).toContain('Findings: looks good.');
     expect(authorType).toBe('agent');
-    expect(authorId).toBe('temper');
+    // authorId is intentionally omitted — hub validates it against agentInstances,
+    // which don't contain personality names; the hub falls back to device.id.
+    expect(authorId).toBeUndefined();
 
     expect(client.completeTask).toHaveBeenCalledWith('rv-001', 'Review by temper complete');
     expect(client.failTask).not.toHaveBeenCalled();
