@@ -20,7 +20,8 @@ export interface ReviewSpawnOptions {
 export interface ReviewProcess {
   readonly stdout: NodeJS.ReadableStream | null;
   readonly stderr: NodeJS.ReadableStream | null;
-  on(event: 'exit', listener: (code: number | null) => void): void;
+  on(event: 'close', listener: (code: number | null) => void): void;
+  on(event: 'error', listener: (err: Error) => void): void;
   kill(signal?: NodeJS.Signals): boolean;
 }
 
@@ -168,7 +169,14 @@ export class ReviewRunner {
       return;
     }
 
-    await this.hubClient.completeTask(task.id, `Review by ${reviewConfig.reviewer} complete`);
+    try {
+      await this.hubClient.completeTask(task.id, `Review by ${reviewConfig.reviewer} complete`);
+    } catch (err) {
+      await this.hubClient.failTask(
+        task.id,
+        `failed to complete task: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async resolveDiff(reviewConfig: ReviewConfig, description: string | null): Promise<string> {
@@ -201,13 +209,20 @@ export class ReviewRunner {
         env: process.env as NodeJS.ProcessEnv,
       });
       const chunks: Buffer[] = [];
+      let settled = false;
       proc.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
-      proc.on('exit', (code) => {
-        if (code !== 0) {
-          reject(new Error(`${command} exited with code ${code ?? 'null'}`));
-          return;
+      proc.on('error', (err: Error) => {
+        if (!settled) { settled = true; reject(err); }
+      });
+      proc.on('close', (code: number | null) => {
+        if (!settled) {
+          settled = true;
+          if (code !== 0) {
+            reject(new Error(`${command} exited with code ${code ?? 'null'}`));
+          } else {
+            resolve(Buffer.concat(chunks).toString('utf8').trim());
+          }
         }
-        resolve(Buffer.concat(chunks).toString('utf8').trim());
       });
     });
   }
@@ -226,17 +241,23 @@ export class ReviewRunner {
       });
 
       const chunks: Buffer[] = [];
+      let settled = false;
       proc.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
       proc.stderr?.on('data', () => {
         // stderr discarded — only stdout (findings) matters
       });
-
-      proc.on('exit', (code) => {
-        if (code !== 0) {
-          reject(new Error(`claude exited with code ${code ?? 'null'}`));
-          return;
+      proc.on('error', (err: Error) => {
+        if (!settled) { settled = true; reject(err); }
+      });
+      proc.on('close', (code: number | null) => {
+        if (!settled) {
+          settled = true;
+          if (code !== 0) {
+            reject(new Error(`claude exited with code ${code ?? 'null'}`));
+          } else {
+            resolve(Buffer.concat(chunks).toString('utf8').trim());
+          }
         }
-        resolve(Buffer.concat(chunks).toString('utf8').trim());
       });
     });
   }

@@ -13,18 +13,21 @@ interface FakeProcess extends ReviewProcess {
   _stdout: PassThrough;
   _stderr: PassThrough;
   triggerExit(code: number | null): void;
+  triggerError(err: Error): void;
 }
 
 function makeFakeProcess(): FakeProcess {
-  const exitListeners: Array<(code: number | null) => void> = [];
+  const closeListeners: Array<(code: number | null) => void> = [];
+  const errorListeners: Array<(err: Error) => void> = [];
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   return {
     stdout,
     stderr,
     kill: () => true,
-    on(_event: 'exit', listener: (code: number | null) => void) {
-      exitListeners.push(listener);
+    on(event: 'close' | 'error', listener: ((code: number | null) => void) & ((err: Error) => void)) {
+      if (event === 'close') closeListeners.push(listener as (code: number | null) => void);
+      else errorListeners.push(listener as (err: Error) => void);
     },
     get _stdout() {
       return stdout;
@@ -33,7 +36,10 @@ function makeFakeProcess(): FakeProcess {
       return stderr;
     },
     triggerExit(code: number | null) {
-      for (const l of exitListeners) l(code);
+      for (const l of closeListeners) l(code);
+    },
+    triggerError(err: Error) {
+      for (const l of errorListeners) l(err);
     },
   };
 }
@@ -392,5 +398,26 @@ describe('ReviewRunner', () => {
     await runPromise;
 
     expect(calls[0]!.args).toContain('--dangerously-skip-permissions');
+  });
+
+  it('fails the task when claude binary is not found (ENOENT)', async () => {
+    const { spawner, proc, spawned } = makeFakeSpawner();
+    const runner = new ReviewRunner({
+      hubClient: client,
+      personalityRegistry: registry,
+      workdir: '/tmp/workdir',
+      spawner,
+      claudePath: '/nonexistent/claude',
+    });
+
+    const task = makeTask();
+    const runPromise = runner.run(task);
+    await spawned;
+    const enoent = Object.assign(new Error('spawn /nonexistent/claude ENOENT'), { code: 'ENOENT' });
+    proc.triggerError(enoent);
+    await runPromise;
+
+    expect(client.failTask).toHaveBeenCalledWith('rv-001', expect.stringContaining('review process failed'));
+    expect(client.postComment).not.toHaveBeenCalled();
   });
 });

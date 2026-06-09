@@ -817,6 +817,17 @@ export class Daemon {
         taskId: task.id,
         error: err instanceof Error ? err.message : String(err),
       });
+      try {
+        await this.client.failTask(
+          task.id,
+          `review runner error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } catch (failErr) {
+        this.logger.error('failed to fail review task after runner error', {
+          taskId: task.id,
+          error: failErr instanceof Error ? failErr.message : String(failErr),
+        });
+      }
     }
   }
 

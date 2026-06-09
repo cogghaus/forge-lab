@@ -410,7 +410,7 @@ ALTER TABLE tasks ADD COLUMN context_snapshot TEXT;
     name: '0015_review_tasks',
     sql: `
 -- Review task kind and config. task_kind defaults to 'coding' (existing tasks unaffected).
--- review_config is a JSON-encoded ReviewConfig: reviewer, targetType, optional targetValue/focus.
+-- review_config is a JSON-encoded ReviewConfig: reviewer, targetType, optional targetValue/repoPath/baseBranch.
 ALTER TABLE tasks ADD COLUMN task_kind TEXT NOT NULL DEFAULT 'coding';
 ALTER TABLE tasks ADD COLUMN review_config TEXT;
 `,
