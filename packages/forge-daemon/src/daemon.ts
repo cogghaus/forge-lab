@@ -4,6 +4,7 @@ import type { EventEnvelope, RuntimeInstance, Task } from '@forge-lab/core';
 import { composeSystemPrompt } from '@forge-lab/agents';
 import type { PersonalityRegistry } from '@forge-lab/agents';
 import { HubClient, type TaskInstruction } from './hub-client.js';
+import { ReviewRunner } from './review-runner.js';
 import { RuntimeRegistry } from './runtime/registry.js';
 import {
   cleanupTaskFiles,
@@ -134,6 +135,19 @@ export interface DaemonOptions {
    * Default: 2.
    */
   authRetryLimit?: number;
+  /**
+   * Injectable ReviewRunner for review tasks (tests). When omitted, one is
+   * created automatically if personalityRegistry is provided.
+   */
+  reviewRunner?: ReviewRunner;
+  /** Path to the claude binary used for review task execution. Defaults to 'claude'. */
+  reviewClaudePath?: string;
+  /** Pass --dangerously-skip-permissions to claude for review tasks. */
+  reviewDangerouslySkipPermissions?: boolean;
+  /** Absolute path to the git repo on this worker, used to resolve branch-type review diffs. */
+  reviewDefaultRepoPath?: string;
+  /** Base branch for branch-type diff resolution. Defaults to 'main'. */
+  reviewDefaultBaseBranch?: string;
 }
 
 export interface DaemonLogger {
@@ -161,6 +175,8 @@ export class Daemon {
   private loopController: AbortController | null = null;
   private loopPromise: Promise<void> | null = null;
   private readonly activeInstances = new Map<string, ActiveInstance>();
+  /** Review task IDs currently in flight. Separate from activeInstances (no RuntimeInstance). */
+  private readonly activeReviews = new Set<string>();
   /** True while an FM agent is running in dispatcher mode. Prevents double-spawn. */
   private fmRunning = false;
   /**
@@ -193,6 +209,7 @@ export class Daemon {
   /** Maps synthetic FM task ID → workspaceId so dead-FM recovery can clear the cooldown. */
   private readonly fmTaskWorkspace = new Map<string, string>();
   private readonly gitOps: GitOps;
+  private readonly reviewRunner: ReviewRunner | null;
 
   constructor(opts: DaemonOptions) {
     this.opts = opts;
@@ -219,6 +236,26 @@ export class Daemon {
       // `undefined`, and the client defaults requestTimeoutMs to 30s anyway.
       ...(opts.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
     });
+
+    if (opts.reviewRunner !== undefined) {
+      this.reviewRunner = opts.reviewRunner;
+    } else if (opts.personalityRegistry) {
+      this.reviewRunner = new ReviewRunner({
+        hubClient: this.client,
+        personalityRegistry: opts.personalityRegistry,
+        workdir: opts.workdir,
+        ...(opts.reviewClaudePath !== undefined && { claudePath: opts.reviewClaudePath }),
+        ...(opts.reviewDangerouslySkipPermissions !== undefined && {
+          dangerouslySkipPermissions: opts.reviewDangerouslySkipPermissions,
+        }),
+        ...(opts.reviewDefaultRepoPath !== undefined && { defaultRepoPath: opts.reviewDefaultRepoPath }),
+        ...(opts.reviewDefaultBaseBranch !== undefined && {
+          defaultBaseBranch: opts.reviewDefaultBaseBranch,
+        }),
+      });
+    } else {
+      this.reviewRunner = null;
+    }
   }
 
   get hubClient(): HubClient {
@@ -709,19 +746,20 @@ export class Daemon {
   private async handleIncomingTask(env: EventEnvelope): Promise<void> {
     const taskId = (env.payload as { taskId?: string }).taskId;
     if (!taskId) return;
-    if (this.activeInstances.has(taskId)) return;
+    if (this.activeInstances.has(taskId) || this.activeReviews.has(taskId)) return;
 
     // Concurrency cap: when maxConcurrentTasks is set, skip the claim attempt
     // until a slot opens. The task remains in pending_agent and will be
     // re-delivered when another daemon (or this daemon after a slot frees)
     // picks it up via the poll loop.
+    const totalActive = this.activeInstances.size + this.activeReviews.size;
     if (
       this.opts.maxConcurrentTasks !== undefined &&
-      this.activeInstances.size >= this.opts.maxConcurrentTasks
+      totalActive >= this.opts.maxConcurrentTasks
     ) {
       this.logger.info('concurrency cap reached, skipping task', {
         taskId,
-        activeCount: this.activeInstances.size,
+        activeCount: totalActive,
         maxConcurrentTasks: this.opts.maxConcurrentTasks,
       });
       return;
@@ -750,9 +788,54 @@ export class Daemon {
       return;
     }
 
-    // Task is now claimed — spawn the agent for it.
+    // Task is now claimed — dispatch based on task kind.
     const claimed = await this.client.getTask(taskId);
-    await this.spawnClaimedTask(claimed);
+    if (claimed.taskKind === 'review') {
+      // Register before fire-and-forget so the dedup guard and concurrency cap see this task.
+      this.activeReviews.add(claimed.id);
+      void this.runReviewTask(claimed);
+    } else {
+      await this.spawnClaimedTask(claimed);
+    }
+  }
+
+  private async runReviewTask(task: Task): Promise<void> {
+    this.logger.info('running review task', { taskId: task.id });
+    if (!this.reviewRunner) {
+      this.logger.error('review task claimed but no ReviewRunner configured', { taskId: task.id });
+      this.activeReviews.delete(task.id);
+      try {
+        await this.client.failTask(task.id, 'review tasks not supported: daemon has no personality registry');
+      } catch (err) {
+        this.logger.error('failed to fail unconfigured review task', {
+          taskId: task.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+    try {
+      await this.reviewRunner.run(task);
+      this.logger.info('review task complete', { taskId: task.id });
+    } catch (err) {
+      this.logger.error('review runner threw unexpectedly', {
+        taskId: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      try {
+        await this.client.failTask(
+          task.id,
+          `review runner error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } catch (failErr) {
+        this.logger.error('failed to fail review task after runner error', {
+          taskId: task.id,
+          error: failErr instanceof Error ? failErr.message : String(failErr),
+        });
+      }
+    } finally {
+      this.activeReviews.delete(task.id);
+    }
   }
 
   /**

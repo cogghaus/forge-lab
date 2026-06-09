@@ -14,6 +14,8 @@ export async function createTaskAction(
   const description = (formData.get('description') as string | null)?.trim() || null;
   const goalId = (formData.get('goalId') as string | null)?.trim() || null;
   const priority = (formData.get('priority') as string | null)?.trim() || undefined;
+  const taskKind = (formData.get('taskKind') as 'coding' | 'review' | null) ?? undefined;
+  const reviewConfig = (formData.get('reviewConfig') as string | null) ?? null;
   if (!title || !projectPrefix) return { error: 'Title and project prefix are required.' };
 
   const session = await getSessionCookie();
@@ -23,7 +25,15 @@ export async function createTaskAction(
     `/workspaces/${workspaceId}/tasks`,
     {
       method: 'POST',
-      body: { title, projectPrefix, description, goalId, priority },
+      body: {
+        title,
+        projectPrefix,
+        description,
+        goalId,
+        priority,
+        ...(taskKind !== undefined ? { taskKind } : {}),
+        ...(reviewConfig !== null ? { reviewConfig } : {}),
+      },
       cookie: `${SESSION_COOKIE}=${session}`,
     },
   );

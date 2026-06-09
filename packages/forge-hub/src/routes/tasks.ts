@@ -140,6 +140,8 @@ export function registerTaskRoutes(
       // Reactive agents (e.g. Scribe) self-create follow-up tasks pre-assigned
       // to themselves so only their daemon claims them.
       assignedAgentId: body.assignedAgentId ?? null,
+      taskKind: body.taskKind ?? 'coding',
+      reviewConfig: body.reviewConfig ?? null,
       createdBy,
     });
     await db.insert(schema.taskHistory).values({
@@ -800,6 +802,8 @@ export function registerTaskRoutes(
         workspaceId,
         assignedAgentId,
         status: assignedAgentId ? 'pending_agent' : 'pending_dispatcher_action',
+        taskKind: body.taskKind ?? 'coding',
+        reviewConfig: body.reviewConfig ?? null,
         createdBy,
       });
       await db.insert(schema.taskHistory).values({
