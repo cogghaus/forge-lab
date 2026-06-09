@@ -175,6 +175,8 @@ export class Daemon {
   private loopController: AbortController | null = null;
   private loopPromise: Promise<void> | null = null;
   private readonly activeInstances = new Map<string, ActiveInstance>();
+  /** Review task IDs currently in flight. Separate from activeInstances (no RuntimeInstance). */
+  private readonly activeReviews = new Set<string>();
   /** True while an FM agent is running in dispatcher mode. Prevents double-spawn. */
   private fmRunning = false;
   /**
@@ -744,19 +746,20 @@ export class Daemon {
   private async handleIncomingTask(env: EventEnvelope): Promise<void> {
     const taskId = (env.payload as { taskId?: string }).taskId;
     if (!taskId) return;
-    if (this.activeInstances.has(taskId)) return;
+    if (this.activeInstances.has(taskId) || this.activeReviews.has(taskId)) return;
 
     // Concurrency cap: when maxConcurrentTasks is set, skip the claim attempt
     // until a slot opens. The task remains in pending_agent and will be
     // re-delivered when another daemon (or this daemon after a slot frees)
     // picks it up via the poll loop.
+    const totalActive = this.activeInstances.size + this.activeReviews.size;
     if (
       this.opts.maxConcurrentTasks !== undefined &&
-      this.activeInstances.size >= this.opts.maxConcurrentTasks
+      totalActive >= this.opts.maxConcurrentTasks
     ) {
       this.logger.info('concurrency cap reached, skipping task', {
         taskId,
-        activeCount: this.activeInstances.size,
+        activeCount: totalActive,
         maxConcurrentTasks: this.opts.maxConcurrentTasks,
       });
       return;
@@ -788,7 +791,8 @@ export class Daemon {
     // Task is now claimed — dispatch based on task kind.
     const claimed = await this.client.getTask(taskId);
     if (claimed.taskKind === 'review') {
-      // Fire-and-forget so the poll loop is not blocked for the review duration.
+      // Register before fire-and-forget so the dedup guard and concurrency cap see this task.
+      this.activeReviews.add(claimed.id);
       void this.runReviewTask(claimed);
     } else {
       await this.spawnClaimedTask(claimed);
@@ -799,6 +803,7 @@ export class Daemon {
     this.logger.info('running review task', { taskId: task.id });
     if (!this.reviewRunner) {
       this.logger.error('review task claimed but no ReviewRunner configured', { taskId: task.id });
+      this.activeReviews.delete(task.id);
       try {
         await this.client.failTask(task.id, 'review tasks not supported: daemon has no personality registry');
       } catch (err) {
@@ -828,6 +833,8 @@ export class Daemon {
           error: failErr instanceof Error ? failErr.message : String(failErr),
         });
       }
+    } finally {
+      this.activeReviews.delete(task.id);
     }
   }
 

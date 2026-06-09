@@ -6,11 +6,19 @@ import { composeSystemPrompt } from '@forge-lab/agents';
 import type { PersonalityRegistry } from '@forge-lab/agents';
 import type { HubClient } from './hub-client.js';
 
-/** Max bytes of review output posted as a comment. Prevents oversized inserts. */
+/** Max chars of review output posted as a comment. Prevents oversized inserts. */
 const MAX_COMMENT_CHARS = 48_000;
-
 const TRUNCATION_NOTICE =
   '\n\n---\n*(Review output truncated — exceeded 48 000 character limit.)*';
+
+/**
+ * Max chars of diff passed as a CLI argument to claude.
+ * Linux ARG_MAX is typically 2 MB but can be 128 KB in constrained containers.
+ * Capping input at 100 KB leaves ample headroom for the system prompt.
+ */
+const MAX_INPUT_CHARS = 100_000;
+const INPUT_TRUNCATION_NOTICE =
+  '\n\n---\n*(Diff truncated — exceeded 100 000 character review input limit.)*';
 
 export interface ReviewSpawnOptions {
   cwd?: string;
@@ -132,7 +140,11 @@ export class ReviewRunner {
     }
 
     if (!diff.trim()) {
-      await this.hubClient.failTask(task.id, 'review task has no diff in description');
+      const emptyMsg =
+        reviewConfig.targetType === 'diff'
+          ? 'review task has no diff in description'
+          : `review task resolved an empty diff (${reviewConfig.targetType}: ${reviewConfig.targetValue ?? 'unknown'})`;
+      await this.hubClient.failTask(task.id, emptyMsg);
       return;
     }
 
@@ -141,7 +153,9 @@ export class ReviewRunner {
       reviewConfig.targetType !== 'diff' && task.description?.trim()
         ? task.description.trim()
         : null;
-    const reviewPrompt = context ? `${context}\n\n---\n\n${diff}` : diff;
+    const clampedDiff =
+      diff.length > MAX_INPUT_CHARS ? diff.slice(0, MAX_INPUT_CHARS) + INPUT_TRUNCATION_NOTICE : diff;
+    const reviewPrompt = context ? `${context}\n\n---\n\n${clampedDiff}` : clampedDiff;
 
     let findings: string;
     try {
@@ -154,13 +168,22 @@ export class ReviewRunner {
       return;
     }
 
-    const commentBody =
+    const truncatedFindings =
       findings.length > MAX_COMMENT_CHARS
         ? findings.slice(0, MAX_COMMENT_CHARS) + TRUNCATION_NOTICE
         : findings;
+    // Prepend reviewer identity so it's visible in the comment body.
+    // authorId is not passed — hub validates it against agentInstances which don't include
+    // personality names; omitting it defaults to device.id which is a valid attribution.
+    const targetLabel =
+      reviewConfig.targetType !== 'diff' && reviewConfig.targetValue
+        ? ` · ${reviewConfig.targetValue}`
+        : '';
+    const header = `**Review by ${reviewConfig.reviewer}** (${reviewConfig.targetType}${targetLabel})\n\n`;
+    const commentBody = header + truncatedFindings;
 
     try {
-      await this.hubClient.postComment(task.id, commentBody, 'agent', reviewConfig.reviewer);
+      await this.hubClient.postComment(task.id, commentBody, 'agent');
     } catch (err) {
       await this.hubClient.failTask(
         task.id,
