@@ -24,6 +24,8 @@ const REVIEWER_OPTS = [
   { key: 'oracle', label: 'Oracle', desc: 'strategic analysis' },
   { key: 'anvil', label: 'Anvil', desc: 'frontend & UI' },
   { key: 'furnace', label: 'Furnace', desc: 'backend & API' },
+  { key: 'slag', label: 'Slag', desc: 'red team lead' },
+  { key: 'flux', label: 'Flux', desc: 'infra attack' },
 ];
 
 const TARGET_OPTS: { key: 'diff' | 'branch' | 'pr'; label: string }[] = [
