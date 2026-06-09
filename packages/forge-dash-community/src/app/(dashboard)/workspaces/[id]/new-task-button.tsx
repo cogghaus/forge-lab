@@ -22,6 +22,8 @@ const REVIEWER_OPTS = [
   { key: 'aegis', label: 'Aegis', desc: 'security' },
   { key: 'architect', label: 'Architect', desc: 'design & arch' },
   { key: 'oracle', label: 'Oracle', desc: 'strategic analysis' },
+  { key: 'anvil', label: 'Anvil', desc: 'frontend & UI' },
+  { key: 'furnace', label: 'Furnace', desc: 'backend & API' },
 ];
 
 const TARGET_OPTS: { key: 'diff' | 'branch' | 'pr'; label: string }[] = [
