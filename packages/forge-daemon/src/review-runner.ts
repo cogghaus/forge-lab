@@ -21,8 +21,8 @@ const INPUT_TRUNCATION_NOTICE =
   '\n\n---\n*(Diff truncated — exceeded 100 000 character review input limit.)*';
 
 export interface ReviewSpawnOptions {
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
+  cwd?: string | undefined;
+  env?: NodeJS.ProcessEnv | undefined;
 }
 
 export interface ReviewProcess {
