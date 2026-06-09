@@ -123,6 +123,9 @@ export const tasks = sqliteTable(
     completedAt: timestampMs('completed_at'),
     /** JSON array of {name,content} baked at FM assignment time. NULL = no context. */
     contextSnapshot: text('context_snapshot'),
+    taskKind: text('task_kind').notNull().default('coding'),
+    /** JSON-encoded ReviewConfig. Null for coding tasks. */
+    reviewConfig: text('review_config'),
   },
   (t) => ({
     statusIdx: index('tasks_status_idx').on(t.status),

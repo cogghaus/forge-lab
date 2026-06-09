@@ -246,6 +246,19 @@ export class HubClient extends EventEmitter {
     );
   }
 
+  async postComment(
+    taskId: string,
+    body: string,
+    authorType: 'agent' | 'dispatcher' | 'system' = 'agent',
+    authorId?: string,
+  ): Promise<{ id: string }> {
+    return this.request<{ id: string }>(
+      'POST',
+      `/tasks/${encodeURIComponent(taskId)}/comments`,
+      { body, authorType, ...(authorId !== undefined && { authorId }) },
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // FM / orchestrator methods
   // ---------------------------------------------------------------------------
