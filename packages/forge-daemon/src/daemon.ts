@@ -984,6 +984,9 @@ export class Daemon {
     const result = typeof p['result'] === 'string' ? p['result'] : null;
     const payloadWorkspaceId = typeof p['workspaceId'] === 'string' ? p['workspaceId'] : null;
 
+    // Phase task completion — not a standalone deliverable. Skip Scribe.
+    if (taskId !== undefined && /-p\d{1,2}$/.test(taskId)) return;
+
     // Only react to tasks in our workspace when workspaceId is configured.
     if (this.opts.workspaceId !== undefined && payloadWorkspaceId !== this.opts.workspaceId) {
       return;

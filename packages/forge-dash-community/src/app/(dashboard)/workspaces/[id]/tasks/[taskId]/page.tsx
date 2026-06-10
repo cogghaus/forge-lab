@@ -5,6 +5,7 @@ import {
   type HubAgent,
   type HubDevice,
   type HubGoal,
+  type HubPhaseInfo,
   type HubTaskComment,
   type HubTaskHistory,
   type HubTaskWithParent,
@@ -28,9 +29,18 @@ const STATUS_HEX: Record<string, string> = {
   pending_dispatcher_action: '#FFB547',
   assigned: '#FF6B2B',
   in_progress: '#FF6B2B',
+  sequenced_running: '#FF6B2B',
+  sequenced_complete: '#2DD4A0',
+  waiting_on_deps: '#818cf8',
   completed: '#2DD4A0',
   failed: '#FF4757',
   cancelled: '#FF4757',
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  sequenced_running: 'Sequenced Running',
+  sequenced_complete: 'Sequenced Complete',
+  waiting_on_deps: 'Waiting on Deps',
 };
 
 const PRIORITY_HEX: Record<string, string> = {
@@ -67,7 +77,7 @@ const CONFIDENCE_COLOR: Record<string, string> = {
 };
 
 function statusLabel(s: string) {
-  return s.replace(/_/g, ' ');
+  return STATUS_LABEL[s] ?? s.replace(/_/g, ' ');
 }
 
 function formatTs(ts: string): string {
@@ -217,7 +227,7 @@ export default async function TaskDetailPage({ params }: Props) {
 
   const [wsRes, taskRes, historyRes, commentsRes, devicesRes] = await Promise.all([
     hubFetch<HubWorkspace>(`/workspaces/${workspaceId}`, { cookie: cookieHeader }),
-    hubFetch<HubTaskWithParent>(`/tasks/${taskId}`, { cookie: cookieHeader }),
+    hubFetch<HubTaskWithParent>(`/workspaces/${workspaceId}/tasks/${taskId}`, { cookie: cookieHeader }),
     hubFetch<{ history: HubTaskHistory[] }>(`/tasks/${taskId}/history`, { cookie: cookieHeader }),
     hubFetch<{ comments: HubTaskComment[] }>(`/tasks/${taskId}/comments`, { cookie: cookieHeader }),
     hubFetch<{ devices: HubDevice[] }>('/devices', { cookie: cookieHeader }),
@@ -261,7 +271,9 @@ export default async function TaskDetailPage({ params }: Props) {
     task.status === 'pending_design' ||
     task.status === 'design_review' ||
     task.status === 'assigned' ||
-    task.status === 'in_progress';
+    task.status === 'in_progress' ||
+    task.status === 'sequenced_running' ||
+    task.status === 'waiting_on_deps';
 
   const canRetry = task.status === 'failed' || task.status === 'cancelled';
 
@@ -380,6 +392,76 @@ export default async function TaskDetailPage({ params }: Props) {
           </div>
         )}
       </div>
+
+      {/* Blocked reason banner */}
+      {task.blockedReason && (
+        <div className="flex items-start gap-3 rounded-xl border border-indigo-500/30 bg-indigo-500/[0.06] px-4 py-3">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-4 w-4 shrink-0" aria-hidden>
+            <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <p className="text-sm text-indigo-300">{task.blockedReason}</p>
+        </div>
+      )}
+
+      {/* Phase timeline for sequenced tasks */}
+      {task.phases != null && task.phases.length > 0 && (
+        <div>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Phase Timeline
+          </h2>
+          <div className="flex flex-col gap-2">
+            {(task.phases as HubPhaseInfo[]).map((phase) => {
+              const phaseHex = phase.status === 'complete' ? '#2DD4A0' : phase.status === 'active' ? '#FF6B2B' : phase.status === 'failed' ? '#FF4757' : '#a1a1aa';
+              return (
+                <div
+                  key={phase.phaseIndex}
+                  className="relative flex items-start gap-4 overflow-hidden rounded-xl border border-zinc-200 bg-white px-4 py-3 pl-5 dark:border-zinc-800 dark:bg-zinc-900/70"
+                >
+                  <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: phaseHex }} aria-hidden />
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-mono" style={{ borderColor: phaseHex, color: phaseHex }}>
+                    {phase.phaseIndex}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{phase.title}</span>
+                      <span className="rounded px-1.5 py-0.5 font-mono text-[10px]" style={{ color: phaseHex, background: `${phaseHex}1f` }}>{phase.role}</span>
+                      <span className="rounded px-1.5 py-0.5 font-mono text-[10px] capitalize" style={{ color: phaseHex, background: `${phaseHex}1f` }}>{phase.status}</span>
+                      {phase.taskId && (
+                        <Link href={`/workspaces/${workspaceId}/tasks/${phase.taskId}`} className="font-mono text-[11px] text-[#FF6B2B] hover:underline">
+                          {phase.taskId}
+                        </Link>
+                      )}
+                    </div>
+                    {phase.result && (
+                      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400 line-clamp-2">{phase.result}</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Dependencies */}
+      {task.dependsOn != null && task.dependsOn.length > 0 && (
+        <div>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Dependencies
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {task.dependsOn.map((depId) => (
+              <Link
+                key={depId}
+                href={`/workspaces/${workspaceId}/tasks/${depId}`}
+                className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 font-mono text-xs text-zinc-700 hover:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-600"
+              >
+                {depId}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Dispatcher comments */}
       {dispatcherComments.length > 0 && (
