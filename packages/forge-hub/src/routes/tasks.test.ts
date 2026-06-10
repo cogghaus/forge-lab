@@ -39,7 +39,7 @@ describe('/workspaces/:workspaceId/tasks', () => {
     expect(task?.workspaceId).toBe(workspaceId);
   });
 
-  it('POST without an agent routes to the FM dispatcher inbox (pending_dispatcher_action)', async () => {
+  it('POST without an agent lands in pending_agent so FM can triage it', async () => {
     const res = await hub.fastify.inject({
       method: 'POST',
       url: `/workspaces/${workspaceId}/tasks`,
@@ -54,7 +54,9 @@ describe('/workspaces/:workspaceId/tasks', () => {
       .from(schema.tasks)
       .where(eq(schema.tasks.id, id))
       .get();
-    expect(task?.status).toBe('pending_dispatcher_action');
+    // Regression: was pending_dispatcher_action, which maps to the Review kanban lane.
+    // New tasks must start in pending_agent so they appear in the Pending lane.
+    expect(task?.status).toBe('pending_agent');
     expect(task?.assignedAgentId).toBeNull();
   });
 
