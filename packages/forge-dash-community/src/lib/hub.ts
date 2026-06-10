@@ -64,6 +64,15 @@ export interface HubWorkspace {
   repoBranch?: string | null;
 }
 
+export interface HubPhaseInfo {
+  phaseIndex: number;
+  taskId?: string;
+  title: string;
+  role: string;
+  status: 'pending' | 'active' | 'complete' | 'failed';
+  result?: string;
+}
+
 export interface HubTask {
   id: string;
   workspaceId: string | null;
@@ -78,6 +87,18 @@ export interface HubTask {
   createdBy: string;
   createdAt: string;
   completedAt: string | null;
+  /** Set when this task is a sequenced multi-phase task. Null for plain tasks. */
+  sequenceSpec?: { phases: Array<{ title: string; role: string; prompt: string }> } | null;
+  /** Set when this task is a phase child. Null/undefined for root tasks. */
+  phaseIndex?: number | null;
+  /** Completion output written by the agent. */
+  result?: string | null;
+  /** Task IDs this task depends on (must complete before this task starts). */
+  dependsOn?: string[];
+  /** Human-readable reason this task is blocked. */
+  blockedReason?: string | null;
+  /** Assembled phase timeline for sequenced root tasks (response-only). */
+  phases?: HubPhaseInfo[];
 }
 
 export interface HubGoal {

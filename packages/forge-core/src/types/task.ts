@@ -20,6 +20,9 @@ export const TaskStatusSchema = z.enum([
   'assigned',
   'in_progress',
   'pending_dispatcher_action',
+  'sequenced_running',
+  'sequenced_complete',
+  'waiting_on_deps',
   'completed',
   'failed',
   'cancelled',
@@ -28,6 +31,31 @@ export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
 export const TaskPrioritySchema = z.enum(['low', 'normal', 'high', 'urgent']);
 export type TaskPriority = z.infer<typeof TaskPrioritySchema>;
+
+export const PhaseSpecSchema = z.object({
+  title: z.string().min(1).max(200),
+  role: z.string().min(1).max(100),
+  prompt: z.string().min(1).max(8000),
+});
+export type PhaseSpec = z.infer<typeof PhaseSpecSchema>;
+
+export const SequenceSpecSchema = z.object({
+  phases: z.array(PhaseSpecSchema).min(2).max(10),
+});
+export type SequenceSpec = z.infer<typeof SequenceSpecSchema>;
+
+export const PhaseStatusSchema = z.enum(['pending', 'active', 'complete', 'failed']);
+export type PhaseStatus = z.infer<typeof PhaseStatusSchema>;
+
+export const PhaseInfoSchema = z.object({
+  phaseIndex: z.number().int().min(0),
+  taskId: z.string().optional(),
+  title: z.string(),
+  role: z.string(),
+  status: z.enum(['pending', 'active', 'complete', 'failed']),
+  result: z.string().optional(),
+});
+export type PhaseInfo = z.infer<typeof PhaseInfoSchema>;
 
 export const TaskSchema = z.object({
   id: TaskIdSchema,
@@ -50,6 +78,18 @@ export const TaskSchema = z.object({
   taskKind: z.enum(['coding', 'review']).default('coding'),
   /** JSON-encoded ReviewConfig. Null for coding tasks. */
   reviewConfig: z.string().nullable().default(null),
+  /** Sequence spec for multi-phase tasks. Null for plain tasks and phase children. */
+  sequenceSpec: SequenceSpecSchema.optional(),
+  /** 0-based phase index for phase child tasks. Undefined for root tasks. */
+  phaseIndex: z.number().int().min(0).optional(),
+  /** Freeform completion output from the agent. Max 4000 chars enforced at the API layer. */
+  result: z.string().optional(),
+  /** Task IDs this task is waiting on before it becomes actionable. */
+  dependsOn: z.array(z.string()).optional(),
+  /** Human-readable reason why this task is blocked. */
+  blockedReason: z.string().optional(),
+  /** Response-only: assembled phase timeline for sequenced root tasks. */
+  phases: z.array(PhaseInfoSchema).optional(),
 });
 export type Task = z.infer<typeof TaskSchema>;
 

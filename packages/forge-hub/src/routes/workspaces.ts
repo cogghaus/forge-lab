@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { CreateWorkspaceInputSchema, RepoUrlSchema, RepoBranchSchema, schema } from '@forge-lab/core';
@@ -320,7 +320,13 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
           )
           .orderBy(desc(schema.agentInstances.startedAt)),
 
-        // FM inbox: tasks awaiting dispatcher action
+        // FM inbox: tasks awaiting dispatcher action.
+        // Excludes phase tasks (phase_index IS NOT NULL) — FM never triages phase sub-tasks.
+        // Excludes sequenced roots in sequenced_running (sequence_spec IS NOT NULL AND
+        // status = sequenced_running) — FM must not re-assign a sequenced root task.
+        // The status = pending_dispatcher_action filter already excludes sequenced_running rows,
+        // but we add the explicit isNull(phaseIndex) guard so phase tasks never leak through
+        // regardless of how the status filter changes in the future.
         db
           .select()
           .from(schema.tasks)
@@ -328,6 +334,7 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
             and(
               eq(schema.tasks.workspaceId, workspaceId),
               eq(schema.tasks.status, 'pending_dispatcher_action'),
+              isNull(schema.tasks.phaseIndex),
             ),
           )
           .orderBy(asc(schema.tasks.createdAt)),
@@ -371,6 +378,7 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
       // Queue depth: count of pending_agent tasks per assignedAgentId.
       // FM uses this for bottleneck detection (queueDepth[agentId] / liveInstances[agentId]).
       // Keyed by agentId (not by status) so FM can directly look up per-agent queue pressure.
+      // Excludes phase tasks (phase_index IS NULL) to prevent double-counting alongside root tasks.
       const pendingAgentTasks = await db
         .select({ assignedAgentId: schema.tasks.assignedAgentId })
         .from(schema.tasks)
@@ -378,6 +386,7 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
           and(
             eq(schema.tasks.workspaceId, workspaceId),
             eq(schema.tasks.status, 'pending_agent'),
+            isNull(schema.tasks.phaseIndex),
           ),
         );
 
@@ -386,6 +395,20 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
         const agent = t.assignedAgentId ?? 'unassigned';
         queueDepth[agent] = (queueDepth[agent] ?? 0) + 1;
       }
+
+      // Count tasks blocked on deps (waiting_on_deps, root tasks only).
+      // Cheap lookup given the tasks_waiting_deps_idx partial index.
+      const waitingRow = await db
+        .select({ n: count() })
+        .from(schema.tasks)
+        .where(
+          and(
+            eq(schema.tasks.workspaceId, workspaceId),
+            eq(schema.tasks.status, 'waiting_on_deps'),
+            isNull(schema.tasks.phaseIndex),
+          ),
+        )
+        .get();
 
       return {
         workspaceId,
@@ -397,6 +420,7 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
         recentHistory,
         dispatcherHistory,
         queueDepth,
+        waitingTasks: waitingRow?.n ?? 0,
         contextDocs,
       };
     },

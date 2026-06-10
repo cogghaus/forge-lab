@@ -1,11 +1,14 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { and, eq, desc, asc, inArray, isNull, lt, or, count, gte } from 'drizzle-orm';
+import { and, eq, desc, asc, inArray, isNull, isNotNull, lt, not, or, count, gte } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import {
   CreateTaskInputSchema,
   TaskIdSchema,
+  SequenceSpecSchema,
   formatTaskId,
+  formatPhaseTaskId,
   parseTaskId,
   rankAtLeast,
   schema,
@@ -17,7 +20,7 @@ import { checkPolicy } from '../policy/engine.js';
 import { buildDevicePrincipal } from '../policy/principals.js';
 
 const CompleteTaskBodySchema = z.object({
-  result: z.string().optional(),
+  result: z.string().max(4000).optional(),
 });
 
 const FailTaskBodySchema = z.object({
@@ -46,22 +49,33 @@ const RetryTaskBodySchema = z.object({
   priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
 });
 
+const CreateWorkspaceTaskBodySchema = CreateTaskInputSchema.extend({
+  sequenceSpec: SequenceSpecSchema.optional(),
+  dependsOn: z.array(z.string()).default([]),
+});
+
 /** Task statuses FM is allowed to route from. */
 const FM_ASSIGNABLE_STATUSES = ['pending_dispatcher_action', 'pending_agent'] as const;
 
 /** Statuses a user may cancel via the dedicated cancel endpoint.
- * Matches USER_ALLOWED_TRANSITIONS cancel paths + pending_dispatcher_action gap. */
-const CANCELLABLE_STATUSES = [
+ * Includes sequenced_running and waiting_on_deps per design doc Section 4.1. */
+const CANCELLABLE_STATUSES = new Set([
   'pending_dispatcher_action',
   'pending_design',
   'design_review',
   'pending_agent',
   'assigned',
   'in_progress',
-] as const;
+  'sequenced_running',
+  'waiting_on_deps',
+  'stale_assigned',
+]);
 
-/** Terminal statuses — cancel/retry are not allowed from these. */
-const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'] as const;
+/** Terminal statuses — no further transitions are possible. */
+const TERMINAL_STATUSES = new Set(['completed', 'sequenced_complete', 'failed', 'cancelled']);
+
+/** Terminal-success statuses — deps are satisfied when all deps are in one of these. */
+const TERMINAL_SUCCESS_STATUSES = new Set(['completed', 'sequenced_complete']);
 
 /** Statuses a user may reassign/clear via the user-session assign path. */
 const USER_ASSIGNABLE_STATUSES = ['pending_agent', 'assigned'] as const;
@@ -73,12 +87,332 @@ const USER_ALLOWED_TRANSITIONS: Record<string, string[]> = {
   design_review: ['cancelled'],
   assigned: ['cancelled'],
   in_progress: ['cancelled'],
+  sequenced_running: ['cancelled'],
+  waiting_on_deps: ['cancelled'],
   failed: ['pending_agent'],
   cancelled: ['pending_agent'],
 };
 
+/** Stale TTL for device availability checks (5 minutes in ms). */
+const STALE_TTL_MS = 5 * 60 * 1000;
+
 function maybeRunId(req: FastifyRequest): Record<string, string> {
   return req.runId ? { runId: req.runId } : {};
+}
+
+/**
+ * Shared helper: get the highest sequence number for root tasks (parent_id IS NULL)
+ * in a given project prefix. Excludes phase task IDs (which are compound and would
+ * corrupt the counter). MUST be used in both task-creation paths.
+ */
+async function getMaxRootSeq(db: Db, prefix: string): Promise<number> {
+  const existing = await db
+    .select({ id: schema.tasks.id })
+    .from(schema.tasks)
+    .where(
+      and(
+        eq(schema.tasks.projectPrefix, prefix),
+        isNull(schema.tasks.parentId),
+      ),
+    );
+  let maxSeq = 0;
+  for (const row of existing) {
+    try {
+      const { sequence } = parseTaskId(row.id);
+      if (sequence > maxSeq) maxSeq = sequence;
+    } catch {
+      // compound phase ID or malformed — skip
+    }
+  }
+  return maxSeq;
+}
+
+/**
+ * Build the next-phase description by injecting prior-phase output in a
+ * security-hardened, sandboxed format. See design doc Section 6.4.
+ */
+function buildNextPhaseDescription(
+  nextPhasePrompt: string,
+  priorResult: string,
+  completingPhaseIndex: number,
+): string {
+  // 1. Cap the prior result
+  const capped = priorResult.slice(0, 2000);
+
+  // 2. Normalize CRLF to LF
+  const normalized = capped.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  // 3. Strip XML tags that could escape the sandbox
+  const escaped = normalized.replace(/<\/?prior_phase_output[^>]*>/gi, '[xml-tag-removed]');
+
+  // 4. Prefix every line with '> '
+  const blockquoted = escaped.split('\n').map((line) => `> ${line}`).join('\n');
+
+  // 5. Wrap in XML-attributed tags with trust annotation
+  const sandboxed = `<prior_phase_output source="phase-${completingPhaseIndex}" trust="untrusted">
+${blockquoted}
+</prior_phase_output>`;
+
+  return `${nextPhasePrompt}\n\n${sandboxed}`;
+}
+
+/**
+ * DAG cycle detection for dependsOn validation. Returns the cycle path if found,
+ * or null if the graph is acyclic.
+ */
+function detectCycle(
+  newTaskId: string,
+  newDependsOn: string[],
+  existingEdges: Map<string, string[]>,
+): string[] | null {
+  const graph = new Map(existingEdges);
+  graph.set(newTaskId, newDependsOn);
+
+  const visited = new Set<string>();
+  const stack = new Set<string>();
+  const stackPath: string[] = [];
+
+  function dfs(node: string): string[] | null {
+    if (stack.has(node)) {
+      const cycleStart = stackPath.indexOf(node);
+      return [...stackPath.slice(cycleStart), node];
+    }
+    if (visited.has(node)) return null;
+    visited.add(node);
+    stack.add(node);
+    stackPath.push(node);
+
+    for (const neighbor of graph.get(node) ?? []) {
+      const cycle = dfs(neighbor);
+      if (cycle) return cycle;
+    }
+
+    stack.delete(node);
+    stackPath.pop();
+    return null;
+  }
+
+  return dfs(newTaskId);
+}
+
+/**
+ * Dep-unblocking pass: scan all waiting_on_deps tasks in the workspace and
+ * unblock those whose all deps have reached terminal-success.
+ * Returns Drizzle batch statements to be included in the caller's batch,
+ * or executes them directly if no batch is being built.
+ *
+ * This function runs the unblocking logic and executes directly.
+ */
+async function runDepUnblockingPass(
+  db: Db,
+  workspaceId: string,
+): Promise<void> {
+  const waitingTasks = await db
+    .select()
+    .from(schema.tasks)
+    .where(
+      and(
+        eq(schema.tasks.workspaceId, workspaceId),
+        eq(schema.tasks.status, 'waiting_on_deps'),
+        isNull(schema.tasks.phaseIndex),
+      ),
+    )
+    .limit(50);
+
+  for (const blocked of waitingTasks) {
+    let deps: string[];
+    try {
+      deps = z.array(z.string()).parse(JSON.parse(blocked.dependsOn));
+    } catch (err) {
+      console.error('[unblocking-pass] corrupt depends_on on task', blocked.id, err);
+      continue;
+    }
+
+    if (deps.length === 0) {
+      // No deps — unblock immediately
+      await db
+        .update(schema.tasks)
+        .set({ status: 'pending_agent', blockedReason: null, updatedAt: new Date() })
+        .where(eq(schema.tasks.id, blocked.id));
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId: blocked.id,
+        eventName: 'task.deps_cleared',
+        source: 'system',
+        payload: { reason: 'no_deps' },
+        workspaceId,
+      });
+      continue;
+    }
+
+    const depStatuses = await db
+      .select({ id: schema.tasks.id, status: schema.tasks.status })
+      .from(schema.tasks)
+      .where(
+        and(
+          inArray(schema.tasks.id, deps),
+          eq(schema.tasks.workspaceId, workspaceId),
+        ),
+      );
+
+    const depStatusMap = new Map(depStatuses.map((d) => [d.id, d.status]));
+
+    // Check for cross-workspace or missing deps
+    const invalidDeps = deps.filter((id) => !depStatusMap.has(id));
+    if (invalidDeps.length > 0) {
+      await db
+        .update(schema.tasks)
+        .set({ blockedReason: 'invalid_dep_workspace', updatedAt: new Date() })
+        .where(eq(schema.tasks.id, blocked.id));
+      continue;
+    }
+
+    // Check for cancelled/failed deps
+    for (const [depId, depStatus] of depStatusMap.entries()) {
+      if (depStatus === 'cancelled') {
+        await db
+          .update(schema.tasks)
+          .set({ blockedReason: `dep_cancelled:${depId}`, updatedAt: new Date() })
+          .where(eq(schema.tasks.id, blocked.id));
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId: blocked.id,
+          eventName: 'task.dep_failed',
+          source: 'system',
+          payload: { depId, depStatus: 'cancelled' },
+          workspaceId,
+        });
+        break;
+      }
+      if (depStatus === 'failed') {
+        await db
+          .update(schema.tasks)
+          .set({ blockedReason: `dep_failed:${depId}`, updatedAt: new Date() })
+          .where(eq(schema.tasks.id, blocked.id));
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId: blocked.id,
+          eventName: 'task.dep_failed',
+          source: 'system',
+          payload: { depId, depStatus: 'failed' },
+          workspaceId,
+        });
+        break;
+      }
+    }
+
+    const allMet = deps.every((depId) => TERMINAL_SUCCESS_STATUSES.has(depStatusMap.get(depId) ?? ''));
+    if (!allMet) continue;
+
+    // All deps satisfied — unblock
+    if (blocked.sequenceSpec !== null && blocked.sequenceSpec !== undefined) {
+      // Sequenced task: run phase-0 creation logic
+      await unblockSequencedTask(db, blocked, workspaceId);
+    } else {
+      await db
+        .update(schema.tasks)
+        .set({ status: 'pending_agent', blockedReason: null, updatedAt: new Date() })
+        .where(eq(schema.tasks.id, blocked.id));
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId: blocked.id,
+        eventName: 'task.deps_cleared',
+        source: 'system',
+        payload: {},
+        workspaceId,
+      });
+    }
+  }
+}
+
+/**
+ * Create phase-0 task for a sequenced task that was previously waiting_on_deps
+ * and has now been unblocked.
+ */
+async function unblockSequencedTask(
+  db: Db,
+  rootTask: { id: string; sequenceSpec: string | null; workspaceId: string | null },
+  workspaceId: string,
+): Promise<void> {
+  if (!rootTask.sequenceSpec) return;
+
+  let spec: z.infer<typeof SequenceSpecSchema>;
+  try {
+    spec = SequenceSpecSchema.parse(JSON.parse(rootTask.sequenceSpec));
+  } catch {
+    console.error('[unblocking-pass] corrupt sequence_spec on task', rootTask.id);
+    return;
+  }
+
+  const phase0 = spec.phases[0];
+  if (!phase0) {
+    console.error('[unblocking-pass] sequence_spec has 0 phases on task', rootTask.id);
+    return;
+  }
+  const phase0Id = formatPhaseTaskId(rootTask.id, 0);
+  const now = new Date();
+
+  // Check device availability
+  const cutoffMs = Date.now() - STALE_TTL_MS;
+  const cutoff = new Date(cutoffMs);
+  const activeDevices = await db
+    .select({ id: schema.devices.id })
+    .from(schema.devices)
+    .where(
+      and(
+        eq(schema.devices.agentId, phase0.role),
+        eq(schema.devices.status, 'active'),
+        gte(schema.devices.lastSeen, cutoff),
+      ),
+    );
+
+  const blockedReason = activeDevices.length === 0 ? `role_unavailable:${phase0.role}` : null;
+
+  await db.insert(schema.tasks).values({
+    id: phase0Id,
+    workspaceId,
+    projectPrefix: rootTask.id.replace(/-\d+$/, ''),
+    title: phase0.title,
+    description: phase0.prompt,
+    status: 'pending_agent',
+    priority: 'normal',
+    parentId: rootTask.id,
+    phaseIndex: 0,
+    assignedAgentId: phase0.role,
+    dependsOn: '[]',
+    createdBy: 'system',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await db
+    .update(schema.tasks)
+    .set({
+      status: 'sequenced_running',
+      blockedReason,
+      updatedAt: now,
+    })
+    .where(eq(schema.tasks.id, rootTask.id));
+
+  await db.insert(schema.taskHistory).values({
+    id: nanoid(),
+    taskId: rootTask.id,
+    eventName: 'task.deps_cleared',
+    source: 'system',
+    payload: { phaseTaskId: phase0Id },
+    workspaceId,
+  });
+
+  if (blockedReason) {
+    await db.insert(schema.taskHistory).values({
+      id: nanoid(),
+      taskId: rootTask.id,
+      eventName: 'task.phase_blocked',
+      source: 'system',
+      payload: { phase: 0, reason: blockedReason },
+      workspaceId,
+    });
+  }
 }
 
 export function registerTaskRoutes(
@@ -94,15 +428,7 @@ export function registerTaskRoutes(
       return;
     }
     const body = CreateTaskInputSchema.parse(req.body);
-    const existing = await db
-      .select({ id: schema.tasks.id })
-      .from(schema.tasks)
-      .where(eq(schema.tasks.projectPrefix, body.projectPrefix));
-    let maxSeq = 0;
-    for (const row of existing) {
-      const { sequence } = parseTaskId(row.id);
-      if (sequence > maxSeq) maxSeq = sequence;
-    }
+    const maxSeq = await getMaxRootSeq(db, body.projectPrefix);
     const id = formatTaskId(body.projectPrefix, maxSeq + 1);
     const createdBy = user ? `user:${user.id}` : `device:${device!.id}`;
 
@@ -205,6 +531,7 @@ export function registerTaskRoutes(
     const createdByKey = `user:${userId}`;
 
     // Scope: tasks in the user's workspaces OR unscoped tasks created by the user
+    // Exclude phase tasks (parent_id IS NULL = root tasks only)
     const scopeFilter =
       memberWorkspaceIds.length > 0
         ? or(
@@ -213,11 +540,11 @@ export function registerTaskRoutes(
           )
         : and(isNull(schema.tasks.workspaceId), eq(schema.tasks.createdBy, createdByKey));
 
-    // Count tasks grouped by status in a single query
+    // Count tasks grouped by status in a single query; WHERE parent_id IS NULL excludes phase tasks
     const rows = await db
       .select({ status: schema.tasks.status, n: count() })
       .from(schema.tasks)
-      .where(scopeFilter)
+      .where(and(scopeFilter, isNull(schema.tasks.parentId)))
       .groupBy(schema.tasks.status);
 
     const byStatus: Record<string, number> = {};
@@ -227,13 +554,13 @@ export function registerTaskRoutes(
       total += row.n;
     }
 
-    const completed = byStatus['completed'] ?? 0;
+    const completed = (byStatus['completed'] ?? 0) + (byStatus['sequenced_complete'] ?? 0);
     const failed = byStatus['failed'] ?? 0;
     const inProgress = byStatus['in_progress'] ?? 0;
     const pending = byStatus['pending_agent'] ?? 0;
     const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-    // Tasks completed in the last 7 days (within scope)
+    // Tasks completed in the last 7 days (within scope, root tasks only)
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const recentRow = await db
       .select({ n: count() })
@@ -241,7 +568,11 @@ export function registerTaskRoutes(
       .where(
         and(
           scopeFilter,
-          eq(schema.tasks.status, 'completed'),
+          isNull(schema.tasks.parentId),
+          or(
+            eq(schema.tasks.status, 'completed'),
+            eq(schema.tasks.status, 'sequenced_complete'),
+          ),
           gte(schema.tasks.completedAt, sevenDaysAgo),
         ),
       )
@@ -369,7 +700,7 @@ export function registerTaskRoutes(
   // ---------------------------------------------------------------------------
   // Assign task: accepts orchestrator device OR workspace member (user session).
   // Orchestrator path: non-nullable agentId, FM_ASSIGNABLE_STATUSES, 422 on guard fail.
-  // User path: nullable agentId (null = clear → pending_dispatcher_action),
+  // User path: nullable agentId (null = clear -> pending_dispatcher_action),
   //            USER_ASSIGNABLE_STATUSES, 409 on guard fail.
   // ---------------------------------------------------------------------------
 
@@ -574,6 +905,7 @@ export function registerTaskRoutes(
   // Cancel: dedicated endpoint for cancelling tasks with optional reason and
   // in-progress stop signal. Covers pending_dispatcher_action (gap vs general
   // PATCH). Any workspace member at collaborator level or above may cancel.
+  // Now also cancels non-terminal phase children atomically for sequenced roots.
   // ---------------------------------------------------------------------------
 
   fastify.post<{ Params: { workspaceId: string; taskId: string } }>(
@@ -586,7 +918,7 @@ export function registerTaskRoutes(
       const body = CancelTaskBodySchema.parse(req.body ?? {});
 
       const task = await db
-        .select({ id: schema.tasks.id, status: schema.tasks.status })
+        .select({ id: schema.tasks.id, status: schema.tasks.status, phaseIndex: schema.tasks.phaseIndex })
         .from(schema.tasks)
         .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)))
         .get();
@@ -595,22 +927,36 @@ export function registerTaskRoutes(
         return;
       }
 
-      if ((TERMINAL_STATUSES as readonly string[]).includes(task.status)) {
+      if (TERMINAL_STATUSES.has(task.status)) {
         await reply.code(409).send({ error: 'already_terminal', status: task.status });
         return;
       }
 
-      if (!(CANCELLABLE_STATUSES as readonly string[]).includes(task.status)) {
+      if (!CANCELLABLE_STATUSES.has(task.status)) {
         await reply.code(422).send({ error: 'invalid_transition', from: task.status, to: 'cancelled' });
         return;
       }
 
       const previousStatus = task.status;
       const source = `user:${user.id}`;
+      const now = new Date();
+
+      // Find non-terminal phase children if this is a sequenced root
+      const phaseChildren = await db
+        .select({ id: schema.tasks.id, phaseIndex: schema.tasks.phaseIndex, status: schema.tasks.status })
+        .from(schema.tasks)
+        .where(
+          and(
+            eq(schema.tasks.parentId, taskId),
+            isNotNull(schema.tasks.phaseIndex),
+          ),
+        );
+
+      const nonTerminalChildren = phaseChildren.filter((c) => !TERMINAL_STATUSES.has(c.status));
 
       const updated = await db
         .update(schema.tasks)
-        .set({ status: 'cancelled', updatedAt: new Date() })
+        .set({ status: 'cancelled', updatedAt: now })
         .where(
           and(
             eq(schema.tasks.id, taskId),
@@ -623,6 +969,28 @@ export function registerTaskRoutes(
       if (updated.length === 0) {
         await reply.code(409).send({ error: 'status_changed' });
         return;
+      }
+
+      // Cancel non-terminal phase children
+      for (const child of nonTerminalChildren) {
+        await db
+          .update(schema.tasks)
+          .set({ status: 'cancelled', updatedAt: now })
+          .where(
+            and(
+              eq(schema.tasks.id, child.id),
+              not(inArray(schema.tasks.status, ['completed', 'sequenced_complete', 'failed', 'cancelled'])),
+            ),
+          );
+
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId: child.id,
+          eventName: 'task.phase_cancelled',
+          source,
+          payload: { phaseIndex: child.phaseIndex, reason: 'parent_cancelled' },
+          workspaceId,
+        });
       }
 
       // Insert stop instruction for in-progress tasks so daemon can abort
@@ -663,6 +1031,7 @@ export function registerTaskRoutes(
   // Retry: resets a failed task to pending_dispatcher_action so FM can
   // re-triage (rather than bypassing FM via pending_agent). Clears all
   // assignment fields. Any workspace member at collaborator level may retry.
+  // Returns 409 for sequenced tasks — use the phase retry endpoint instead.
   // ---------------------------------------------------------------------------
 
   fastify.post<{ Params: { workspaceId: string; taskId: string } }>(
@@ -679,12 +1048,22 @@ export function registerTaskRoutes(
           id: schema.tasks.id,
           status: schema.tasks.status,
           priority: schema.tasks.priority,
+          sequenceSpec: schema.tasks.sequenceSpec,
         })
         .from(schema.tasks)
         .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)))
         .get();
       if (!task) {
         await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+
+      // Sequenced tasks must use the phase retry endpoint
+      if (task.sequenceSpec !== null && task.sequenceSpec !== undefined) {
+        await reply.code(409).send({
+          error: 'use_phase_retry',
+          message: 'Sequenced tasks must be retried via POST /workspaces/:id/tasks/:taskId/phases/:phaseIndex/retry',
+        });
         return;
       }
 
@@ -738,24 +1117,131 @@ export function registerTaskRoutes(
     },
   );
 
+  // ---------------------------------------------------------------------------
+  // Phase retry: resets a specific failed phase task back to pending_agent
+  // without resetting the entire sequence.
+  // ---------------------------------------------------------------------------
+
+  fastify.post<{ Params: { workspaceId: string; taskId: string; phaseIndex: string } }>(
+    '/workspaces/:workspaceId/tasks/:taskId/phases/:phaseIndex/retry',
+    { preHandler: requireWorkspaceMember(db, 'collaborator') },
+    async (req, reply) => {
+      const { id: workspaceId } = getWorkspace(req);
+      const user = getUser(req);
+      const taskId = TaskIdSchema.parse(req.params.taskId);
+
+      // Parse and validate phaseIndex
+      const phaseIndexRaw = parseInt(req.params.phaseIndex, 10);
+      if (!Number.isInteger(phaseIndexRaw) || phaseIndexRaw < 0) {
+        await reply.code(400).send({ error: 'invalid_phase_index' });
+        return;
+      }
+
+      // Fetch root task and validate it's a sequenced task
+      const rootTask = await db
+        .select({
+          id: schema.tasks.id,
+          status: schema.tasks.status,
+          sequenceSpec: schema.tasks.sequenceSpec,
+        })
+        .from(schema.tasks)
+        .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)))
+        .get();
+
+      if (!rootTask) {
+        await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+
+      if (!rootTask.sequenceSpec) {
+        await reply.code(409).send({ error: 'not_sequenced' });
+        return;
+      }
+
+      let spec: z.infer<typeof SequenceSpecSchema>;
+      try {
+        spec = SequenceSpecSchema.parse(JSON.parse(rootTask.sequenceSpec));
+      } catch {
+        await reply.code(500).send({ error: 'corrupt_sequence_spec' });
+        return;
+      }
+
+      if (phaseIndexRaw >= spec.phases.length) {
+        await reply.code(400).send({ error: 'invalid_phase_index' });
+        return;
+      }
+
+      // Find the failed phase task
+      const phaseTaskId = formatPhaseTaskId(taskId, phaseIndexRaw);
+      const phaseTask = await db
+        .select({ id: schema.tasks.id, status: schema.tasks.status })
+        .from(schema.tasks)
+        .where(
+          and(
+            eq(schema.tasks.id, phaseTaskId),
+            eq(schema.tasks.parentId, taskId),
+            eq(schema.tasks.phaseIndex, phaseIndexRaw),
+          ),
+        )
+        .get();
+
+      if (!phaseTask) {
+        await reply.code(404).send({ error: 'phase_task_not_found' });
+        return;
+      }
+
+      if (phaseTask.status !== 'failed') {
+        await reply.code(409).send({ error: 'phase_not_failed', status: phaseTask.status });
+        return;
+      }
+
+      const source = `user:${user.id}`;
+      const now = new Date();
+
+      await db
+        .update(schema.tasks)
+        .set({ status: 'pending_agent', result: null, updatedAt: now })
+        .where(eq(schema.tasks.id, phaseTaskId));
+
+      await db
+        .update(schema.tasks)
+        .set({ status: 'sequenced_running', blockedReason: null, updatedAt: now })
+        .where(eq(schema.tasks.id, taskId));
+
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId,
+        eventName: 'task.phase_retried',
+        source,
+        payload: { phaseIndex: phaseIndexRaw },
+        workspaceId,
+      });
+
+      await reply.send({ ok: true, phaseTaskId, status: 'pending_agent' });
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // POST /workspaces/:workspaceId/tasks — create a new task with optional
+  // sequenceSpec (multi-phase) and dependsOn (dependency graph).
+  // ---------------------------------------------------------------------------
+
   fastify.post<{ Params: { workspaceId: string } }>(
     '/workspaces/:workspaceId/tasks',
     { preHandler: requireWorkspaceMember(db, 'collaborator') },
     async (req, reply) => {
       const { id: workspaceId } = getWorkspace(req);
-      const body = CreateTaskInputSchema.parse(req.body);
-      const existing = await db
-        .select({ id: schema.tasks.id })
-        .from(schema.tasks)
-        .where(eq(schema.tasks.projectPrefix, body.projectPrefix));
-      let maxSeq = 0;
-      for (const row of existing) {
-        const { sequence } = parseTaskId(row.id);
-        if (sequence > maxSeq) maxSeq = sequence;
-      }
-      const id = formatTaskId(body.projectPrefix, maxSeq + 1);
+      const body = CreateWorkspaceTaskBodySchema.parse(req.body);
       const createdBy = `user:${getUser(req).id}`;
       const goalId = body.goalId || null;
+
+      // Feature flag check for sequences
+      if (body.sequenceSpec) {
+        if (!process.env['FORGE_SEQUENCES_ENABLED']) {
+          await reply.code(422).send({ error: 'sequences_disabled' });
+          return;
+        }
+      }
 
       if (goalId) {
         const goal = await db
@@ -783,6 +1269,227 @@ export function registerTaskRoutes(
         }
       }
 
+      // Validate dependsOn
+      const dependsOn = body.dependsOn ?? [];
+      if (dependsOn.length > 0) {
+        // Fetch all referenced dep tasks in this workspace
+        const depTasks = await db
+          .select({ id: schema.tasks.id, phaseIndex: schema.tasks.phaseIndex, workspaceId: schema.tasks.workspaceId, dependsOn: schema.tasks.dependsOn })
+          .from(schema.tasks)
+          .where(inArray(schema.tasks.id, dependsOn));
+
+        const depTaskMap = new Map(depTasks.map((t) => [t.id, t]));
+
+        // Check for unknown dep IDs
+        const unknownIds = dependsOn.filter((id) => !depTaskMap.has(id));
+        if (unknownIds.length > 0) {
+          await reply.code(422).send({ error: 'unknown_dep_ids', ids: unknownIds });
+          return;
+        }
+
+        // Check for phase task deps (invalid)
+        const phaseDepIds = dependsOn.filter((id) => depTaskMap.get(id)?.phaseIndex !== null && depTaskMap.get(id)?.phaseIndex !== undefined);
+        if (phaseDepIds.length > 0) {
+          await reply.code(422).send({ error: 'invalid_dep_phase_task' });
+          return;
+        }
+
+        // Check all deps belong to the same workspace
+        const crossWorkspaceDeps = dependsOn.filter((id) => depTaskMap.get(id)?.workspaceId !== workspaceId);
+        if (crossWorkspaceDeps.length > 0) {
+          await reply.code(422).send({ error: 'invalid_dep_workspace' });
+          return;
+        }
+
+        // Build adjacency map for cycle detection
+        const existingEdges = new Map<string, string[]>();
+        for (const [, depTask] of depTaskMap.entries()) {
+          try {
+            const deps = z.array(z.string()).parse(JSON.parse(depTask.dependsOn));
+            existingEdges.set(depTask.id, deps);
+          } catch {
+            existingEdges.set(depTask.id, []);
+          }
+        }
+
+        // Get the new task ID to use for cycle detection (we need to compute it first)
+        const maxSeqForCycle = await getMaxRootSeq(db, body.projectPrefix);
+        const tentativeId = formatTaskId(body.projectPrefix, maxSeqForCycle + 1);
+
+        // Check self-dependency
+        if (dependsOn.includes(tentativeId)) {
+          await reply.code(422).send({ error: 'dep_cycle', cycle: [tentativeId] });
+          return;
+        }
+
+        const cycle = detectCycle(tentativeId, dependsOn, existingEdges);
+        if (cycle) {
+          await reply.code(422).send({ error: 'dep_cycle', cycle });
+          return;
+        }
+      }
+
+      const maxSeq = await getMaxRootSeq(db, body.projectPrefix);
+      const id = formatTaskId(body.projectPrefix, maxSeq + 1);
+
+      // Determine initial status based on deps
+      const allDepsDone =
+        dependsOn.length === 0 ||
+        (await (async () => {
+          const depStatuses = await db
+            .select({ id: schema.tasks.id, status: schema.tasks.status })
+            .from(schema.tasks)
+            .where(inArray(schema.tasks.id, dependsOn));
+          return depStatuses.every((d) => TERMINAL_SUCCESS_STATUSES.has(d.status));
+        })());
+
+      const assignedAgentId = body.assignedAgentId ?? null;
+      const now = new Date();
+
+      if (body.sequenceSpec) {
+        // Sequenced task creation
+        const specJson = JSON.stringify(body.sequenceSpec);
+        const specHash = createHash('sha256').update(specJson).digest('hex');
+
+        if (!allDepsDone) {
+          // Task must wait for deps before phase-0 can start
+          await db.insert(schema.tasks).values({
+            id,
+            projectPrefix: body.projectPrefix,
+            title: body.title,
+            description: body.description ?? null,
+            priority: body.priority ?? 'normal',
+            goalId,
+            parentId,
+            workspaceId,
+            assignedAgentId,
+            status: 'waiting_on_deps',
+            blockedReason: 'waiting_on_deps',
+            taskKind: body.taskKind ?? 'coding',
+            reviewConfig: body.reviewConfig ?? null,
+            sequenceSpec: specJson,
+            sequenceSpecHash: specHash,
+            dependsOn: JSON.stringify(dependsOn),
+            createdBy,
+            createdAt: now,
+            updatedAt: now,
+          });
+          await db.insert(schema.taskHistory).values({
+            id: nanoid(),
+            taskId: id,
+            eventName: 'task.created',
+            source: createdBy,
+            payload: { title: body.title, sequenced: true, waitingOnDeps: true, ...maybeRunId(req) },
+            workspaceId,
+          });
+          bus.emit({
+            id: nanoid(),
+            name: 'task.created',
+            occurredAt: new Date(),
+            source: createdBy,
+            payload: { taskId: id, projectPrefix: body.projectPrefix, workspaceId },
+          });
+          await reply.code(201).send({ id });
+          return;
+        }
+
+        // Deps satisfied — create phase-0 immediately
+        const phase0 = body.sequenceSpec.phases[0];
+        if (!phase0) {
+          await reply.code(422).send({ error: 'sequence_spec_empty' });
+          return;
+        }
+        const phase0Id = formatPhaseTaskId(id, 0);
+
+        // Check device availability for phase-0 role
+        const cutoff = new Date(Date.now() - STALE_TTL_MS);
+        const activeDevices = await db
+          .select({ id: schema.devices.id })
+          .from(schema.devices)
+          .where(
+            and(
+              eq(schema.devices.agentId, phase0.role),
+              eq(schema.devices.status, 'active'),
+              gte(schema.devices.lastSeen, cutoff),
+            ),
+          );
+
+        const blockedReason = activeDevices.length === 0 ? `role_unavailable:${phase0.role}` : null;
+
+        // Insert root task
+        await db.insert(schema.tasks).values({
+          id,
+          projectPrefix: body.projectPrefix,
+          title: body.title,
+          description: body.description ?? null,
+          priority: body.priority ?? 'normal',
+          goalId,
+          parentId,
+          workspaceId,
+          assignedAgentId,
+          status: 'sequenced_running',
+          blockedReason,
+          taskKind: body.taskKind ?? 'coding',
+          reviewConfig: body.reviewConfig ?? null,
+          sequenceSpec: specJson,
+          sequenceSpecHash: specHash,
+          dependsOn: JSON.stringify(dependsOn),
+          createdBy,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        // Insert phase-0 task
+        await db.insert(schema.tasks).values({
+          id: phase0Id,
+          projectPrefix: body.projectPrefix,
+          title: phase0.title,
+          description: phase0.prompt,
+          priority: body.priority ?? 'normal',
+          workspaceId,
+          parentId: id,
+          phaseIndex: 0,
+          assignedAgentId: phase0.role,
+          status: 'pending_agent',
+          dependsOn: '[]',
+          taskKind: 'coding',
+          createdBy,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId: id,
+          eventName: 'task.created',
+          source: createdBy,
+          payload: { title: body.title, sequenced: true, phaseTaskId: phase0Id, ...maybeRunId(req) },
+          workspaceId,
+        });
+
+        if (blockedReason) {
+          await db.insert(schema.taskHistory).values({
+            id: nanoid(),
+            taskId: id,
+            eventName: 'task.phase_blocked',
+            source: 'system',
+            payload: { phase: 0, reason: blockedReason },
+            workspaceId,
+          });
+        }
+
+        bus.emit({
+          id: nanoid(),
+          name: 'task.created',
+          occurredAt: new Date(),
+          source: createdBy,
+          payload: { taskId: id, projectPrefix: body.projectPrefix, workspaceId },
+        });
+        await reply.code(201).send({ id });
+        return;
+      }
+
+      // Plain (non-sequenced) task creation
       // FM-as-front-door routing for the user-facing workspace endpoint: a task
       // created without an explicit agent goes to the dispatcher inbox so Forge
       // Master triages it, rather than defaulting to pending_agent where any
@@ -790,7 +1497,9 @@ export function registerTaskRoutes(
       // pre-assigns an agent keeps the direct pending_agent path so the target
       // worker picks it up. (The flat device endpoint POST /tasks keeps its own
       // default — it is the automation path and routes explicitly.)
-      const assignedAgentId = body.assignedAgentId ?? null;
+      const initialStatus = !allDepsDone ? 'waiting_on_deps' : 'pending_agent';
+      const initialBlockedReason = !allDepsDone ? 'waiting_on_deps' : null;
+
       await db.insert(schema.tasks).values({
         id,
         projectPrefix: body.projectPrefix,
@@ -801,10 +1510,14 @@ export function registerTaskRoutes(
         parentId,
         workspaceId,
         assignedAgentId,
-        status: 'pending_agent',
+        status: initialStatus,
+        blockedReason: initialBlockedReason,
         taskKind: body.taskKind ?? 'coding',
         reviewConfig: body.reviewConfig ?? null,
+        dependsOn: JSON.stringify(dependsOn),
         createdBy,
+        createdAt: now,
+        updatedAt: now,
       });
       await db.insert(schema.taskHistory).values({
         id: nanoid(),
@@ -825,19 +1538,31 @@ export function registerTaskRoutes(
     },
   );
 
-  fastify.get<{ Params: { workspaceId: string } }>(
+  fastify.get<{ Params: { workspaceId: string }; Querystring: { includePhaseTasks?: string } }>(
     '/workspaces/:workspaceId/tasks',
     { preHandler: requireWorkspaceMember(db) },
     async (req) => {
       const { id: workspaceId } = getWorkspace(req);
+      const includePhaseTasks = req.query.includePhaseTasks === 'true';
+
+      const whereClause = includePhaseTasks
+        ? eq(schema.tasks.workspaceId, workspaceId)
+        : and(eq(schema.tasks.workspaceId, workspaceId), isNull(schema.tasks.parentId));
+
       const tasks = await db
         .select()
         .from(schema.tasks)
-        .where(eq(schema.tasks.workspaceId, workspaceId))
+        .where(whereClause)
         .orderBy(desc(schema.tasks.createdAt));
       return { tasks };
     },
   );
+
+  // ---------------------------------------------------------------------------
+  // Flat complete endpoint (device-side, for non-sequenced root tasks).
+  // Returns 409 if the task is a phase task (must use workspace-scoped endpoint).
+  // Returns 409 if the task has a sequenceSpec (must not complete root directly).
+  // ---------------------------------------------------------------------------
 
   fastify.post<{ Params: { id: string } }>(
     '/tasks/:id/complete',
@@ -851,18 +1576,69 @@ export function registerTaskRoutes(
         await reply.code(404).send({ error: 'not_found' });
         return;
       }
+
+      // Phase tasks must use the workspace-scoped complete endpoint
+      if (task.phaseIndex !== null && task.phaseIndex !== undefined) {
+        await reply.code(409).send({
+          error: 'use_phase_complete',
+          message: 'Phase tasks must be completed via the workspace-scoped endpoint POST /workspaces/:id/tasks/:taskId/complete',
+        });
+        return;
+      }
+
+      // Sequenced root tasks must not be completed via the flat endpoint
+      if (task.sequenceSpec !== null && task.sequenceSpec !== undefined) {
+        await reply.code(409).send({
+          error: 'use_phase_complete',
+          message: 'Phase tasks must be completed via the workspace-scoped endpoint POST /workspaces/:id/tasks/:taskId/complete',
+        });
+        return;
+      }
+
       if (task.assignedDeviceId !== device.id) {
         await reply.code(403).send({ error: 'not_assigned_to_you' });
         return;
       }
-      await db
+
+      // Optimistic lock: only complete if still in_progress
+      const completedRows = await db
         .update(schema.tasks)
         .set({
           status: 'completed',
+          result: body.result ? body.result.slice(0, 4000) : null,
           completedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(schema.tasks.id, id));
+        .where(and(eq(schema.tasks.id, id), eq(schema.tasks.status, 'in_progress')))
+        .returning({ id: schema.tasks.id });
+
+      if (completedRows.length === 0) {
+        // Optimistic lock failed — check current status for discriminated error
+        const current = await db
+          .select({ status: schema.tasks.status })
+          .from(schema.tasks)
+          .where(eq(schema.tasks.id, id))
+          .get();
+        if (!current) {
+          await reply.code(404).send({ error: 'task_not_found' });
+          return;
+        }
+        if (current.status === 'completed' || current.status === 'sequenced_complete') {
+          await reply.code(409).send({ error: 'already_completed' });
+          return;
+        }
+        if (current.status === 'cancelled') {
+          await reply.code(409).send({ error: 'task_cancelled' });
+          return;
+        }
+        if (current.status === 'failed') {
+          await reply.code(409).send({ error: 'task_failed' });
+          return;
+        }
+        await reply.code(409).send({ error: 'invalid_transition', currentStatus: current.status });
+        return;
+      }
+
       await db.insert(schema.taskHistory).values({
         id: nanoid(),
         taskId: id,
@@ -879,6 +1655,372 @@ export function registerTaskRoutes(
         // can evaluate significance without extra round-trips.
         payload: { taskId: id, result: body.result ?? null, workspaceId: task.workspaceId ?? null },
       });
+
+      // Run dep-unblocking pass for workspace tasks waiting on this task
+      if (task.workspaceId) {
+        await runDepUnblockingPass(db, task.workspaceId);
+      }
+
+      await reply.send({ ok: true });
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Workspace-scoped complete endpoint — used by phase tasks and any workspace
+  // task completing via the workspace-scoped path. Handles phase transitions,
+  // dep unblocking, and the sequence_spec_hash integrity check.
+  // ---------------------------------------------------------------------------
+
+  fastify.post<{ Params: { workspaceId: string; taskId: string } }>(
+    '/workspaces/:workspaceId/tasks/:taskId/complete',
+    { preHandler: requireDevice },
+    async (req, reply) => {
+      const device = getDevice(req);
+      const { workspaceId } = req.params;
+      const taskId = TaskIdSchema.parse(req.params.taskId);
+      const body = CompleteTaskBodySchema.parse(req.body ?? {});
+
+      const task = await db
+        .select()
+        .from(schema.tasks)
+        .where(
+          and(
+            eq(schema.tasks.id, taskId),
+            eq(schema.tasks.workspaceId, workspaceId),
+          ),
+        )
+        .get();
+
+      if (!task) {
+        await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+
+      // Auth: only the assigned device may complete this task
+      if (task.assignedDeviceId !== device.id) {
+        await reply.code(403).send({ error: 'device_not_assigned' });
+        return;
+      }
+
+      const truncatedResult = body.result ? body.result.slice(0, 4000) : null;
+      const now = new Date();
+
+      // Optimistic lock: only complete if still in_progress
+      const completedRows = await db
+        .update(schema.tasks)
+        .set({
+          status: 'completed',
+          result: truncatedResult,
+          completedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(schema.tasks.id, taskId),
+            eq(schema.tasks.status, 'in_progress'),
+          ),
+        )
+        .returning({ id: schema.tasks.id });
+
+      if (completedRows.length === 0) {
+        const current = await db
+          .select({ status: schema.tasks.status })
+          .from(schema.tasks)
+          .where(eq(schema.tasks.id, taskId))
+          .get();
+        if (!current) {
+          await reply.code(404).send({ error: 'task_not_found' });
+          return;
+        }
+        if (current.status === 'completed' || current.status === 'sequenced_complete') {
+          await reply.code(409).send({ error: 'already_completed' });
+          return;
+        }
+        if (current.status === 'cancelled') {
+          await reply.code(409).send({ error: 'task_cancelled' });
+          return;
+        }
+        if (current.status === 'failed') {
+          await reply.code(409).send({ error: 'task_failed' });
+          return;
+        }
+        await reply.code(409).send({ error: 'invalid_transition', currentStatus: current.status });
+        return;
+      }
+
+      const source = `device:${device.id}`;
+
+      // Phase transition logic
+      const sequencesEnabled = !!process.env['FORGE_SEQUENCES_ENABLED'];
+      if (
+        sequencesEnabled &&
+        task.phaseIndex !== null &&
+        task.phaseIndex !== undefined &&
+        task.parentId !== null
+      ) {
+        // Fetch parent task
+        const parent = await db
+          .select()
+          .from(schema.tasks)
+          .where(eq(schema.tasks.id, task.parentId))
+          .get();
+
+        if (!parent || !parent.sequenceSpec) {
+          // No parent or no sequence spec — fall through to regular completion
+          await db.insert(schema.taskHistory).values({
+            id: nanoid(),
+            taskId,
+            eventName: 'task.completed',
+            source,
+            payload: { result: truncatedResult, ...maybeRunId(req) },
+            workspaceId,
+          });
+          bus.emit({
+            id: nanoid(),
+            name: 'task.completed',
+            occurredAt: new Date(),
+            source,
+            payload: { taskId, result: truncatedResult, workspaceId },
+          });
+          await runDepUnblockingPass(db, workspaceId);
+          await reply.send({ ok: true });
+          return;
+        }
+
+        // Verify sequence_spec_hash integrity
+        const computedHash = createHash('sha256').update(parent.sequenceSpec).digest('hex');
+        if (computedHash !== parent.sequenceSpecHash) {
+          await db.insert(schema.taskHistory).values({
+            id: nanoid(),
+            taskId: parent.id,
+            eventName: 'task.sequence_integrity_failure',
+            source: 'system',
+            payload: { computedHash, storedHash: parent.sequenceSpecHash },
+            workspaceId,
+          });
+          await reply.code(500).send({ error: 'sequence_integrity_failure' });
+          return;
+        }
+
+        let spec: z.infer<typeof SequenceSpecSchema>;
+        try {
+          spec = SequenceSpecSchema.parse(JSON.parse(parent.sequenceSpec));
+        } catch {
+          await reply.code(500).send({ error: 'corrupt_sequence_spec' });
+          return;
+        }
+
+        const completingPhaseIndex = task.phaseIndex;
+        const nextPhaseIndex = completingPhaseIndex + 1;
+
+        if (nextPhaseIndex < spec.phases.length) {
+          // Advance to next phase
+          const nextPhase = spec.phases[nextPhaseIndex];
+          if (!nextPhase) {
+            // Unreachable: guarded by nextPhaseIndex < spec.phases.length above
+            await reply.code(500).send({ error: 'internal_error' });
+            return;
+          }
+          const nextPhaseId = formatPhaseTaskId(parent.id, nextPhaseIndex);
+
+          // Check device availability for next phase role
+          const cutoff = new Date(Date.now() - STALE_TTL_MS);
+          const activeDevices = await db
+            .select({ id: schema.devices.id })
+            .from(schema.devices)
+            .where(
+              and(
+                eq(schema.devices.agentId, nextPhase.role),
+                eq(schema.devices.status, 'active'),
+                gte(schema.devices.lastSeen, cutoff),
+              ),
+            );
+
+          const nextDesc = buildNextPhaseDescription(
+            nextPhase.prompt,
+            truncatedResult ?? '',
+            completingPhaseIndex,
+          );
+
+          if (activeDevices.length === 0) {
+            // Role unavailable — create phase task with pending_agent, update root blocked_reason
+            await db.insert(schema.tasks).values({
+              id: nextPhaseId,
+              workspaceId,
+              projectPrefix: parent.projectPrefix,
+              title: nextPhase.title,
+              description: nextDesc,
+              status: 'pending_agent',
+              priority: parent.priority,
+              parentId: parent.id,
+              phaseIndex: nextPhaseIndex,
+              assignedAgentId: nextPhase.role,
+              dependsOn: '[]',
+              taskKind: 'coding',
+              createdBy: 'system',
+              createdAt: now,
+              updatedAt: now,
+            });
+
+            await db
+              .update(schema.tasks)
+              .set({
+                blockedReason: `role_unavailable:${nextPhase.role}`,
+                updatedAt: now,
+              })
+              .where(eq(schema.tasks.id, parent.id));
+
+            await db.insert(schema.taskHistory).values({
+              id: nanoid(),
+              taskId,
+              eventName: 'task.completed',
+              source,
+              payload: { result: truncatedResult, phaseIndex: completingPhaseIndex, ...maybeRunId(req) },
+              workspaceId,
+            });
+
+            await db.insert(schema.taskHistory).values({
+              id: nanoid(),
+              taskId: parent.id,
+              eventName: 'task.phase_blocked',
+              source: 'system',
+              payload: { phase: nextPhaseIndex, reason: `role_unavailable:${nextPhase.role}` },
+              workspaceId,
+            });
+
+            bus.emit({
+              id: nanoid(),
+              name: 'task.completed',
+              occurredAt: new Date(),
+              source,
+              payload: { taskId, workspaceId },
+            });
+
+            await runDepUnblockingPass(db, workspaceId);
+            await reply.send({ status: 'phase_blocked', reason: 'role_unavailable' });
+            return;
+          }
+
+          // Insert next phase task
+          await db.insert(schema.tasks).values({
+            id: nextPhaseId,
+            workspaceId,
+            projectPrefix: parent.projectPrefix,
+            title: nextPhase.title,
+            description: nextDesc,
+            status: 'pending_agent',
+            priority: parent.priority,
+            parentId: parent.id,
+            phaseIndex: nextPhaseIndex,
+            assignedAgentId: nextPhase.role,
+            dependsOn: '[]',
+            taskKind: 'coding',
+            createdBy: 'system',
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          await db
+            .update(schema.tasks)
+            .set({ status: 'sequenced_running', updatedAt: now })
+            .where(eq(schema.tasks.id, parent.id));
+
+          await db.insert(schema.taskHistory).values({
+            id: nanoid(),
+            taskId,
+            eventName: 'task.completed',
+            source,
+            payload: { result: truncatedResult, phaseIndex: completingPhaseIndex, ...maybeRunId(req) },
+            workspaceId,
+          });
+
+          await db.insert(schema.taskHistory).values({
+            id: nanoid(),
+            taskId: parent.id,
+            eventName: 'task.phase_advanced',
+            source: 'system',
+            payload: {
+              fromPhase: completingPhaseIndex,
+              toPhase: nextPhaseIndex,
+              phaseTaskId: nextPhaseId,
+            },
+            workspaceId,
+          });
+
+          bus.emit({
+            id: nanoid(),
+            name: 'task.completed',
+            occurredAt: new Date(),
+            source,
+            payload: { taskId, workspaceId },
+          });
+
+          await runDepUnblockingPass(db, workspaceId);
+          await reply.send({ ok: true, nextPhaseId });
+          return;
+        }
+
+        // All phases done — complete the root task
+        await db
+          .update(schema.tasks)
+          .set({
+            status: 'sequenced_complete',
+            result: truncatedResult,
+            completedAt: now,
+            updatedAt: now,
+          })
+          .where(eq(schema.tasks.id, parent.id));
+
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId,
+          eventName: 'task.completed',
+          source,
+          payload: { result: truncatedResult, phaseIndex: completingPhaseIndex, ...maybeRunId(req) },
+          workspaceId,
+        });
+
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId: parent.id,
+          eventName: 'task.sequence_complete',
+          source: 'system',
+          payload: { result: truncatedResult },
+          workspaceId,
+        });
+
+        bus.emit({
+          id: nanoid(),
+          name: 'task.completed',
+          occurredAt: new Date(),
+          source,
+          payload: { taskId, workspaceId },
+        });
+
+        // Unblock tasks waiting on the root task (it just reached sequenced_complete)
+        await runDepUnblockingPass(db, workspaceId);
+        await reply.send({ ok: true, sequenceComplete: true });
+        return;
+      }
+
+      // Non-phase task completion
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId,
+        eventName: 'task.completed',
+        source,
+        payload: { result: truncatedResult, ...maybeRunId(req) },
+        workspaceId,
+      });
+      bus.emit({
+        id: nanoid(),
+        name: 'task.completed',
+        occurredAt: new Date(),
+        source,
+        payload: { taskId, result: truncatedResult, workspaceId },
+      });
+
+      await runDepUnblockingPass(db, workspaceId);
       await reply.send({ ok: true });
     },
   );
@@ -896,7 +2038,7 @@ export function registerTaskRoutes(
       const id = TaskIdSchema.parse(req.params.id);
       const body = FailTaskBodySchema.parse(req.body ?? {});
       const task = await db
-        .select({ id: schema.tasks.id, status: schema.tasks.status, assignedDeviceId: schema.tasks.assignedDeviceId })
+        .select({ id: schema.tasks.id, status: schema.tasks.status, assignedDeviceId: schema.tasks.assignedDeviceId, workspaceId: schema.tasks.workspaceId })
         .from(schema.tasks)
         .where(eq(schema.tasks.id, id))
         .get();
@@ -944,7 +2086,102 @@ export function registerTaskRoutes(
         source: `device:${device.id}`,
         payload: { taskId: id },
       });
+
+      // Run dep-unblocking pass to propagate failure status to waiting tasks
+      if (task.workspaceId) {
+        await runDepUnblockingPass(db, task.workspaceId);
+      }
+
       await reply.send({ ok: true });
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // GET /workspaces/:workspaceId/tasks/:taskId
+  // Returns the task with all sequencing fields + assembled phases array.
+  // ---------------------------------------------------------------------------
+
+  fastify.get<{ Params: { workspaceId: string; taskId: string } }>(
+    '/workspaces/:workspaceId/tasks/:taskId',
+    { preHandler: requireWorkspaceMember(db) },
+    async (req, reply) => {
+      const { id: workspaceId } = getWorkspace(req);
+      const taskId = TaskIdSchema.parse(req.params.taskId);
+
+      const task = await db
+        .select()
+        .from(schema.tasks)
+        .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)))
+        .get();
+      if (!task) {
+        await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+
+      // Assemble phases array for sequenced root tasks
+      let phases: Array<{
+        phaseIndex: number;
+        taskId: string | undefined;
+        title: string;
+        role: string;
+        status: 'pending' | 'active' | 'complete' | 'failed';
+        result: string | undefined;
+      }> | undefined;
+
+      if (task.sequenceSpec) {
+        let spec: { phases: Array<{ title: string; role: string; prompt: string }> } | null = null;
+        try {
+          spec = SequenceSpecSchema.parse(JSON.parse(task.sequenceSpec));
+        } catch {
+          // malformed sequenceSpec — skip phases assembly
+        }
+
+        if (spec) {
+          const phaseChildren = await db
+            .select({
+              id: schema.tasks.id,
+              phaseIndex: schema.tasks.phaseIndex,
+              status: schema.tasks.status,
+              result: schema.tasks.result,
+            })
+            .from(schema.tasks)
+            .where(and(eq(schema.tasks.parentId, taskId), isNotNull(schema.tasks.phaseIndex)));
+
+          const childMap = new Map(phaseChildren.map((c) => [c.phaseIndex!, c]));
+
+          phases = spec.phases.map((phaseSpec, i) => {
+            const child = childMap.get(i);
+            let phaseStatus: 'pending' | 'active' | 'complete' | 'failed' = 'pending';
+            if (child) {
+              if (child.status === 'completed' || child.status === 'sequenced_complete') phaseStatus = 'complete';
+              else if (child.status === 'failed') phaseStatus = 'failed';
+              else phaseStatus = 'active'; // pending_agent / assigned / in_progress = phase task exists, in flight
+            }
+            return {
+              phaseIndex: i,
+              taskId: child?.id,
+              title: phaseSpec.title,
+              role: phaseSpec.role,
+              status: phaseStatus,
+              result: child?.result ?? undefined,
+            };
+          });
+        }
+      }
+
+      const dependsOn = (() => {
+        try {
+          return JSON.parse(task.dependsOn) as string[];
+        } catch {
+          return [] as string[];
+        }
+      })();
+
+      return {
+        ...task,
+        dependsOn,
+        ...(phases !== undefined ? { phases } : {}),
+      };
     },
   );
 
@@ -1015,6 +2252,7 @@ export function registerTaskRoutes(
   // ---------------------------------------------------------------------------
   // Stale assignment detection — FM calls this to find tasks stuck in 'assigned'
   // longer than ttlMinutes (default 30). Orchestrator-only.
+  // Excludes phase tasks (phase_index IS NOT NULL).
   // ---------------------------------------------------------------------------
 
   const StaleQuerySchema = z.object({
@@ -1043,6 +2281,7 @@ export function registerTaskRoutes(
             eq(schema.tasks.workspaceId, workspaceId),
             eq(schema.tasks.status, 'assigned'),
             lt(schema.tasks.assignedAt, cutoff),
+            isNull(schema.tasks.phaseIndex),
           ),
         )
         .orderBy(asc(schema.tasks.assignedAt));
@@ -1054,6 +2293,7 @@ export function registerTaskRoutes(
   // ---------------------------------------------------------------------------
   // Bulk requeue stale assigned tasks back to pending_dispatcher_action.
   // Orchestrator-only. Writes task.requeued history event for each task.
+  // Excludes phase tasks (phase_index IS NOT NULL).
   // ---------------------------------------------------------------------------
 
   fastify.post<{ Params: { workspaceId: string } }>(
@@ -1079,6 +2319,7 @@ export function registerTaskRoutes(
             eq(schema.tasks.workspaceId, workspaceId),
             eq(schema.tasks.status, 'assigned'),
             lt(schema.tasks.assignedAt, cutoff),
+            isNull(schema.tasks.phaseIndex),
           ),
         );
 
@@ -1096,7 +2337,12 @@ export function registerTaskRoutes(
           assignedAt: null,
           updatedAt: new Date(),
         })
-        .where(inArray(schema.tasks.id, staleIds));
+        .where(
+          and(
+            inArray(schema.tasks.id, staleIds),
+            isNull(schema.tasks.phaseIndex),
+          ),
+        );
 
       const historyRows = staleIds.map((taskId) => ({
         id: nanoid(),

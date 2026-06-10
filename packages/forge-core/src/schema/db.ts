@@ -99,6 +99,9 @@ export const tasks = sqliteTable(
         'assigned',
         'in_progress',
         'pending_dispatcher_action',
+        'sequenced_running',
+        'sequenced_complete',
+        'waiting_on_deps',
         'completed',
         'failed',
         'cancelled',
@@ -126,12 +129,28 @@ export const tasks = sqliteTable(
     taskKind: text('task_kind').notNull().default('coding'),
     /** JSON-encoded ReviewConfig. Null for coding tasks. */
     reviewConfig: text('review_config'),
+    /** JSON-encoded SequenceSpec blob stored on the parent task. */
+    sequenceSpec: text('sequence_spec'),
+    /** Ordinal position within a sequenced parent (0-based). NULL = not part of a sequence. */
+    phaseIndex: integer('phase_index'),
+    /** JSON-encoded task result payload written by the agent on completion. */
+    result: text('result'),
+    /** JSON array of task IDs this task must wait for before becoming eligible. */
+    dependsOn: text('depends_on').notNull().default('[]'),
+    /** Human-readable explanation when status = 'blocked' (FM-written). */
+    blockedReason: text('blocked_reason'),
+    /** SHA-256 of sequence_spec JSON, used for idempotent re-plan detection. */
+    sequenceSpecHash: text('sequence_spec_hash'),
   },
   (t) => ({
     statusIdx: index('tasks_status_idx').on(t.status),
     projectIdx: index('tasks_project_idx').on(t.projectPrefix),
     assignedDeviceIdx: index('tasks_assigned_device_idx').on(t.assignedDeviceId),
     workspaceIdx: index('tasks_workspace_idx').on(t.workspaceId),
+    /** Enforce one phase_index per parent — partial index skips NULL rows. */
+    parentPhaseIdx: uniqueIndex('tasks_parent_phase_idx')
+      .on(t.parentId, t.phaseIndex)
+      .where(sql`${t.phaseIndex} IS NOT NULL`),
   }),
 );
 

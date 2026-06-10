@@ -6,13 +6,16 @@ import type { HubGoal, HubTask } from '@/lib/hub';
 import { useHubEvents } from '@/lib/use-hub-events';
 
 // Explicit hex per status — one shared color language with the kanban + activity stream.
-const STATUS_META: Record<string, { color: string }> = {
+const STATUS_META: Record<string, { color: string; label?: string }> = {
   pending_agent: { color: '#a1a1aa' },
   pending_design: { color: '#a1a1aa' },
   design_review: { color: '#FFB547' },
   pending_dispatcher_action: { color: '#FFB547' },
   assigned: { color: '#FF6B2B' },
   in_progress: { color: '#FF6B2B' },
+  sequenced_running: { color: '#FF6B2B', label: 'Sequenced Running' },
+  sequenced_complete: { color: '#2DD4A0', label: 'Sequenced Complete' },
+  waiting_on_deps: { color: '#818cf8', label: 'Waiting on Deps' },
   completed: { color: '#2DD4A0' },
   failed: { color: '#FF4757' },
   cancelled: { color: '#FF4757' },
@@ -28,7 +31,7 @@ function statusColor(s: string): string {
 }
 
 function statusLabel(s: string): string {
-  return s.replace(/_/g, ' ');
+  return STATUS_META[s]?.label ?? s.replace(/_/g, ' ');
 }
 
 function Pill({ label, color }: { label: string; color: string }) {

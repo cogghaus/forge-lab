@@ -36,7 +36,7 @@ const KANBAN_COLS: KanbanCol[] = [
     fill:     'rgba(255,255,255,0.1)',
     edge:     'rgba(255,255,255,0.45)',
     text:     'rgba(255,255,255,0.55)',
-    statuses: ['pending_agent', 'pending_design'],
+    statuses: ['pending_agent', 'pending_design', 'waiting_on_deps'],
   },
   {
     key:      'active',
@@ -44,7 +44,7 @@ const KANBAN_COLS: KanbanCol[] = [
     fill:     'rgba(255,107,43,0.22)',
     edge:     '#FF6B2B',
     text:     '#FF6B2B',
-    statuses: ['assigned', 'in_progress'],
+    statuses: ['assigned', 'in_progress', 'sequenced_running'],
   },
   {
     key:      'review',
@@ -60,7 +60,7 @@ const KANBAN_COLS: KanbanCol[] = [
     fill:     'rgba(45,212,160,0.15)',
     edge:     '#2DD4A0',
     text:     '#2DD4A0',
-    statuses: ['completed'],
+    statuses: ['completed', 'sequenced_complete'],
   },
 ];
 
