@@ -801,7 +801,7 @@ export function registerTaskRoutes(
         parentId,
         workspaceId,
         assignedAgentId,
-        status: assignedAgentId ? 'pending_agent' : 'pending_dispatcher_action',
+        status: 'pending_agent',
         taskKind: body.taskKind ?? 'coding',
         reviewConfig: body.reviewConfig ?? null,
         createdBy,
