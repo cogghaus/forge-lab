@@ -415,6 +415,27 @@ ALTER TABLE tasks ADD COLUMN task_kind TEXT NOT NULL DEFAULT 'coding';
 ALTER TABLE tasks ADD COLUMN review_config TEXT;
 `,
   },
+  {
+    name: '0016_task_sequencing',
+    sql: `
+-- Task sequencing and dependency graph (Phase B — task-sequencing design doc).
+-- sequence_spec: JSON-encoded SequenceSpec blob stored on the parent task.
+-- phase_index: ordinal position within a sequenced parent (0-based). NULL = not part of a sequence.
+-- result: JSON-encoded task result payload written by the agent on completion.
+-- depends_on: JSON array of task IDs this task must wait for before becoming eligible.
+-- blocked_reason: human-readable explanation when status = 'blocked' (FM-written).
+-- sequence_spec_hash: SHA-256 of sequence_spec JSON, used for idempotent re-plan detection.
+ALTER TABLE tasks ADD COLUMN sequence_spec TEXT;
+ALTER TABLE tasks ADD COLUMN phase_index INTEGER;
+ALTER TABLE tasks ADD COLUMN result TEXT;
+ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE tasks ADD COLUMN blocked_reason TEXT;
+ALTER TABLE tasks ADD COLUMN sequence_spec_hash TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS tasks_parent_phase_idx ON tasks(parent_id, phase_index) WHERE phase_index IS NOT NULL;
+CREATE INDEX IF NOT EXISTS tasks_waiting_deps_idx ON tasks(workspace_id, status) WHERE status='waiting_on_deps';
+CREATE INDEX IF NOT EXISTS devices_agent_status_idx ON devices(agent_id, status, last_seen) WHERE agent_id IS NOT NULL;
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {

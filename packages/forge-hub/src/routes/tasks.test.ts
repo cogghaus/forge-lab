@@ -2918,3 +2918,416 @@ describe('review tasks', () => {
     expect(task?.reviewConfig).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task Sequencing
+// ---------------------------------------------------------------------------
+
+describe('task sequencing', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  const TWO_PHASE_SPEC = {
+    phases: [
+      { title: 'Design', role: 'architect', prompt: 'Design the feature.' },
+      { title: 'Implement', role: 'engineer', prompt: 'Implement the design.' },
+    ],
+  };
+
+  beforeEach(async () => {
+    process.env['FORGE_SEQUENCES_ENABLED'] = '1';
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    delete process.env['FORGE_SEQUENCES_ENABLED'];
+    await hub.close();
+  });
+
+  it('T01 - POST with sequenceSpec creates root in sequenced_running and phase-0 child', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'seq', title: 'Two-phase task', sequenceSpec: TWO_PHASE_SPEC },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+    expect(id).toBe('seq-001');
+
+    const root = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, 'seq-001')).get();
+    expect(root?.status).toBe('sequenced_running');
+    expect(root?.sequenceSpec).not.toBeNull();
+
+    const phase0 = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, 'seq-001-p0')).get();
+    expect(phase0).not.toBeUndefined();
+    expect(phase0?.phaseIndex).toBe(0);
+    expect(phase0?.status).toBe('pending_agent');
+    expect(phase0?.assignedAgentId).toBe('architect');
+    expect(phase0?.parentId).toBe('seq-001');
+  });
+
+  it('T02 - GET workspace task includes phases array', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'seq', title: 'Two-phase task', sequenceSpec: TWO_PHASE_SPEC },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks/seq-001`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const task = res.json() as { phases: Array<{ phaseIndex: number; status: string }> };
+    expect(Array.isArray(task.phases)).toBe(true);
+    expect(task.phases).toHaveLength(2);
+    expect(task.phases[0]?.status).toBe('active');
+    expect(task.phases[1]?.status).toBe('pending');
+  });
+
+  it('T03 - phase task does not appear in default workspace task list', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'seq', title: 'Two-phase task', sequenceSpec: TWO_PHASE_SPEC },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const { tasks } = res.json() as { tasks: Array<{ id: string }> };
+    const ids = tasks.map((t) => t.id);
+    expect(ids).toContain('seq-001');
+    expect(ids).not.toContain('seq-001-p0');
+  });
+
+  it('T04 - completing phase-0 via workspace endpoint creates phase-1 and keeps root sequenced_running', async () => {
+    const { token: archToken } = await registerDevice(hub, cookie, 'arch-device', { agentId: 'architect' });
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'seq', title: 'Two-phase task', sequenceSpec: TWO_PHASE_SPEC },
+    });
+
+    // Claim phase-0
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks/seq-001-p0/claim',
+      headers: { authorization: `Bearer ${archToken}` },
+    });
+
+    // Complete phase-0
+    const completeRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/seq-001-p0/complete`,
+      headers: { authorization: `Bearer ${archToken}` },
+      payload: { result: 'Design complete.' },
+    });
+    expect(completeRes.statusCode).toBe(200);
+
+    // phase-0 should be completed
+    const p0 = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'seq-001-p0')).get();
+    expect(p0?.status).toBe('completed');
+
+    // root should still be sequenced_running (not sequenced_complete yet)
+    const root = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'seq-001')).get();
+    expect(root?.status).toBe('sequenced_running');
+
+    // phase-1 should now exist
+    const p1 = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, 'seq-001-p1')).get();
+    expect(p1).not.toBeUndefined();
+    expect(p1?.phaseIndex).toBe(1);
+    expect(p1?.assignedAgentId).toBe('engineer');
+  });
+
+  it('T05 - completing last phase marks root sequenced_complete', async () => {
+    const { token: archToken } = await registerDevice(hub, cookie, 'arch-device', { agentId: 'architect' });
+    const { token: engToken } = await registerDevice(hub, cookie, 'eng-device', { agentId: 'engineer' });
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'seq', title: 'Two-phase task', sequenceSpec: TWO_PHASE_SPEC },
+    });
+
+    // Complete phase-0
+    await hub.fastify.inject({ method: 'POST', url: '/tasks/seq-001-p0/claim', headers: { authorization: `Bearer ${archToken}` } });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/seq-001-p0/complete`,
+      headers: { authorization: `Bearer ${archToken}` },
+      payload: { result: 'Design done.' },
+    });
+
+    // Complete phase-1
+    await hub.fastify.inject({ method: 'POST', url: '/tasks/seq-001-p1/claim', headers: { authorization: `Bearer ${engToken}` } });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/seq-001-p1/complete`,
+      headers: { authorization: `Bearer ${engToken}` },
+      payload: { result: 'Implementation done.' },
+    });
+
+    const root = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'seq-001')).get();
+    expect(root?.status).toBe('sequenced_complete');
+  });
+
+  it('T06 - cancel cascades to phase children with history events', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'seq', title: 'Two-phase task', sequenceSpec: TWO_PHASE_SPEC },
+    });
+
+    const cancelRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/seq-001/cancel`,
+      headers: { cookie },
+    });
+    expect(cancelRes.statusCode).toBe(200);
+
+    const p0 = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'seq-001-p0')).get();
+    expect(p0?.status).toBe('cancelled');
+
+    const history = await hub.db
+      .select({ eventName: schema.taskHistory.eventName, payload: schema.taskHistory.payload })
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, 'seq-001-p0'));
+    const cancelEvent = history.find((h) => h.eventName === 'task.phase_cancelled');
+    expect(cancelEvent).not.toBeUndefined();
+  });
+
+  it('T07 - stats endpoint counts sequenced root once, not phase children', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'seq', title: 'Sequenced task', sequenceSpec: TWO_PHASE_SPEC },
+    });
+
+    const statsRes = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks/stats',
+      headers: { cookie },
+    });
+    expect(statsRes.statusCode).toBe(200);
+    const { total } = statsRes.json() as { total: number };
+    expect(total).toBe(1);
+  });
+
+  it('T08 - phase retry endpoint resets failed phase child, keeps root in sequenced_running', async () => {
+    const { token: archToken } = await registerDevice(hub, cookie, 'arch-device', { agentId: 'architect' });
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'seq', title: 'Two-phase task', sequenceSpec: TWO_PHASE_SPEC },
+    });
+
+    // Claim and fail phase-0
+    await hub.fastify.inject({ method: 'POST', url: '/tasks/seq-001-p0/claim', headers: { authorization: `Bearer ${archToken}` } });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks/seq-001-p0/fail',
+      headers: { authorization: `Bearer ${archToken}` },
+      payload: { reason: 'test failure' },
+    });
+
+    const p0Before = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'seq-001-p0')).get();
+    expect(p0Before?.status).toBe('failed');
+
+    // Retry via phase retry endpoint
+    const retryRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/seq-001/phases/0/retry`,
+      headers: { cookie },
+    });
+    expect(retryRes.statusCode).toBe(200);
+
+    const p0After = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'seq-001-p0')).get();
+    expect(p0After?.status).toBe('pending_agent');
+
+    const root = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'seq-001')).get();
+    expect(root?.status).toBe('sequenced_running');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task Dependency Graph
+// ---------------------------------------------------------------------------
+
+describe('task dependency graph', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('D01 - task with unmet deps starts in waiting_on_deps', async () => {
+    // Create dep task
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'Dependency task' },
+    });
+
+    // Create dependent task
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'Dependent task', dependsOn: ['dep-001'] },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const task = await hub.db.select({ status: schema.tasks.status, dependsOn: schema.tasks.dependsOn }).from(schema.tasks).where(eq(schema.tasks.id, id)).get();
+    expect(task?.status).toBe('waiting_on_deps');
+    expect(JSON.parse(task?.dependsOn ?? '[]')).toEqual(['dep-001']);
+  });
+
+  it('D02 - completing the dep task unblocks the waiting task', async () => {
+    const { token: engToken } = await registerDevice(hub, cookie, 'eng-device', { agentId: 'engineer' });
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'Dependency task', assignedAgentId: 'engineer' },
+    });
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'Dependent task', dependsOn: ['dep-001'] },
+    });
+
+    // Verify waiting_on_deps
+    const before = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'dep-002')).get();
+    expect(before?.status).toBe('waiting_on_deps');
+
+    // Complete dep-001
+    await hub.fastify.inject({ method: 'POST', url: '/tasks/dep-001/claim', headers: { authorization: `Bearer ${engToken}` } });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks/dep-001/complete',
+      headers: { authorization: `Bearer ${engToken}` },
+    });
+
+    // dep-002 should now be pending_agent
+    const after = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'dep-002')).get();
+    expect(after?.status).toBe('pending_agent');
+  });
+
+  it('D03 - task cannot depend on a phase task (phase children are internal)', async () => {
+    process.env['FORGE_SEQUENCES_ENABLED'] = '1';
+    // Create a sequenced task (creates dep-001 root + dep-001-p0 phase child)
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: {
+        projectPrefix: 'dep',
+        title: 'Sequenced task',
+        sequenceSpec: {
+          phases: [
+            { title: 'P0', role: 'architect', prompt: 'Phase 0.' },
+            { title: 'P1', role: 'engineer', prompt: 'Phase 1.' },
+          ],
+        },
+      },
+    });
+    delete process.env['FORGE_SEQUENCES_ENABLED'];
+
+    // Try to depend on the phase child (dep-001-p0 is an internal phase ID)
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'Depends on phase child', dependsOn: ['dep-001-p0'] },
+    });
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { error: string };
+    expect(body.error).toBe('invalid_dep_phase_task');
+  });
+
+  it('D04 - cancelled dep sets blockedReason on waiting task', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'Dependency task' },
+    });
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'Dependent task', dependsOn: ['dep-001'] },
+    });
+
+    // Cancel the dep
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/dep-001/cancel`,
+      headers: { cookie },
+    });
+
+    // The unblocking pass runs on completion. Trigger via a separate task completion.
+    const { token: engToken } = await registerDevice(hub, cookie, 'eng-device', { agentId: 'engineer' });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'Trigger task', assignedAgentId: 'engineer' },
+    });
+    await hub.fastify.inject({ method: 'POST', url: '/tasks/dep-003/claim', headers: { authorization: `Bearer ${engToken}` } });
+    await hub.fastify.inject({ method: 'POST', url: '/tasks/dep-003/complete', headers: { authorization: `Bearer ${engToken}` } });
+
+    const blocked = await hub.db
+      .select({ blockedReason: schema.tasks.blockedReason })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, 'dep-002'))
+      .get();
+    expect(blocked?.blockedReason).toContain('dep_cancelled');
+  });
+
+  it('D05 - task with no deps starts immediately in pending_agent', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'No-dep task', dependsOn: [] },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const task = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, id)).get();
+    expect(task?.status).toBe('pending_agent');
+  });
+});

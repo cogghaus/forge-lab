@@ -984,6 +984,13 @@ export class Daemon {
     const result = typeof p['result'] === 'string' ? p['result'] : null;
     const payloadWorkspaceId = typeof p['workspaceId'] === 'string' ? p['workspaceId'] : null;
 
+    // Phase task completion — not a standalone deliverable. Skip Scribe.
+    // Check the typed phaseIndex field from the event payload rather than
+    // relying on a regex against the taskId string (DEDUP-064: format conventions
+    // can change, and a crafted taskId matching the phase pattern would silently
+    // suppress Scribe on a non-phase task).
+    if (p['phaseIndex'] !== null && p['phaseIndex'] !== undefined) return;
+
     // Only react to tasks in our workspace when workspaceId is configured.
     if (this.opts.workspaceId !== undefined && payloadWorkspaceId !== this.opts.workspaceId) {
       return;
