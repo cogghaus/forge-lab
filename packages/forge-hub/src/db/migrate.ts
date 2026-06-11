@@ -416,7 +416,7 @@ ALTER TABLE tasks ADD COLUMN review_config TEXT;
 `,
   },
   {
-    name: '0016_sequence_and_deps',
+    name: '0016_task_sequencing',
     sql: `
 -- Task sequencing and dependency graph (Phase B — task-sequencing design doc).
 -- sequence_spec: JSON-encoded SequenceSpec blob stored on the parent task.
@@ -432,6 +432,8 @@ ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE tasks ADD COLUMN blocked_reason TEXT;
 ALTER TABLE tasks ADD COLUMN sequence_spec_hash TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS tasks_parent_phase_idx ON tasks(parent_id, phase_index) WHERE phase_index IS NOT NULL;
+CREATE INDEX IF NOT EXISTS tasks_waiting_deps_idx ON tasks(workspace_id, status) WHERE status='waiting_on_deps';
+CREATE INDEX IF NOT EXISTS devices_agent_status_idx ON devices(agent_id, status, last_seen) WHERE agent_id IS NOT NULL;
 `,
   },
 ];

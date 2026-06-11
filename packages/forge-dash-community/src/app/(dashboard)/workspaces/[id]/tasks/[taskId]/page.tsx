@@ -10,6 +10,8 @@ import {
   type HubTaskHistory,
   type HubTaskWithParent,
   type HubWorkspace,
+  type TaskStatus,
+  CANCELLABLE_STATUSES,
   REASSIGNABLE_STATUSES,
 } from '@/lib/hub';
 import { getSessionCookie, SESSION_COOKIE } from '@/lib/session';
@@ -21,6 +23,9 @@ interface Props {
   params: Promise<{ id: string; taskId: string }>;
 }
 
+// TODO(refactor): STATUS_HEX and STATUS_LABEL are duplicated in task-list.tsx (STATUS_META).
+// Extract into a shared @/lib/task-status module and import in both files to prevent
+// color/label drift when new statuses are added.
 // Explicit hex per status — one shared color language with the task list + kanban.
 const STATUS_HEX: Record<string, string> = {
   pending_agent: '#a1a1aa',
@@ -31,7 +36,7 @@ const STATUS_HEX: Record<string, string> = {
   in_progress: '#FF6B2B',
   sequenced_running: '#FF6B2B',
   sequenced_complete: '#2DD4A0',
-  waiting_on_deps: '#818cf8',
+  waiting_on_deps: '#f59e0b',
   completed: '#2DD4A0',
   failed: '#FF4757',
   cancelled: '#FF4757',
@@ -78,6 +83,28 @@ const CONFIDENCE_COLOR: Record<string, string> = {
 
 function statusLabel(s: string) {
   return STATUS_LABEL[s] ?? s.replace(/_/g, ' ');
+}
+
+/** Map internal blocked-reason sentinels to human-readable strings. */
+function formatBlockedReason(reason: string): string {
+  if (reason === 'waiting_on_deps') return 'Waiting for dependencies to complete';
+  if (reason.startsWith('role_unavailable:')) {
+    const role = reason.slice('role_unavailable:'.length);
+    return `No device available for role "${role}"`;
+  }
+  if (reason.startsWith('dep_cancelled:')) {
+    const id = reason.slice('dep_cancelled:'.length);
+    return `Dependency ${id} was cancelled`;
+  }
+  if (reason.startsWith('dep_failed:')) {
+    const id = reason.slice('dep_failed:'.length);
+    return `Dependency ${id} failed`;
+  }
+  if (reason.startsWith('phase_failed:')) {
+    const n = parseInt(reason.slice('phase_failed:'.length), 10);
+    return `Phase ${isNaN(n) ? reason.slice('phase_failed:'.length) : n + 1} failed`;
+  }
+  return reason;
 }
 
 function formatTs(ts: string): string {
@@ -225,6 +252,11 @@ export default async function TaskDetailPage({ params }: Props) {
 
   const cookieHeader = `${SESSION_COOKIE}=${session}`;
 
+  // NOTE: /tasks/:id/history and /tasks/:id/comments are flat (unscoped) endpoints that use
+  // device-token auth rather than session-cookie auth. Workspace members without a device token
+  // will receive empty arrays or 401 responses from these endpoints while the primary task fetch
+  // (workspace-scoped) succeeds. Consider adding workspace-scoped history/comment endpoints
+  // if session-cookie access is needed here.
   const [wsRes, taskRes, historyRes, commentsRes, devicesRes] = await Promise.all([
     hubFetch<HubWorkspace>(`/workspaces/${workspaceId}`, { cookie: cookieHeader }),
     hubFetch<HubTaskWithParent>(`/workspaces/${workspaceId}/tasks/${taskId}`, { cookie: cookieHeader }),
@@ -250,9 +282,11 @@ export default async function TaskDetailPage({ params }: Props) {
       }).then((r) => (r.ok ? r.data : null))
     : null;
 
-  // Fetch parent task title if this is a subtask
+  // Fetch parent task title if this is a subtask.
+  // Uses the workspace-scoped endpoint so session-cookie auth works for workspace members
+  // without a device token, and so sequenced root phase fields are included.
   const parentTask: { id: string; title: string } | null = task.parentId
-    ? await hubFetch<{ id: string; title: string }>(`/tasks/${task.parentId}`, {
+    ? await hubFetch<{ id: string; title: string }>(`/workspaces/${workspaceId}/tasks/${task.parentId}`, {
         cookie: cookieHeader,
       }).then((r) => (r.ok ? { id: r.data.id, title: r.data.title } : null))
     : null;
@@ -265,17 +299,11 @@ export default async function TaskDetailPage({ params }: Props) {
       }).then((r) => (r.ok ? r.data.agents : []))
     : [];
 
-  const canCancel =
-    task.status === 'pending_dispatcher_action' ||
-    task.status === 'pending_agent' ||
-    task.status === 'pending_design' ||
-    task.status === 'design_review' ||
-    task.status === 'assigned' ||
-    task.status === 'in_progress' ||
-    task.status === 'sequenced_running' ||
-    task.status === 'waiting_on_deps';
+  // CANCELLABLE_STATUSES is the single source of truth — kept in sync with the hub cancel endpoint.
+  const canCancel = CANCELLABLE_STATUSES.includes(task.status as TaskStatus);
 
-  const canRetry = task.status === 'failed' || task.status === 'cancelled';
+  // Sequenced root tasks must use the phase-retry flow; the standard retry endpoint returns 409.
+  const canRetry = task.status === 'failed' && task.sequenceSpec == null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -399,7 +427,17 @@ export default async function TaskDetailPage({ params }: Props) {
           <svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-4 w-4 shrink-0" aria-hidden>
             <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
-          <p className="text-sm text-indigo-300">{task.blockedReason}</p>
+          <p className="text-sm text-indigo-300">{formatBlockedReason(task.blockedReason)}</p>
+        </div>
+      )}
+
+      {/* Sequence data unavailable fallback: sequenceSpec exists but phases assembly failed */}
+      {task.sequenceSpec != null && (task.phases == null || task.phases.length === 0) && (
+        <div className="flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/[0.06] px-4 py-3">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#EAB308" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-4 w-4 shrink-0" aria-hidden>
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <p className="text-sm text-yellow-300">Sequence data is unavailable for this task. The phase timeline could not be assembled.</p>
         </div>
       )}
 
@@ -418,8 +456,12 @@ export default async function TaskDetailPage({ params }: Props) {
                   className="relative flex items-start gap-4 overflow-hidden rounded-xl border border-zinc-200 bg-white px-4 py-3 pl-5 dark:border-zinc-800 dark:bg-zinc-900/70"
                 >
                   <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: phaseHex }} aria-hidden />
-                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-mono" style={{ borderColor: phaseHex, color: phaseHex }}>
-                    {phase.phaseIndex}
+                  <div
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-mono"
+                    style={{ borderColor: phaseHex, color: phaseHex }}
+                    title={`Phase ${phase.phaseIndex + 1}`}
+                  >
+                    {phase.phaseIndex + 1}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -433,7 +475,10 @@ export default async function TaskDetailPage({ params }: Props) {
                       )}
                     </div>
                     {phase.result && (
-                      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400 line-clamp-2">{phase.result}</p>
+                      <details open={phase.status === 'active' || phase.status === 'failed'} className="mt-1">
+                        <summary className="cursor-pointer text-xs text-zinc-500 dark:text-zinc-400 select-none">Result</summary>
+                        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400 whitespace-pre-wrap">{phase.result}</p>
+                      </details>
                     )}
                   </div>
                 </div>
@@ -444,6 +489,9 @@ export default async function TaskDetailPage({ params }: Props) {
       )}
 
       {/* Dependencies */}
+      {/* TODO(v2): fetch statuses for dep IDs server-side and render a colored status dot or pill
+          next to each chip so users can see at a glance which deps are completed vs. in-progress
+          vs. cancelled without clicking through. */}
       {task.dependsOn != null && task.dependsOn.length > 0 && (
         <div>
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">

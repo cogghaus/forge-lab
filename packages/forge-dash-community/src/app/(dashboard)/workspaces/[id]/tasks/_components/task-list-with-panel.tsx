@@ -44,7 +44,9 @@ function hasAgentLog(task: HubTask): boolean {
   // Sequenced root tasks have no assignedDeviceId of their own — work happens
   // on phase children. Opening the panel on a root would show nothing useful.
   // Always navigate to the detail page for sequenced roots.
-  if (task.sequenceSpec != null || (task.phases != null && task.phases.length > 0)) return false;
+  // NOTE: task.phases is NOT available in list responses — it is only assembled
+  // by the single-task GET endpoint. The sequenceSpec check is sufficient here.
+  if (task.sequenceSpec != null) return false;
 
   // Daemon claimTask sets assignedDeviceId + status=in_progress.
   // assignedAgentId is set by a different path (direct agent assignment),

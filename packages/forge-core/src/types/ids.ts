@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const TaskIdSchema = z
   .string()
   .regex(
-    /^[a-z]{2,6}-\d{1,6}(-p\d{1,2})?$/,
+    /^[a-z]{2,6}-\d{1,6}(-p[0-9])?$/,
     'Task ID must be prefix-digits (e.g. fl-001) or prefix-digits-pN (e.g. fl-001-p0)',
   );
 
@@ -18,7 +18,7 @@ export function formatTaskId(projectPrefix: string, sequence: number): TaskId {
 
 export function parseTaskId(id: string): { projectPrefix: string; sequence: number } {
   const parsed = TaskIdSchema.parse(id);
-  if (/-p\d{1,2}$/.test(parsed)) {
+  if (/-p[0-9]$/.test(parsed)) {
     throw new Error(`parseTaskId does not support compound phase IDs (got "${id}")`);
   }
   const dash = parsed.indexOf('-');
@@ -28,6 +28,6 @@ export function parseTaskId(id: string): { projectPrefix: string; sequence: numb
   };
 }
 
-export function formatPhaseTaskId(parentId: string, phaseIndex: number): string {
-  return `${parentId}-p${phaseIndex}`;
+export function formatPhaseTaskId(parentId: string, phaseIndex: number): TaskId {
+  return TaskIdSchema.parse(`${parentId}-p${phaseIndex}`);
 }

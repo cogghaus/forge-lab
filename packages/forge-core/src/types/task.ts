@@ -34,12 +34,15 @@ export type TaskPriority = z.infer<typeof TaskPrioritySchema>;
 
 export const PhaseSpecSchema = z.object({
   title: z.string().min(1).max(200),
-  role: z.string().min(1).max(100),
+  // Role must be kebab-case to align with agentId naming conventions and prevent
+  // colons or newlines from corrupting blockedReason sentinel strings (DEDUP-020).
+  role: z.string().min(1).max(100).regex(/^[a-z0-9][a-z0-9-]*$/, 'role must be kebab-case (lowercase alphanumeric and hyphens)'),
   prompt: z.string().min(1).max(8000),
 });
 export type PhaseSpec = z.infer<typeof PhaseSpecSchema>;
 
 export const SequenceSpecSchema = z.object({
+  // min(2): single-phase sequences are semantically equivalent to a plain task — use a plain task instead
   phases: z.array(PhaseSpecSchema).min(2).max(10),
 });
 export type SequenceSpec = z.infer<typeof SequenceSpecSchema>;
@@ -78,8 +81,8 @@ export const TaskSchema = z.object({
   taskKind: z.enum(['coding', 'review']).default('coding'),
   /** JSON-encoded ReviewConfig. Null for coding tasks. */
   reviewConfig: z.string().nullable().default(null),
-  /** Sequence spec for multi-phase tasks. Null for plain tasks and phase children. */
-  sequenceSpec: SequenceSpecSchema.optional(),
+  /** Sequence spec for multi-phase tasks. Null for plain tasks and phase children. Raw JSON string matching DB column type; callers must parse before use. */
+  sequenceSpec: z.string().nullable().optional(),
   /** 0-based phase index for phase child tasks. Undefined for root tasks. */
   phaseIndex: z.number().int().min(0).optional(),
   /** Freeform completion output from the agent. Max 4000 chars enforced at the API layer. */

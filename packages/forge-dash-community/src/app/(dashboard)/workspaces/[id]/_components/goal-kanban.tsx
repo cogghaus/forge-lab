@@ -36,7 +36,15 @@ const KANBAN_COLS: KanbanCol[] = [
     fill:     'rgba(255,255,255,0.1)',
     edge:     'rgba(255,255,255,0.45)',
     text:     'rgba(255,255,255,0.55)',
-    statuses: ['pending_agent', 'pending_design', 'waiting_on_deps'],
+    statuses: ['pending_agent', 'pending_design'],
+  },
+  {
+    key:      'blocked',
+    label:    'Blocked',
+    fill:     'rgba(245,158,11,0.18)',
+    edge:     '#f59e0b',
+    text:     '#f59e0b',
+    statuses: ['waiting_on_deps'],
   },
   {
     key:      'active',
@@ -64,8 +72,8 @@ const KANBAN_COLS: KanbanCol[] = [
   },
 ];
 
-// Grid template — goal name | # | pending | active | review | complete
-const GRID = '1fr 36px repeat(4, minmax(72px, 1fr))';
+// Grid template — goal name | # | pending | blocked | active | review | complete
+const GRID = '1fr 36px repeat(5, minmax(72px, 1fr))';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -135,13 +143,13 @@ function countByCol(tasks: HubTask[]): Record<string, number> {
 
 function completionPct(tasks: HubTask[]): number {
   if (tasks.length === 0) return 0;
-  const done = tasks.filter((t) => t.status === 'completed').length;
+  const done = tasks.filter((t) => t.status === 'completed' || t.status === 'sequenced_complete').length;
   return Math.round((done / tasks.length) * 100);
 }
 
 function hasActiveTasks(tasks: HubTask[]): boolean {
   return tasks.some(
-    (t) => t.status === 'in_progress' || t.status === 'assigned' || t.status === 'pending_agent',
+    (t) => t.status === 'in_progress' || t.status === 'assigned' || t.status === 'pending_agent' || t.status === 'sequenced_running',
   );
 }
 
@@ -267,7 +275,7 @@ function GoalRow({ goal, tasks, workspaceId, isLast }: GoalRowProps) {
 /**
  * Columnar kanban grid matching the forge-dashboard mockup.
  *
- * Columns: Goal (title + progress bar) | # | Pending | Active | Review | Complete
+ * Columns: Goal (title + progress bar) | # | Pending | Blocked | Active | Review | Complete
  *
  * Each goal row shows per-column task counts and mini stacked block bars.
  * Tasks not linked to any goal appear in an "Ungrouped" row at the bottom.
