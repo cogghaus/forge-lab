@@ -54,9 +54,15 @@ async function main(): Promise<void> {
   }
   const runtimes = new RuntimeRegistry();
   runtimes.register(new MockRuntime());
-  runtimes.register(new ClaudeCodeRuntime({ dangerouslySkipPermissions: config.skipPermissions }));
+  runtimes.register(new ClaudeCodeRuntime({
+    dangerouslySkipPermissions: config.skipPermissions,
+    ...(config.model !== undefined && { model: config.model }),
+  }));
   // C3: dangerouslySkipPermissions driven by config (FORGE_DAEMON_SKIP_PERMISSIONS env).
-  runtimes.register(new BackgroundRuntime({ dangerouslySkipPermissions: config.skipPermissions }));
+  runtimes.register(new BackgroundRuntime({
+    dangerouslySkipPermissions: config.skipPermissions,
+    ...(config.model !== undefined && { model: config.model }),
+  }));
 
   // C7: log the active runtime and agent so operators notice if the defaults changed.
   logger.info('active default runtime', {
@@ -64,6 +70,7 @@ async function main(): Promise<void> {
     agentId: config.defaultAgentId,
     skipPermissions: config.skipPermissions,
     dispatcherMode: config.dispatcherMode,
+    model: config.model ?? '(claude default)',
   });
 
   const daemon = new Daemon({
