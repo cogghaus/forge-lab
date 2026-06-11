@@ -27,6 +27,13 @@ jobs:
             --env-file /datapool/docker/vibe-forge/.env \
             up -d --build --remove-orphans
 
+      - name: Build and deploy daemons
+        run: |
+          docker compose -p forge-daemons \
+            -f deploy/daemons.compose.yml \
+            --env-file /datapool/docker/vibe-forge/.env.daemons \
+            up -d --build --remove-orphans
+
       - name: Verify health
         run: |
           sleep 15
