@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { RegisterDeviceInputSchema, schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
-import { requireUser, getUser } from '../auth/middleware.js';
+import { requireUser, getUser, requireDevice, getDevice } from '../auth/middleware.js';
 import { generateToken, hashToken } from '../auth/tokens.js';
 import { TokenBucketStore, createTokenBucketPreHandler } from '../rate-limit/index.js';
 import { checkPolicy } from '../policy/engine.js';
@@ -202,6 +202,93 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): DeviceRo
       req.log.info({ deviceId, userId: user.id, event: 'token_rotated' }, 'device token rotated');
 
       return { token: newToken };
+    },
+  );
+
+  // PUT /devices/me/memory/:taskId — store agent working-memory for a task.
+  // Authenticated with device token; agentId resolved from the device record.
+  fastify.put<{ Params: { taskId: string } }>(
+    '/devices/me/memory/:taskId',
+    { preHandler: requireDevice },
+    async (req, reply) => {
+      const device = getDevice(req);
+      if (!device.agentId) {
+        await reply.code(400).send({ error: 'device_has_no_agent_id' });
+        return;
+      }
+      const { taskId } = req.params;
+      const body = z.object({ content: z.string().max(1500) }).parse(req.body);
+
+      // Resolve workspaceId from the task row (needed for the composite PK).
+      const task = await db
+        .select({ workspaceId: schema.tasks.workspaceId })
+        .from(schema.tasks)
+        .where(eq(schema.tasks.id, taskId))
+        .get();
+      if (!task) {
+        await reply.code(404).send({ error: 'task_not_found' });
+        return;
+      }
+      const workspaceId = task.workspaceId ?? '';
+
+      await db
+        .insert(schema.agentMemory)
+        .values({
+          agentId: device.agentId,
+          taskId,
+          workspaceId,
+          content: body.content,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: [schema.agentMemory.agentId, schema.agentMemory.taskId, schema.agentMemory.workspaceId],
+          set: { content: body.content, updatedAt: new Date() },
+        });
+
+      await reply.code(204).send();
+    },
+  );
+
+  // GET /devices/me/memory/:taskId — retrieve agent working-memory for a task.
+  fastify.get<{ Params: { taskId: string } }>(
+    '/devices/me/memory/:taskId',
+    { preHandler: requireDevice },
+    async (req, reply) => {
+      const device = getDevice(req);
+      if (!device.agentId) {
+        await reply.code(400).send({ error: 'device_has_no_agent_id' });
+        return;
+      }
+      const { taskId } = req.params;
+
+      const task = await db
+        .select({ workspaceId: schema.tasks.workspaceId })
+        .from(schema.tasks)
+        .where(eq(schema.tasks.id, taskId))
+        .get();
+      if (!task) {
+        await reply.code(404).send({ error: 'task_not_found' });
+        return;
+      }
+      const workspaceId = task.workspaceId ?? '';
+
+      const row = await db
+        .select({ content: schema.agentMemory.content })
+        .from(schema.agentMemory)
+        .where(
+          and(
+            eq(schema.agentMemory.agentId, device.agentId),
+            eq(schema.agentMemory.taskId, taskId),
+            eq(schema.agentMemory.workspaceId, workspaceId),
+          ),
+        )
+        .get();
+
+      if (!row) {
+        await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+      return { content: row.content };
     },
   );
 

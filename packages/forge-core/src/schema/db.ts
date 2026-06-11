@@ -485,3 +485,28 @@ export const policyRuleChanges = sqliteTable(
     userIdx: index('policy_rule_changes_user_idx').on(t.changedBy, t.changedAt),
   }),
 );
+
+/**
+ * Per-agent, per-task working memory. Written by agents at end of work session
+ * via the daemon (.forge/tasks/TASKID.memory file), persisted here by the hub.
+ * Read back on next agent spawn for the same task to resume context.
+ * Cleaned up automatically when the task row is deleted (ON DELETE CASCADE).
+ */
+export const agentMemory = sqliteTable(
+  'agent_memory',
+  {
+    agentId: text('agent_id').notNull(),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    workspaceId: text('workspace_id').notNull(),
+    /** Compact markdown, max 1500 chars. */
+    content: text('content').notNull(),
+    updatedAt: timestampMs('updated_at').notNull().default(nowDefault),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.agentId, t.taskId, t.workspaceId] }),
+    // Index required for ON DELETE CASCADE FK enforcement (SQLite does not auto-index FK targets)
+    taskIdx: index('agent_memory_task_idx').on(t.taskId),
+  }),
+);

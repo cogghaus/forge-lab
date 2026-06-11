@@ -10,6 +10,7 @@ import {
   cleanupTaskFiles,
   readAgentLogTail,
   readDoneFile,
+  readMemoryFile,
   resetAgentLog,
   watchDoneFiles,
   writeTaskFile,
@@ -74,6 +75,13 @@ export interface DaemonOptions {
    * Set to 0 to disable.
    */
   fmCooldownMs?: number;
+  /**
+   * Milliseconds of inactivity before the daemon exits cleanly (exit code 0).
+   * A Docker restart: on-failure policy will not restart a clean exit, so the
+   * daemon stays down until the waker service triggers docker start.
+   * 0 or undefined disables idle shutdown.
+   */
+  idleShutdownMs?: number;
   /**
    * Maximum number of tasks running concurrently on this daemon instance.
    * When activeInstances reaches this limit, incoming task events are skipped
@@ -210,6 +218,7 @@ export class Daemon {
   private readonly fmTaskWorkspace = new Map<string, string>();
   private readonly gitOps: GitOps;
   private readonly reviewRunner: ReviewRunner | null;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: DaemonOptions) {
     this.opts = opts;
@@ -262,6 +271,23 @@ export class Daemon {
     return this.client;
   }
 
+  private resetIdleTimer(): void {
+    const ms = this.opts.idleShutdownMs;
+    if (ms === undefined || ms <= 0) return;
+    if (this.idleTimer !== null) {
+      clearTimeout(this.idleTimer);
+    }
+    this.idleTimer = setTimeout(() => {
+      // C1: do not shut down while tasks are in flight
+      if (this.activeInstances.size > 0 || this.activeReviews.size > 0) {
+        this.resetIdleTimer();
+        return;
+      }
+      this.logger.info('idle shutdown — no task activity', { idleShutdownMs: ms });
+      void this.stop().then(() => process.exit(0));
+    }, ms);
+  }
+
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -300,10 +326,15 @@ export class Daemon {
       });
     });
 
+    this.resetIdleTimer();
     this.logger.info('daemon started', { hubUrl: this.opts.hubUrl, workdir: this.opts.workdir });
   }
 
   async stop(): Promise<void> {
+    if (this.idleTimer !== null) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
     this.running = false;
     this.loopController?.abort();
     this.loopController = null;
@@ -444,7 +475,7 @@ export class Daemon {
       }
       this.taskRetries.set(taskId, used + 1);
       this.logger.info('retrying task after auth failure', { taskId, attempt: used + 1, limit });
-      await this.spawnClaimedTask(task);
+      await this.spawnClaimedTask(task, { skipMemory: true });
       return;
     }
 
@@ -655,6 +686,14 @@ export class Daemon {
           workspaceId,
           attempts: Daemon.MAX_TRIAGE_ATTEMPTS,
         });
+        // M6: persist quarantine by failing the task. Survives FM restarts.
+        // Users can retry via the dashboard; FM won't re-triage failed tasks.
+        await this.client.failTask(task.id, 'fm_quarantine:max_attempts').catch((err) => {
+          this.logger.error('failed to fail quarantined task', {
+            taskId: task.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
       } else {
         this.fmSpawnAttempts.set(task.id, count);
       }
@@ -732,6 +771,7 @@ export class Daemon {
       );
       this.activeInstances.set(syntheticTaskId, { instance, runtimeId: this.opts.defaultRuntimeId });
       this.fmTaskWorkspace.set(syntheticTaskId, workspaceId);
+      this.resetIdleTimer();
       this.logger.info('fm agent spawned', { workspaceId, syntheticTaskId, fmAgentId });
     } catch (err) {
       // Spawn failure for this workspace: clean up its marker file.
@@ -780,6 +820,7 @@ export class Daemon {
         return;
       }
       await this.client.claimTask(taskId);
+      this.resetIdleTimer();
     } catch (err) {
       this.logger.error('failed to claim task', {
         taskId,
@@ -800,6 +841,7 @@ export class Daemon {
   }
 
   private async runReviewTask(task: Task): Promise<void> {
+    this.resetIdleTimer();
     this.logger.info('running review task', { taskId: task.id });
     if (!this.reviewRunner) {
       this.logger.error('review task claimed but no ReviewRunner configured', { taskId: task.id });
@@ -835,6 +877,7 @@ export class Daemon {
       }
     } finally {
       this.activeReviews.delete(task.id);
+      this.resetIdleTimer();
     }
   }
 
@@ -844,7 +887,7 @@ export class Daemon {
    * task is marked failed so it is not left stuck in_progress. Reused by the
    * initial claim path and the auth-failure retry path.
    */
-  private async spawnClaimedTask(claimed: Task): Promise<void> {
+  private async spawnClaimedTask(claimed: Task, opts?: { skipMemory?: boolean }): Promise<void> {
     const taskId = claimed.id;
     try {
       await writeTaskFile(this.opts.workdir, claimed);
@@ -874,6 +917,13 @@ export class Daemon {
       const desc = claimed.description != null
         ? claimed.description.slice(0, MAX_DESC_CHARS)
         : null;
+
+      // Load prior session context for this task (best-effort; skip on auth retry
+      // to avoid injecting stale failed-run context).
+      let priorMemory: string | null = null;
+      if (!opts?.skipMemory) {
+        priorMemory = await this.client.getAgentMemory(taskId).catch(() => null);
+      }
 
       // Dev-capability: when the daemon is repo-bound, check out the repo into
       // ${workdir}/repo on a per-task branch and instruct the agent to commit,
@@ -913,9 +963,12 @@ export class Daemon {
         `a tool (Bash, Write, or shell command). Create \`${donePath}\` with:\n` +
         `{"result":"<one sentence summary of what you did>","completedAt":"<current ISO 8601 timestamp>"}\n` +
         `Do not just describe writing the file — actually write it with a tool call.`;
+      const memoryBlock = priorMemory
+        ? `\n\n---\nPRIOR SESSION CONTEXT (your last work on this task):\n${priorMemory}\nIf this context is not relevant to your current task, ignore it.`
+        : '';
       const initialPrompt = desc != null
-        ? `${claimed.title}\n\n${desc}${repoAddendum}${doneInstruction}`
-        : `${claimed.title}${repoAddendum}${doneInstruction}`;
+        ? `${claimed.title}\n\n${desc}${repoAddendum}${memoryBlock}${doneInstruction}`
+        : `${claimed.title}${repoAddendum}${memoryBlock}${doneInstruction}`;
       // Reset the agent log so post-mortem classification (auth-failure
       // detection) reads only THIS run, not a prior attempt's appended output.
       await resetAgentLog(this.opts.workdir, claimed.id);
@@ -1100,8 +1153,27 @@ export class Daemon {
       this.activeInstances.delete(taskId);
       this.fmTaskWorkspace.delete(taskId);
       this.fmRunning = false;
+      this.resetIdleTimer();
       this.logger.info('fm agent completed', { taskId, result: result.result });
       return;
+    }
+
+    // R10: save memory before completeTask so a daemon crash between save and
+    // complete leaves the task retryable with valid memory context.
+    const memContent = await readMemoryFile(this.opts.workdir, taskId);
+    if (memContent && memContent.trim().length > 0) {
+      // Best-effort secret scan before persisting.
+      if (/sk-ant-|ghp_|gho_|AKIA[A-Z0-9]{16}|-----BEGIN/.test(memContent)) {
+        this.logger.info('agent memory skipped — potential secret detected', { taskId });
+      } else {
+        await this.client.putAgentMemory(taskId, memContent.slice(0, 1500)).catch((err) => {
+          this.logger.error('failed to save agent memory', {
+            taskId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+        this.logger.info('agent memory saved', { taskId, chars: Math.min(memContent.length, 1500) });
+      }
     }
 
     try {
@@ -1110,6 +1182,7 @@ export class Daemon {
       this.activeInstances.delete(taskId);
       this.taskRetries.delete(taskId);
       this.logger.info('task completed', { taskId });
+      this.resetIdleTimer();
     } catch (err) {
       this.logger.error('failed to complete task', {
         taskId,

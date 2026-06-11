@@ -27,6 +27,7 @@ import { registerEventsRoutes } from './routes/events.js';
 import { registerAnalyticsRoutes } from './routes/analytics.js';
 import { registerPolicyRuleRoutes } from './routes/policy-rules.js';
 import { registerWorkspaceContextRoutes } from './routes/workspace-context.js';
+import { registerWakerRoutes } from './routes/waker.js';
 import { EventBus } from './events/bus.js';
 
 export interface Hub {
@@ -103,6 +104,7 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
     registerAnalyticsRoutes(scope, handle.db);
     registerPolicyRuleRoutes(scope, handle.db);
     registerWorkspaceContextRoutes(scope, handle.db);
+    registerWakerRoutes(scope, handle.db, config.wakerToken);
     return Promise.resolve();
   });
 

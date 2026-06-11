@@ -11,6 +11,8 @@ const ConfigSchema = z.object({
   cookieSecure: z.coerce.boolean().default(false),
   resendApiKey: z.string().optional(),
   appBaseUrl: z.string().default('http://localhost:3001'),
+  /** Shared secret for the internal /waker/has-work endpoint. */
+  wakerToken: z.string().optional(),
 });
 
 export type HubConfig = z.infer<typeof ConfigSchema>;
@@ -36,5 +38,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HubConfig {
     cookieSecure: env['FORGE_HUB_COOKIE_SECURE'],
     resendApiKey: env['RESEND_API_KEY'],
     appBaseUrl: env['APP_BASE_URL'],
+    wakerToken: env['FORGE_HUB_WAKER_TOKEN'],
   });
 }

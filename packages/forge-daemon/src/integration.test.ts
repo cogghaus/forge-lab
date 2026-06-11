@@ -496,7 +496,15 @@ describe('integration: composed personality via registry', () => {
     runtimes.register(
       new MockRuntime({
         completionDelayMs: 20,
-        resultFactory: ({ personality }) => `ECHO_PERSONALITY:${personality}`,
+        // Encode required marker presence explicitly so the result stays well
+        // under the 4000-char hub limit regardless of personality file size.
+        resultFactory: ({ personality, prompt }) => {
+          const markers: string[] = ['ECHO_PERSONALITY:'];
+          if (personality.includes('Architect')) markers.push('Architect');
+          if (personality.includes('COMPOSE_MARKER_FOUND')) markers.push('COMPOSE_MARKER_FOUND');
+          if (prompt.includes('Composition test task')) markers.push('Composition test task');
+          return markers.join(' | ');
+        },
       }),
     );
 

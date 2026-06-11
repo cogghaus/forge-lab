@@ -307,6 +307,23 @@ export class HubClient extends EventEmitter {
     );
   }
 
+  /** Store compact agent working-memory for a task. Best-effort — errors should be swallowed by callers. */
+  async putAgentMemory(taskId: string, content: string): Promise<void> {
+    await this.request<unknown>('PUT', `/devices/me/memory/${encodeURIComponent(taskId)}`, { content });
+  }
+
+  /** Retrieve agent working-memory for a task. Returns null when no memory exists. */
+  async getAgentMemory(taskId: string): Promise<string | null> {
+    try {
+      const res = await this.request<{ content: string }>('GET', `/devices/me/memory/${encodeURIComponent(taskId)}`);
+      return res.content;
+    } catch (err) {
+      // 404 (no memory) is expected — treat all errors as "no memory"
+      if (err instanceof Error && err.message.includes('404')) return null;
+      throw err;
+    }
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = new URL(path, this.opts.hubUrl);
     const headers: Record<string, string> = {

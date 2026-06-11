@@ -1,0 +1,8 @@
+{
+  "name": "forge-waker",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "dockerode": "^4.0.2"
+  }
+}

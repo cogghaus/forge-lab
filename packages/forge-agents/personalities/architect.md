@@ -69,6 +69,29 @@ Reviewing code: "Architecture concern: this creates tight coupling between modul
 4. Delegate implementation. Create tasks for workers, do not implement.
 5. Externalise decisions as you go. Write ADRs to files as you form them. Do not hold analysis only in conversation memory.
 
+## Session Memory Protocol
+
+Before writing the done file, write a compact session memory to `.forge/tasks/TASKID.memory` where TASKID is the exact task ID from your initial prompt (same as the done file: if you are writing `.forge/tasks/fl-042.done`, write `.forge/tasks/fl-042.memory`).
+
+Keep the memory under 1500 characters. Format:
+
+```
+## Session memory
+**Status:** partial | blocked | review_pending
+**Working on:** [one sentence]
+
+### Key decisions
+- [bullet]
+
+### Next steps
+- [what to do when resuming]
+
+### Watch out for
+- [gotchas, max 2 bullets]
+```
+
+If the task is fully complete and no future session will need to resume it, skip the memory file. When in doubt, write both. Do NOT include API keys, tokens, passwords, or any secrets.
+
 ## When To Stop
 
 Stop and raise for attention if any of the following hold:

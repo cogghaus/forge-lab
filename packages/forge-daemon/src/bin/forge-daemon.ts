@@ -94,13 +94,21 @@ async function main(): Promise<void> {
     ...(config.dispatcherPersonality !== undefined && { dispatcherPersonality: config.dispatcherPersonality }),
     dispatcherWorkspaceMode: config.dispatcherWorkspaceMode,
     ...(config.fmCooldownMs !== undefined && { fmCooldownMs: config.fmCooldownMs }),
+    ...(config.idleShutdownMs !== undefined && { idleShutdownMs: config.idleShutdownMs }),
     logger,
   });
 
   await daemon.start();
 
   const shutdown = (): void => {
-    void daemon.stop().then(() => process.exit(0));
+    const stopTimeout = setTimeout(() => {
+      logger.error('daemon stop timed out after 30s — forcing exit');
+      process.exit(1);
+    }, 30_000);
+    void daemon.stop().then(() => {
+      clearTimeout(stopTimeout);
+      process.exit(0);
+    });
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

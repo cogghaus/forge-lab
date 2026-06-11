@@ -1285,6 +1285,10 @@ export function registerTaskRoutes(
         return;
       }
 
+      // Clear any stale agent memory so a fresh retry agent starts without
+      // misleading prior-run context.
+      await db.delete(schema.agentMemory).where(eq(schema.agentMemory.taskId, taskId));
+
       const source = `user:${user.id}`;
       await db.insert(schema.taskHistory).values({
         id: nanoid(),
@@ -1421,6 +1425,9 @@ export function registerTaskRoutes(
         await reply.code(409).send({ error: 'phase_not_failed' });
         return;
       }
+
+      // Clear stale agent memory for this phase task.
+      await db.delete(schema.agentMemory).where(eq(schema.agentMemory.taskId, phaseTaskId));
 
       // Guard the root task UPDATE against races: if the root was cancelled between the phase
       // fetch and this UPDATE, the unguarded UPDATE would silently un-cancel it (DEDUP-003).
