@@ -75,6 +75,11 @@ export interface ClaudeCodeRuntimeOptions {
    * require manual approval. Defaults to false.
    */
   dangerouslySkipPermissions?: boolean;
+  /**
+   * Claude model to use. When set, passes `--model <model>` to claude.
+   * When unset, claude uses its own default.
+   */
+  model?: string;
   /** Extra environment variables merged into the spawned process env. */
   env?: Record<string, string>;
   /** Injected spawner (tests). Defaults to {@link defaultSpawner}. */
@@ -109,6 +114,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   private readonly tabColor: string;
   private readonly tabTitleTemplate: string;
   private readonly dangerouslySkipPermissions: boolean;
+  private readonly model: string | undefined;
   private readonly extraEnv: Record<string, string>;
   private readonly spawner: RuntimeSpawner;
   private readonly instances = new Map<string, LiveInstance>();
@@ -119,6 +125,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     this.tabColor = opts.tabColor ?? '#f97316';
     this.tabTitleTemplate = opts.tabTitleTemplate ?? 'forge-lab :: {agentId} :: {taskId}';
     this.dangerouslySkipPermissions = opts.dangerouslySkipPermissions ?? false;
+    this.model = opts.model;
     this.extraEnv = opts.env ?? {};
     this.spawner = opts.spawner ?? defaultSpawner;
   }
@@ -133,6 +140,9 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       .replace('{taskId}', config.taskId ?? 'idle');
 
     const claudeArgs: string[] = ['--system-prompt', systemPrompt];
+    if (this.model) {
+      claudeArgs.push('--model', this.model);
+    }
     if (this.dangerouslySkipPermissions) {
       claudeArgs.push('--dangerously-skip-permissions');
     }

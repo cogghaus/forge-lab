@@ -29,6 +29,7 @@ x-daemon-common: &daemon-common
     FORGE_DAEMON_DEFAULT_RUNTIME: "background"
     FORGE_DAEMON_SKIP_PERMISSIONS: "true"
     FORGE_DAEMON_MAX_CONCURRENT_TASKS: "1"
+    FORGE_DAEMON_MODEL: "claude-sonnet-4-6"
     ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:?}"
   networks:
     - vibe-forge-internal

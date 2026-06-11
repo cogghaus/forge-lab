@@ -73,6 +73,13 @@ export interface BackgroundRuntimeOptions {
    * Defaults to false; enable for production daemon use.
    */
   dangerouslySkipPermissions?: boolean;
+  /**
+   * Claude model to use (e.g. "claude-sonnet-4-6", "claude-haiku-4-5-20251001").
+   * When set, passes `--model <model>` to every claude invocation.
+   * When unset, claude uses whatever its own default is (typically the latest
+   * model, which may be expensive). Always set this explicitly in production.
+   */
+  model?: string;
   /** Extra environment variables merged into the spawned process env. */
   env?: Record<string, string>;
   /** Injected spawner (tests). Defaults to {@link defaultBackgroundSpawner}. */
@@ -129,6 +136,7 @@ export class BackgroundRuntime implements AgentRuntime {
 
   private readonly claudePath: string;
   private readonly dangerouslySkipPermissions: boolean;
+  private readonly model: string | undefined;
   private readonly extraEnv: Record<string, string>;
   private readonly spawner: BackgroundSpawner;
   private readonly instances = new Map<string, LiveInstance>();
@@ -136,6 +144,7 @@ export class BackgroundRuntime implements AgentRuntime {
   constructor(opts: BackgroundRuntimeOptions = {}) {
     this.claudePath = opts.claudePath ?? 'claude';
     this.dangerouslySkipPermissions = opts.dangerouslySkipPermissions ?? false;
+    this.model = opts.model;
     this.extraEnv = opts.env ?? {};
     this.spawner = opts.spawner ?? defaultBackgroundSpawner;
   }
@@ -171,6 +180,9 @@ export class BackgroundRuntime implements AgentRuntime {
 
     const personality = config.personality || 'You are a helpful software engineering assistant.';
     const claudeArgs: string[] = ['--print', '--system-prompt', personality];
+    if (this.model) {
+      claudeArgs.push('--model', this.model);
+    }
     if (this.dangerouslySkipPermissions) {
       claudeArgs.push('--dangerously-skip-permissions');
     }

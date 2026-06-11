@@ -61,6 +61,10 @@ const ConfigSchema = z.object({
   // Minimum milliseconds between FM agent spawns per workspace (cooldown window).
   // Limits blast radius of runaway triage loops. Set to 0 to disable. Default: 60000.
   fmCooldownMs: z.coerce.number().int().min(0).optional(),
+  // Claude model passed to every agent spawn via --model. When unset, claude uses
+  // its own default (which may be expensive). Always set in production.
+  // Example: "claude-sonnet-4-6", "claude-haiku-4-5-20251001"
+  model: z.string().optional(),
   // Personality ID to use for the FM agent spawned in dispatcher mode.
   // Must match an id registered in the PersonalityRegistry.
   // Defaults to 'forge-master'. Ignored in worker mode.
@@ -95,5 +99,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     dispatcherPersonality: env['FORGE_DAEMON_DISPATCHER_PERSONALITY'],
     dispatcherWorkspaceMode: env['FORGE_DAEMON_DISPATCHER_SCOPE'],
     fmCooldownMs: env['FORGE_DAEMON_FM_COOLDOWN_MS'],
+    model: env['FORGE_DAEMON_MODEL'],
   });
 }
