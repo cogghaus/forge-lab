@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { and, eq, desc, asc, inArray, isNull, isNotNull, lt, not, or, count, gte, max, sql } from 'drizzle-orm';
+import { and, eq, desc, asc, inArray, isNull, isNotNull, lt, or, count, gte, max, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -9,7 +9,6 @@ import {
   SequenceSpecSchema,
   formatTaskId,
   formatPhaseTaskId,
-  parseTaskId,
   rankAtLeast,
   schema,
 } from '@forge-lab/core';
