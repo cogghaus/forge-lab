@@ -22,7 +22,7 @@ x-daemon-common: &daemon-common
   build:
     context: ..
     dockerfile: packages/forge-daemon/Dockerfile
-  restart: unless-stopped
+  restart: on-failure
   environment: &daemon-env
     FORGE_DAEMON_HUB_URL: "http://forge-hub:3000"
     # No workspace pin — workers run unscoped across all member workspaces.
@@ -30,6 +30,7 @@ x-daemon-common: &daemon-common
     FORGE_DAEMON_SKIP_PERMISSIONS: "true"
     FORGE_DAEMON_MAX_CONCURRENT_TASKS: "1"
     FORGE_DAEMON_MODEL: "claude-sonnet-4-6"
+    FORGE_DAEMON_IDLE_SHUTDOWN_MS: "900000"
     ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:?}"
   networks:
     - vibe-forge-internal
@@ -47,6 +48,8 @@ services:
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_FM_TOKEN:?}"
       # Dispatcher mode ignores MAX_CONCURRENT_TASKS (it does not claim worker
       # tasks); inherit the anchor's "1" rather than empty (which fails parse).
+      # FM idles out faster (3 min) since it only runs briefly per triage cycle.
+      FORGE_DAEMON_IDLE_SHUTDOWN_MS: "180000"
     volumes:
       - daemon-fm-workdir:/workdir
 
@@ -129,6 +132,21 @@ services:
       FORGE_DAEMON_DEVICE_TOKEN: "${FORGE_TEMPER_TOKEN:?}"
     volumes:
       - daemon-temper-workdir:/workdir
+
+  forge-waker:
+    build:
+      context: ..
+      dockerfile: deploy/waker/Dockerfile
+    container_name: forge-waker
+    restart: always
+    environment:
+      HUB_URL: "http://forge-hub:3000"
+      WAKER_TOKEN: "${FORGE_HUB_WAKER_TOKEN:-}"
+      POLL_INTERVAL_MS: "60000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - vibe-forge-internal
 
 networks:
   vibe-forge-internal:

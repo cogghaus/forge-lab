@@ -65,6 +65,11 @@ const ConfigSchema = z.object({
   // its own default (which may be expensive). Always set in production.
   // Example: "claude-sonnet-4-6", "claude-haiku-4-5-20251001"
   model: z.string().optional(),
+  // Milliseconds of inactivity before the daemon exits cleanly (exit code 0).
+  // The Docker restart policy (restart: on-failure) will NOT restart a clean exit,
+  // so the daemon stays idle until the waker service starts it again when work arrives.
+  // Set to 0 to disable idle shutdown. Default: disabled (undefined).
+  idleShutdownMs: z.coerce.number().int().min(0).optional(),
   // Personality ID to use for the FM agent spawned in dispatcher mode.
   // Must match an id registered in the PersonalityRegistry.
   // Defaults to 'forge-master'. Ignored in worker mode.
@@ -100,5 +105,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     dispatcherWorkspaceMode: env['FORGE_DAEMON_DISPATCHER_SCOPE'],
     fmCooldownMs: env['FORGE_DAEMON_FM_COOLDOWN_MS'],
     model: env['FORGE_DAEMON_MODEL'],
+    idleShutdownMs: env['FORGE_DAEMON_IDLE_SHUTDOWN_MS'],
   });
 }

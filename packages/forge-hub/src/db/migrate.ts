@@ -436,6 +436,23 @@ CREATE INDEX IF NOT EXISTS tasks_waiting_deps_idx ON tasks(workspace_id, status)
 CREATE INDEX IF NOT EXISTS devices_agent_status_idx ON devices(agent_id, status, last_seen) WHERE agent_id IS NOT NULL;
 `,
   },
+  {
+    name: '0017_agent_memory',
+    sql: `
+-- Per-agent, per-task working memory. Written by agents on idle exit, read back
+-- on next spawn to resume context. Scoped by (agent_id, task_id, workspace_id).
+CREATE TABLE agent_memory (
+  agent_id TEXT NOT NULL,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL,
+  content TEXT NOT NULL CHECK(length(content) <= 1500),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+  PRIMARY KEY (agent_id, task_id, workspace_id)
+);
+-- Index required for ON DELETE CASCADE FK enforcement (SQLite does not auto-index FK targets)
+CREATE INDEX agent_memory_task_idx ON agent_memory(task_id);
+`,
+  },
 ];
 
 function splitStatements(sql: string): string[] {

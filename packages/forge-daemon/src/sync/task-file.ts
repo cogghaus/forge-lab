@@ -108,7 +108,21 @@ export async function cleanupTaskFiles(workdir: string, taskId: string): Promise
   await Promise.all([
     fs.rm(taskFilePath(workdir, taskId), { force: true }),
     fs.rm(doneFilePath(workdir, taskId), { force: true }),
+    fs.rm(memoryFilePath(workdir, taskId), { force: true }),
   ]);
+}
+
+export function memoryFilePath(workdir: string, taskId: string): string {
+  return path.join(taskDir(workdir), `${taskId}.memory`);
+}
+
+/** Read the agent's session-memory file if it exists. Returns null when absent. */
+export async function readMemoryFile(workdir: string, taskId: string): Promise<string | null> {
+  try {
+    return await fs.readFile(memoryFilePath(workdir, taskId), 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 export function instructionFilePath(workdir: string, taskId: string): string {
