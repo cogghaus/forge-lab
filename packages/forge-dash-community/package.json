@@ -1,6 +1,6 @@
 {
   "name": "@forge-lab/forge-dash-community",
-  "version": "0.8.22",
+  "version": "0.8.23",
   "private": true,
   "scripts": {
     "dev": "next dev --port 3001 --hostname 0.0.0.0",
@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@forge-lab/core": "workspace:*",
     "@heroui/react": "^2.8.10",
     "framer-motion": "^11.18.2",
     "next": "^15.5.18",

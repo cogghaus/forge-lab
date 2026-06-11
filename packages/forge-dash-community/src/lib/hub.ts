@@ -1,3 +1,5 @@
+import type { SequenceSpec } from '@forge-lab/core';
+
 const HUB_URL = process.env['FORGE_HUB_URL'] ?? 'http://localhost:3000';
 
 export type HubResponse<T> =
@@ -88,7 +90,7 @@ export interface HubTask {
   createdAt: string;
   completedAt: string | null;
   /** Set when this task is a sequenced multi-phase task. Null for plain tasks. */
-  sequenceSpec?: { phases: Array<{ title: string; role: string; prompt: string }> } | null;
+  sequenceSpec?: SequenceSpec | null;
   /** Set when this task is a phase child. Null/undefined for root tasks. */
   phaseIndex?: number | null;
   /** Completion output written by the agent. */
@@ -290,7 +292,10 @@ export type TaskStatus =
   | 'in_progress'
   | 'completed'
   | 'failed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'sequenced_running'
+  | 'sequenced_complete'
+  | 'waiting_on_deps';
 
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 
@@ -302,6 +307,16 @@ export const CANCELLABLE_STATUSES: TaskStatus[] = [
   'pending_agent',
   'assigned',
   'in_progress',
+  'sequenced_running',
+  'waiting_on_deps',
+];
+
+/** Terminal statuses - no further transitions are possible. */
+export const TERMINAL_STATUSES: TaskStatus[] = [
+  'completed',
+  'failed',
+  'cancelled',
+  'sequenced_complete',
 ];
 
 /** Statuses from which a user may retry via the dedicated /retry endpoint (→ pending_dispatcher_action). */

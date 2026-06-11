@@ -15,7 +15,7 @@ const STATUS_META: Record<string, { color: string; label?: string }> = {
   in_progress: { color: '#FF6B2B' },
   sequenced_running: { color: '#FF6B2B', label: 'Sequenced Running' },
   sequenced_complete: { color: '#2DD4A0', label: 'Sequenced Complete' },
-  waiting_on_deps: { color: '#818cf8', label: 'Waiting on Deps' },
+  waiting_on_deps: { color: '#f59e0b', label: 'Waiting on Deps' },
   completed: { color: '#2DD4A0' },
   failed: { color: '#FF4757' },
   cancelled: { color: '#FF4757' },
@@ -65,7 +65,11 @@ export function TaskList({ tasks, workspaceId, goals = [], onTaskClick }: Props)
   useEffect(() => {
     setIsLive(
       tasks.some(
-        (t) => t.status === 'pending_agent' || t.status === 'assigned' || t.status === 'in_progress',
+        (t) =>
+          t.status === 'pending_agent' ||
+          t.status === 'assigned' ||
+          t.status === 'in_progress' ||
+          t.status === 'sequenced_running',
       ),
     );
   }, [tasks]);

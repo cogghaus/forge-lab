@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { and, eq, desc, asc, inArray, isNull, isNotNull, lt, not, or, count, gte } from 'drizzle-orm';
+import { and, eq, desc, asc, inArray, isNull, isNotNull, lt, not, or, count, gte, max, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -51,14 +51,21 @@ const RetryTaskBodySchema = z.object({
 
 const CreateWorkspaceTaskBodySchema = CreateTaskInputSchema.extend({
   sequenceSpec: SequenceSpecSchema.optional(),
-  dependsOn: z.array(z.string()).default([]),
+  // Cap dependsOn at 20 entries to prevent O(N) SQL inArray queries with hundreds of IDs.
+  // Each entry is capped at 100 chars to match the task ID format limit (DEDUP-010).
+  dependsOn: z.array(z.string().max(100)).max(20).default([]),
 });
 
 /** Task statuses FM is allowed to route from. */
 const FM_ASSIGNABLE_STATUSES = ['pending_dispatcher_action', 'pending_agent'] as const;
 
 /** Statuses a user may cancel via the dedicated cancel endpoint.
- * Includes sequenced_running and waiting_on_deps per design doc Section 4.1. */
+ * Includes sequenced_running and waiting_on_deps per design doc Section 4.1.
+ * Type annotation enforces membership against the canonical TaskStatus enum at compile time.
+ * 'stale_assigned' is NOT a valid TaskStatus and must NOT appear here (DEDUP-023).
+ * The `satisfies ReadonlySet<TaskStatus>` constraint is verified by the TypeScript compiler
+ * as part of the standard CI build — future enum additions that are missed in this set
+ * will cause a compile error. */
 const CANCELLABLE_STATUSES = new Set([
   'pending_dispatcher_action',
   'pending_design',
@@ -68,14 +75,23 @@ const CANCELLABLE_STATUSES = new Set([
   'in_progress',
   'sequenced_running',
   'waiting_on_deps',
-  'stale_assigned',
-]);
+] as const) satisfies ReadonlySet<import('@forge-lab/core').TaskStatus>;
 
-/** Terminal statuses — no further transitions are possible. */
-const TERMINAL_STATUSES = new Set(['completed', 'sequenced_complete', 'failed', 'cancelled']);
+/** Terminal statuses — no further transitions are possible.
+ * Type annotation enforces membership against the canonical TaskStatus enum at compile time. */
+const TERMINAL_STATUSES = new Set([
+  'completed',
+  'sequenced_complete',
+  'failed',
+  'cancelled',
+] as const) satisfies ReadonlySet<import('@forge-lab/core').TaskStatus>;
 
-/** Terminal-success statuses — deps are satisfied when all deps are in one of these. */
-const TERMINAL_SUCCESS_STATUSES = new Set(['completed', 'sequenced_complete']);
+/** Terminal-success statuses — deps are satisfied when all deps are in one of these.
+ * Type annotation enforces membership against the canonical TaskStatus enum at compile time. */
+const TERMINAL_SUCCESS_STATUSES = new Set([
+  'completed',
+  'sequenced_complete',
+] as const) satisfies ReadonlySet<import('@forge-lab/core').TaskStatus>;
 
 /** Statuses a user may reassign/clear via the user-session assign path. */
 const USER_ASSIGNABLE_STATUSES = ['pending_agent', 'assigned'] as const;
@@ -102,48 +118,78 @@ function maybeRunId(req: FastifyRequest): Record<string, string> {
 
 /**
  * Shared helper: get the highest sequence number for root tasks (parent_id IS NULL)
- * in a given project prefix. Excludes phase task IDs (which are compound and would
- * corrupt the counter). MUST be used in both task-creation paths.
+ * in a given project prefix. Uses a SQL MAX aggregation over the numeric portion of
+ * the task ID string (e.g. the "42" in "fl-042") rather than fetching all rows and
+ * iterating in application code. The tasks_project_idx index on projectPrefix makes
+ * this efficient even for large workspaces (DEDUP-022).
+ *
+ * Phase task IDs (e.g. "fl-042-p0") are excluded by parent_id IS NULL: phase tasks
+ * always have a parentId set, so this filter is sufficient without regex parsing.
+ *
+ * TOCTOU note: a concurrent request for the same projectPrefix can read the same
+ * max value between this query and the subsequent INSERT. In that case, one INSERT
+ * succeeds and the other hits the UNIQUE constraint on id. SQLite serialises writes
+ * by default (one writer at a time), making this race extremely unlikely in practice.
+ * If it occurs, the error surfaces as a 500; callers should retry. A per-prefix
+ * atomic sequence table is the correct long-term fix (DEDUP-011).
  */
 async function getMaxRootSeq(db: Db, prefix: string): Promise<number> {
-  const existing = await db
-    .select({ id: schema.tasks.id })
+  // INSTR(id, '-') finds the first dash; SUBSTR extracts everything after it;
+  // CAST to INTEGER drops any '-pN' suffix and returns only the leading digits.
+  const row = await db
+    .select({
+      maxSeq: max(sql<number>`CAST(SUBSTR(${schema.tasks.id}, INSTR(${schema.tasks.id}, '-') + 1) AS INTEGER)`),
+    })
     .from(schema.tasks)
     .where(
       and(
         eq(schema.tasks.projectPrefix, prefix),
         isNull(schema.tasks.parentId),
       ),
-    );
-  let maxSeq = 0;
-  for (const row of existing) {
-    try {
-      const { sequence } = parseTaskId(row.id);
-      if (sequence > maxSeq) maxSeq = sequence;
-    } catch {
-      // compound phase ID or malformed — skip
-    }
-  }
-  return maxSeq;
+    )
+    .get();
+  const val = row?.maxSeq;
+  if (val === null || val === undefined) return 0;
+  const n = typeof val === 'number' ? val : Number(val);
+  return Number.isFinite(n) ? n : 0;
 }
 
 /**
  * Build the next-phase description by injecting prior-phase output in a
- * security-hardened, sandboxed format. See design doc Section 6.4.
+ * sandboxed format. See design doc Section 6.4.
+ *
+ * Security scope:
+ * - prior_phase_output XML tags are stripped from both the phase prompt and prior result
+ *   to prevent re-injection attacks (breaking out of the sandbox wrapper).
+ * - Structural XML tags that Claude treats as special (<system>, <instructions>, <assistant>,
+ *   <human>) are also stripped from the prior result to reduce prompt injection surface
+ *   (DEDUP-021). Note: blockquote sandboxing alone is not a complete mitigation for all
+ *   model versions — this is defense-in-depth, not a guarantee.
  */
 function buildNextPhaseDescription(
   nextPhasePrompt: string,
   priorResult: string,
   completingPhaseIndex: number,
 ): string {
+  // 0. Sanitize the phase prompt: strip any closing prior_phase_output tags
+  //    that a malicious caller could use to break out of the sandbox wrapper
+  //    that will surround the prior result in the assembled description.
+  const sanitizedPrompt = nextPhasePrompt.replace(/<\/?prior_phase_output[^>]*>/gi, '[xml-tag-removed]');
+
   // 1. Cap the prior result
   const capped = priorResult.slice(0, 2000);
 
   // 2. Normalize CRLF to LF
   const normalized = capped.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // 3. Strip XML tags that could escape the sandbox
-  const escaped = normalized.replace(/<\/?prior_phase_output[^>]*>/gi, '[xml-tag-removed]');
+  // 3. Strip XML tags that could escape the sandbox or influence the receiving agent.
+  //    Covers prior_phase_output re-injection AND structural Claude XML tags (DEDUP-021).
+  const escaped = normalized
+    .replace(/<\/?prior_phase_output[^>]*>/gi, '[xml-tag-removed]')
+    .replace(/<\/?system[^>]*>/gi, '[xml-tag-removed]')
+    .replace(/<\/?instructions[^>]*>/gi, '[xml-tag-removed]')
+    .replace(/<\/?assistant[^>]*>/gi, '[xml-tag-removed]')
+    .replace(/<\/?human[^>]*>/gi, '[xml-tag-removed]');
 
   // 4. Prefix every line with '> '
   const blockquoted = escaped.split('\n').map((line) => `> ${line}`).join('\n');
@@ -153,7 +199,7 @@ function buildNextPhaseDescription(
 ${blockquoted}
 </prior_phase_output>`;
 
-  return `${nextPhasePrompt}\n\n${sandboxed}`;
+  return `${sanitizedPrompt}\n\n${sandboxed}`;
 }
 
 /**
@@ -219,6 +265,19 @@ async function runDepUnblockingPass(
     )
     .limit(50);
 
+  // If the cap was hit, schedule a follow-up pass so the remainder get unblocked.
+  // This is not a performance optimisation — leaving tasks beyond the cap blocked is a correctness defect.
+  // Promise.resolve().then() is used instead of setImmediate for cross-runtime portability
+  // (setImmediate is Node.js-specific and absent in edge runtimes) (DEDUP-024).
+  if (waitingTasks.length === 50) {
+    console.warn('[unblocking-pass] cap hit (50) for workspace', workspaceId, '— scheduling follow-up sweep');
+    Promise.resolve().then(() =>
+      runDepUnblockingPass(db, workspaceId).catch((err) =>
+        console.error('[unblocking-pass] follow-up sweep failed for workspace', workspaceId, err),
+      ),
+    );
+  }
+
   for (const blocked of waitingTasks) {
     let deps: string[];
     try {
@@ -229,19 +288,25 @@ async function runDepUnblockingPass(
     }
 
     if (deps.length === 0) {
-      // No deps — unblock immediately
-      await db
-        .update(schema.tasks)
-        .set({ status: 'pending_agent', blockedReason: null, updatedAt: new Date() })
-        .where(eq(schema.tasks.id, blocked.id));
-      await db.insert(schema.taskHistory).values({
-        id: nanoid(),
-        taskId: blocked.id,
-        eventName: 'task.deps_cleared',
-        source: 'system',
-        payload: { reason: 'no_deps' },
-        workspaceId,
-      });
+      // No deps — unblock immediately. Mirror the branched logic used below for the allMet case:
+      // if the task has a sequenceSpec, run phase-0 creation via unblockSequencedTask instead of
+      // setting status to pending_agent directly (which would bypass sequencing).
+      if (blocked.sequenceSpec !== null && blocked.sequenceSpec !== undefined) {
+        await unblockSequencedTask(db, blocked, workspaceId);
+      } else {
+        await db
+          .update(schema.tasks)
+          .set({ status: 'pending_agent', blockedReason: null, updatedAt: new Date() })
+          .where(eq(schema.tasks.id, blocked.id));
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId: blocked.id,
+          eventName: 'task.deps_cleared',
+          source: 'system',
+          payload: { reason: 'no_deps' },
+          workspaceId,
+        });
+      }
       continue;
     }
 
@@ -267,12 +332,20 @@ async function runDepUnblockingPass(
       continue;
     }
 
-    // Check for cancelled/failed deps
+    // Check for cancelled/failed deps.
+    // Use a flag so we emit history events for ALL failed/cancelled deps (not just the first),
+    // then continue to the outer loop explicitly to avoid falling through to the allMet check.
+    // Skip the UPDATE and history INSERT if blockedReason already reflects the dep's terminal
+    // status — this prevents duplicate history events across repeated unblocking passes (DEDUP-005).
+    let hasTerminalFailedDep = false;
     for (const [depId, depStatus] of depStatusMap.entries()) {
       if (depStatus === 'cancelled') {
+        hasTerminalFailedDep = true;
+        const sentinel = `dep_cancelled:${depId}`;
+        if (blocked.blockedReason === sentinel) continue;
         await db
           .update(schema.tasks)
-          .set({ blockedReason: `dep_cancelled:${depId}`, updatedAt: new Date() })
+          .set({ blockedReason: sentinel, updatedAt: new Date() })
           .where(eq(schema.tasks.id, blocked.id));
         await db.insert(schema.taskHistory).values({
           id: nanoid(),
@@ -282,12 +355,14 @@ async function runDepUnblockingPass(
           payload: { depId, depStatus: 'cancelled' },
           workspaceId,
         });
-        break;
       }
       if (depStatus === 'failed') {
+        hasTerminalFailedDep = true;
+        const sentinel = `dep_failed:${depId}`;
+        if (blocked.blockedReason === sentinel) continue;
         await db
           .update(schema.tasks)
-          .set({ blockedReason: `dep_failed:${depId}`, updatedAt: new Date() })
+          .set({ blockedReason: sentinel, updatedAt: new Date() })
           .where(eq(schema.tasks.id, blocked.id));
         await db.insert(schema.taskHistory).values({
           id: nanoid(),
@@ -297,11 +372,16 @@ async function runDepUnblockingPass(
           payload: { depId, depStatus: 'failed' },
           workspaceId,
         });
-        break;
       }
     }
+    // Explicit continue to outer loop — do NOT fall through to the allMet check
+    // if any cancelled/failed dep was found.
+    if (hasTerminalFailedDep) continue;
 
-    const allMet = deps.every((depId) => TERMINAL_SUCCESS_STATUSES.has(depStatusMap.get(depId) ?? ''));
+    const allMet = deps.every((depId) => {
+      const s = depStatusMap.get(depId);
+      return s !== undefined && TERMINAL_SUCCESS_STATUSES.has(s as Parameters<typeof TERMINAL_SUCCESS_STATUSES.has>[0]);
+    });
     if (!allMet) continue;
 
     // All deps satisfied — unblock
@@ -328,13 +408,45 @@ async function runDepUnblockingPass(
 /**
  * Create phase-0 task for a sequenced task that was previously waiting_on_deps
  * and has now been unblocked.
+ *
+ * All writes (phase-0 INSERT, root UPDATE, history INSERTs) are executed in a
+ * single db.batch() call for atomicity. A crash between writes would leave the
+ * root in waiting_on_deps with a phase-0 task already created; the UNIQUE constraint
+ * on (parent_id, phase_index) would prevent double-creation on the next pass, and
+ * the try/catch handles that case gracefully (DEDUP-007).
+ *
+ * On hash mismatch a sequence_integrity_failure history event is written and the
+ * task's blockedReason is updated before returning, so operators can detect the
+ * stuck task (DEDUP-007).
  */
 async function unblockSequencedTask(
   db: Db,
-  rootTask: { id: string; sequenceSpec: string | null; workspaceId: string | null },
+  rootTask: { id: string; sequenceSpec: string | null; workspaceId: string | null; projectPrefix: string; priority: string; sequenceSpecHash: string | null; blockedReason: string | null },
   workspaceId: string,
 ): Promise<void> {
   if (!rootTask.sequenceSpec) return;
+
+  // Verify sequence_spec_hash integrity before executing (design doc Section 4.6).
+  const computedHash = createHash('sha256').update(rootTask.sequenceSpec).digest('hex');
+  if (computedHash !== rootTask.sequenceSpecHash) {
+    console.error('[unblocking-pass] sequence_spec_hash mismatch on task', rootTask.id, '— writing integrity failure event');
+    // Update blockedReason and insert history event so operators can detect the stuck task (DEDUP-007).
+    await db.batch([
+      db
+        .update(schema.tasks)
+        .set({ blockedReason: 'sequence_integrity_failure', updatedAt: new Date() })
+        .where(eq(schema.tasks.id, rootTask.id)),
+      db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId: rootTask.id,
+        eventName: 'task.sequence_integrity_failure',
+        source: 'system',
+        payload: { computedHash, storedHash: rootTask.sequenceSpecHash },
+        workspaceId,
+      }),
+    ] as Parameters<typeof db.batch>[0]);
+    return;
+  }
 
   let spec: z.infer<typeof SequenceSpecSchema>;
   try {
@@ -368,14 +480,17 @@ async function unblockSequencedTask(
 
   const blockedReason = activeDevices.length === 0 ? `role_unavailable:${phase0.role}` : null;
 
-  await db.insert(schema.tasks).values({
+  // Build all write statements before executing, then run as a single batch for atomicity (DEDUP-007).
+  // Use projectPrefix from the DB column directly; do not rely on regex parsing of the task ID.
+  const phase0Insert = db.insert(schema.tasks).values({
     id: phase0Id,
     workspaceId,
-    projectPrefix: rootTask.id.replace(/-\d+$/, ''),
+    projectPrefix: rootTask.projectPrefix,
     title: phase0.title,
     description: phase0.prompt,
     status: 'pending_agent',
-    priority: 'normal',
+    // Propagate root task priority to the phase task (do not hardcode 'normal').
+    priority: rootTask.priority as 'low' | 'normal' | 'high' | 'urgent',
     parentId: rootTask.id,
     phaseIndex: 0,
     assignedAgentId: phase0.role,
@@ -385,7 +500,7 @@ async function unblockSequencedTask(
     updatedAt: now,
   });
 
-  await db
+  const rootUpdate = db
     .update(schema.tasks)
     .set({
       status: 'sequenced_running',
@@ -394,7 +509,7 @@ async function unblockSequencedTask(
     })
     .where(eq(schema.tasks.id, rootTask.id));
 
-  await db.insert(schema.taskHistory).values({
+  const depsCleared = db.insert(schema.taskHistory).values({
     id: nanoid(),
     taskId: rootTask.id,
     eventName: 'task.deps_cleared',
@@ -403,15 +518,34 @@ async function unblockSequencedTask(
     workspaceId,
   });
 
-  if (blockedReason) {
-    await db.insert(schema.taskHistory).values({
-      id: nanoid(),
-      taskId: rootTask.id,
-      eventName: 'task.phase_blocked',
-      source: 'system',
-      payload: { phase: 0, reason: blockedReason },
-      workspaceId,
-    });
+  const batchStatements: Parameters<typeof db.batch>[0] = blockedReason
+    ? [
+        phase0Insert,
+        rootUpdate,
+        depsCleared,
+        db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId: rootTask.id,
+          eventName: 'task.phase_blocked',
+          source: 'system',
+          payload: { phase: 0, reason: blockedReason },
+          workspaceId,
+        }),
+      ]
+    : [phase0Insert, rootUpdate, depsCleared];
+
+  try {
+    await db.batch(batchStatements);
+  } catch (err: unknown) {
+    // If the phase-0 task already exists (UNIQUE constraint on parent_id + phase_index),
+    // a prior partial write succeeded for the INSERT but failed before the root UPDATE.
+    // Log and skip — the next unblocking pass will re-attempt the root UPDATE.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('UNIQUE') || msg.includes('unique')) {
+      console.warn('[unblocking-pass] phase-0 already exists for task', rootTask.id, '— skipping INSERT, root UPDATE will be retried');
+      return;
+    }
+    throw err;
   }
 }
 
@@ -494,19 +628,26 @@ export function registerTaskRoutes(
   // because daemons authenticate as devices, not workspace members. Callers must supply the correct
   // workspaceId — a device that supplies an arbitrary workspaceId can read those task titles. This
   // is acceptable: device tokens are provisioned by workspace owners and are semi-trusted.
+  //
+  // Sequenced root tasks (sequenceSpec IS NOT NULL AND phaseIndex IS NULL) are excluded from this
+  // endpoint to prevent FM from claiming them — sequenced roots advance only via phase completion,
+  // never via FM assignment. Phase tasks (phaseIndex IS NOT NULL) are still returned (DEDUP-014).
   fastify.get<{ Querystring: { workspaceId?: string } }>('/tasks', async (req, reply) => {
     if (!req.authUser && !req.authDevice) {
       await reply.code(401).send({ error: 'unauthorized' });
       return;
     }
     const { workspaceId } = req.query;
-    const whereClause = workspaceId
+    const scopeClause = workspaceId
       ? eq(schema.tasks.workspaceId, workspaceId)
       : isNull(schema.tasks.workspaceId);
+    // Exclude sequenced roots: only return tasks that have no sequenceSpec, OR are phase tasks.
+    // This matches design doc Section 6.6: filter AND (sequence_spec IS NULL OR phase_index IS NOT NULL).
+    const seqFilter = or(isNull(schema.tasks.sequenceSpec), isNotNull(schema.tasks.phaseIndex));
     const tasks = await db
       .select()
       .from(schema.tasks)
-      .where(whereClause)
+      .where(and(scopeClause, seqFilter))
       .orderBy(desc(schema.tasks.createdAt));
     return { tasks };
   });
@@ -927,12 +1068,12 @@ export function registerTaskRoutes(
         return;
       }
 
-      if (TERMINAL_STATUSES.has(task.status)) {
+      if (TERMINAL_STATUSES.has(task.status as Parameters<typeof TERMINAL_STATUSES.has>[0])) {
         await reply.code(409).send({ error: 'already_terminal', status: task.status });
         return;
       }
 
-      if (!CANCELLABLE_STATUSES.has(task.status)) {
+      if (!CANCELLABLE_STATUSES.has(task.status as Parameters<typeof CANCELLABLE_STATUSES.has>[0])) {
         await reply.code(422).send({ error: 'invalid_transition', from: task.status, to: 'cancelled' });
         return;
       }
@@ -941,7 +1082,11 @@ export function registerTaskRoutes(
       const source = `user:${user.id}`;
       const now = new Date();
 
-      // Find non-terminal phase children if this is a sequenced root
+      // Pre-fetch all non-terminal phase children BEFORE any writes (DEDUP-001, DEDUP-024).
+      // The entire cascade (root UPDATE + all child UPDATEs + all history INSERTs) must be
+      // assembled and executed atomically via db.batch() to prevent:
+      //   1. Another request observing a cancelled root with live phase children
+      //   2. Partial state on process crash between writes
       const phaseChildren = await db
         .select({ id: schema.tasks.id, phaseIndex: schema.tasks.phaseIndex, status: schema.tasks.status })
         .from(schema.tasks)
@@ -952,9 +1097,20 @@ export function registerTaskRoutes(
           ),
         );
 
-      const nonTerminalChildren = phaseChildren.filter((c) => !TERMINAL_STATUSES.has(c.status));
+      const nonTerminalChildren = phaseChildren.filter((c) => !TERMINAL_STATUSES.has(c.status as Parameters<typeof TERMINAL_STATUSES.has>[0]));
 
-      const updated = await db
+      // Assemble all cancel statements before any DB writes, then execute atomically
+      // in a single db.batch() call (DEDUP-001). This prevents partial state on crash:
+      // root UPDATE + each child UPDATE + each child history INSERT + root cancel history INSERT
+      // + optional stop-instruction INSERTs all land in one atomic libsql transaction.
+      //
+      // Child UPDATEs use an optimistic lock on the pre-fetched status so a child that
+      // transitions to terminal between pre-fetch and batch execution becomes a no-op UPDATE.
+      // Child history events and stop instructions are included for all non-terminal children
+      // unconditionally — a child that raced to terminal will produce a spurious history event,
+      // but this is acceptable to achieve atomicity (the alternative is partial state on crash).
+
+      const rootCancelUpdate = db
         .update(schema.tasks)
         .set({ status: 'cancelled', updatedAt: now })
         .where(
@@ -966,48 +1122,7 @@ export function registerTaskRoutes(
         )
         .returning({ id: schema.tasks.id });
 
-      if (updated.length === 0) {
-        await reply.code(409).send({ error: 'status_changed' });
-        return;
-      }
-
-      // Cancel non-terminal phase children
-      for (const child of nonTerminalChildren) {
-        await db
-          .update(schema.tasks)
-          .set({ status: 'cancelled', updatedAt: now })
-          .where(
-            and(
-              eq(schema.tasks.id, child.id),
-              not(inArray(schema.tasks.status, ['completed', 'sequenced_complete', 'failed', 'cancelled'])),
-            ),
-          );
-
-        await db.insert(schema.taskHistory).values({
-          id: nanoid(),
-          taskId: child.id,
-          eventName: 'task.phase_cancelled',
-          source,
-          payload: { phaseIndex: child.phaseIndex, reason: 'parent_cancelled' },
-          workspaceId,
-        });
-      }
-
-      // Insert stop instruction for in-progress tasks so daemon can abort
-      if (previousStatus === 'in_progress') {
-        await db.insert(schema.taskInstructions).values({
-          id: nanoid(),
-          taskId,
-          workspaceId,
-          priority: 'stop',
-          body: body.reason
-            ? `Task cancelled by user: ${body.reason}`
-            : 'Task cancelled by user.',
-          createdBy: source,
-        });
-      }
-
-      await db.insert(schema.taskHistory).values({
+      const rootHistoryInsert = db.insert(schema.taskHistory).values({
         id: nanoid(),
         taskId,
         eventName: 'task.cancelled',
@@ -1015,6 +1130,77 @@ export function registerTaskRoutes(
         payload: { previousStatus, reason: body.reason ?? null },
         workspaceId,
       });
+
+      // Build the full cascade: per child — [UPDATE, history INSERT, optional stop INSERT]
+      const childStatements: Parameters<typeof db.batch>[0][number][] = [];
+      for (const child of nonTerminalChildren) {
+        childStatements.push(
+          db
+            .update(schema.tasks)
+            .set({ status: 'cancelled', updatedAt: now })
+            .where(
+              and(
+                eq(schema.tasks.id, child.id),
+                eq(schema.tasks.status, child.status),
+              ),
+            ),
+        );
+        childStatements.push(
+          db.insert(schema.taskHistory).values({
+            id: nanoid(),
+            taskId: child.id,
+            eventName: 'task.phase_cancelled',
+            source,
+            payload: { phaseIndex: child.phaseIndex, reason: 'parent_cancelled' },
+            workspaceId,
+          }),
+        );
+        if (child.status === 'in_progress') {
+          childStatements.push(
+            db.insert(schema.taskInstructions).values({
+              id: nanoid(),
+              taskId: child.id,
+              workspaceId,
+              priority: 'stop',
+              body: body.reason
+                ? `Phase task cancelled by parent cancellation: ${body.reason}`
+                : 'Phase task cancelled by parent cancellation.',
+              createdBy: source,
+            }),
+          );
+        }
+      }
+
+      // Stop instruction for root task if it was in_progress
+      const rootStopStatements: Parameters<typeof db.batch>[0][number][] = previousStatus === 'in_progress'
+        ? [
+            db.insert(schema.taskInstructions).values({
+              id: nanoid(),
+              taskId,
+              workspaceId,
+              priority: 'stop',
+              body: body.reason
+                ? `Task cancelled by user: ${body.reason}`
+                : 'Task cancelled by user.',
+              createdBy: source,
+            }),
+          ]
+        : [];
+
+      // Execute all writes atomically
+      const batchResults = await db.batch([
+        rootCancelUpdate,
+        rootHistoryInsert,
+        ...childStatements,
+        ...rootStopStatements,
+      ] as Parameters<typeof db.batch>[0]);
+
+      const rootResult = batchResults[0] as Array<{ id: string }>;
+      if (rootResult.length === 0) {
+        await reply.code(409).send({ error: 'status_changed' });
+        return;
+      }
+
       bus.emit({
         id: nanoid(),
         name: 'task.cancelled',
@@ -1022,6 +1208,10 @@ export function registerTaskRoutes(
         source,
         payload: { taskId, workspaceId },
       });
+
+      // Run dep-unblocking pass so tasks waiting on this task get their blockedReason updated
+      // to dep_cancelled:<id> and receive a task.dep_failed history event (DEDUP-023).
+      await runDepUnblockingPass(db, workspaceId);
 
       await reply.send({ id: taskId, status: 'cancelled' });
     },
@@ -1137,7 +1327,10 @@ export function registerTaskRoutes(
         return;
       }
 
-      // Fetch root task and validate it's a sequenced task
+      // Fetch root task and validate it's a sequenced root task (not itself a phase task).
+      // isNull(schema.tasks.phaseIndex) ensures taskId refers to a root, not a compound phase ID (DEDUP-026).
+      // FORGE_SEQUENCES_ENABLED is NOT checked here: the flag gates only new sequence creation.
+      // Existing in-flight sequences always complete via phase retry regardless of flag state (DEDUP-063).
       const rootTask = await db
         .select({
           id: schema.tasks.id,
@@ -1145,7 +1338,13 @@ export function registerTaskRoutes(
           sequenceSpec: schema.tasks.sequenceSpec,
         })
         .from(schema.tasks)
-        .where(and(eq(schema.tasks.id, taskId), eq(schema.tasks.workspaceId, workspaceId)))
+        .where(
+          and(
+            eq(schema.tasks.id, taskId),
+            eq(schema.tasks.workspaceId, workspaceId),
+            isNull(schema.tasks.phaseIndex),
+          ),
+        )
         .get();
 
       if (!rootTask) {
@@ -1195,18 +1394,54 @@ export function registerTaskRoutes(
         return;
       }
 
-      const source = `user:${user.id}`;
+      // Add null-guard for user session — preHandler guarantees a session, but defensive style (DEDUP-036).
+      const source = user ? `user:${user.id}` : 'system';
       const now = new Date();
 
-      await db
+      // Optimistic lock on status='failed' to detect races where the phase task exits 'failed'
+      // between our pre-check and this UPDATE (DEDUP-027). Also clear assignedDeviceId/assignedAt
+      // so stale-assignment logic does not try to re-assign the old device.
+      const phaseRetried = await db
         .update(schema.tasks)
-        .set({ status: 'pending_agent', result: null, updatedAt: now })
-        .where(eq(schema.tasks.id, phaseTaskId));
+        .set({
+          status: 'pending_agent',
+          result: null,
+          assignedDeviceId: null,
+          assignedAt: null,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(schema.tasks.id, phaseTaskId),
+            eq(schema.tasks.status, 'failed'),
+          ),
+        )
+        .returning({ id: schema.tasks.id });
 
-      await db
+      if (phaseRetried.length === 0) {
+        await reply.code(409).send({ error: 'phase_not_failed' });
+        return;
+      }
+
+      // Guard the root task UPDATE against races: if the root was cancelled between the phase
+      // fetch and this UPDATE, the unguarded UPDATE would silently un-cancel it (DEDUP-003).
+      // Only transition from sequenced_running or failed (the two valid states when a phase fails).
+      const rootRetried = await db
         .update(schema.tasks)
         .set({ status: 'sequenced_running', blockedReason: null, updatedAt: now })
-        .where(eq(schema.tasks.id, taskId));
+        .where(
+          and(
+            eq(schema.tasks.id, taskId),
+            inArray(schema.tasks.status, ['sequenced_running', 'failed']),
+          ),
+        )
+        .returning({ id: schema.tasks.id });
+
+      if (rootRetried.length === 0) {
+        // Root task is in a terminal status (e.g. cancelled) — cannot advance.
+        await reply.code(409).send({ error: 'root_task_terminal' });
+        return;
+      }
 
       await db.insert(schema.taskHistory).values({
         id: nanoid(),
@@ -1235,10 +1470,30 @@ export function registerTaskRoutes(
       const createdBy = `user:${getUser(req).id}`;
       const goalId = body.goalId || null;
 
-      // Feature flag check for sequences
+      // Feature flag check for sequences (gates new sequence creation only, not ongoing execution).
       if (body.sequenceSpec) {
         if (!process.env['FORGE_SEQUENCES_ENABLED']) {
           await reply.code(422).send({ error: 'sequences_disabled' });
+          return;
+        }
+
+        // Design doc Section 6.1: creating a sequenced task requires 'admin' role because
+        // phase prompt content constitutes arbitrary agent command injection to privileged roles.
+        // requireWorkspaceMember(db, 'collaborator') is used for the whole handler;
+        // escalate to 'admin' here when sequenceSpec is present (DEDUP-019).
+        const requester = getUser(req);
+        const membership = await db
+          .select({ role: schema.workspaceMembers.role })
+          .from(schema.workspaceMembers)
+          .where(
+            and(
+              eq(schema.workspaceMembers.workspaceId, workspaceId),
+              eq(schema.workspaceMembers.userId, requester.id),
+            ),
+          )
+          .get();
+        if (!membership || !rankAtLeast(membership.role, 'admin')) {
+          await reply.code(403).send({ error: 'admin_required_for_sequences' });
           return;
         }
       }
@@ -1271,12 +1526,15 @@ export function registerTaskRoutes(
 
       // Validate dependsOn
       const dependsOn = body.dependsOn ?? [];
+      // maxSeqFromDeps is set when cycle detection runs (dependsOn non-empty), so it can be reused for
+      // actual insertion without a second getMaxRootSeq call that could race and alias the same ID.
+      let maxSeqFromDeps: number | undefined;
       if (dependsOn.length > 0) {
-        // Fetch all referenced dep tasks in this workspace
+        // Fetch all referenced dep tasks in this workspace (add workspaceId filter at DB layer for safety)
         const depTasks = await db
           .select({ id: schema.tasks.id, phaseIndex: schema.tasks.phaseIndex, workspaceId: schema.tasks.workspaceId, dependsOn: schema.tasks.dependsOn })
           .from(schema.tasks)
-          .where(inArray(schema.tasks.id, dependsOn));
+          .where(and(inArray(schema.tasks.id, dependsOn), eq(schema.tasks.workspaceId, workspaceId)));
 
         const depTaskMap = new Map(depTasks.map((t) => [t.id, t]));
 
@@ -1301,20 +1559,43 @@ export function registerTaskRoutes(
           return;
         }
 
-        // Build adjacency map for cycle detection
+        // Build adjacency map for cycle detection from the FULL workspace task graph,
+        // not just the subgraph rooted at the new task's direct deps. Partial graphs miss
+        // transitive cycles through intermediate nodes not in this request's dependsOn array.
+        // Design doc Section 7: build the adjacency map from all existing tasks in workspace.
+        const allWorkspaceTasks = await db
+          .select({ id: schema.tasks.id, dependsOn: schema.tasks.dependsOn })
+          .from(schema.tasks)
+          .where(
+            and(
+              eq(schema.tasks.workspaceId, workspaceId),
+              isNull(schema.tasks.parentId),
+            ),
+          );
+
+        // Build adjacency map for cycle detection. The node set is all workspace task IDs.
+        // First pass: collect all workspace task IDs so we can filter cross-workspace edges.
+        // Second pass: parse each task's dependsOn and filter to only IDs present in the workspace
+        // to prevent historical cross-workspace data corruption from causing false-positive cycles (DEDUP-019).
+        const workspaceTaskIds = new Set(allWorkspaceTasks.map((t) => t.id));
         const existingEdges = new Map<string, string[]>();
-        for (const [, depTask] of depTaskMap.entries()) {
+        for (const wTask of allWorkspaceTasks) {
           try {
-            const deps = z.array(z.string()).parse(JSON.parse(depTask.dependsOn));
-            existingEdges.set(depTask.id, deps);
+            const deps = z.array(z.string()).parse(JSON.parse(wTask.dependsOn));
+            // Filter to only IDs within this workspace to avoid false-positive cycle detection
+            // from cross-workspace or orphaned dep references (DEDUP-019).
+            existingEdges.set(wTask.id, deps.filter((id) => workspaceTaskIds.has(id)));
           } catch {
-            existingEdges.set(depTask.id, []);
+            // Log corrupt dependsOn columns (consistent with unblocking pass pattern) (DEDUP-019).
+            console.warn('[cycle-detection] corrupt depends_on on task', wTask.id, '— treating as no deps');
+            existingEdges.set(wTask.id, []);
           }
         }
 
         // Get the new task ID to use for cycle detection (we need to compute it first)
-        const maxSeqForCycle = await getMaxRootSeq(db, body.projectPrefix);
-        const tentativeId = formatTaskId(body.projectPrefix, maxSeqForCycle + 1);
+        // Store in outer-scope variable so it can be reused for actual insertion (DEDUP-004).
+        maxSeqFromDeps = await getMaxRootSeq(db, body.projectPrefix);
+        const tentativeId = formatTaskId(body.projectPrefix, maxSeqFromDeps + 1);
 
         // Check self-dependency
         if (dependsOn.includes(tentativeId)) {
@@ -1329,18 +1610,22 @@ export function registerTaskRoutes(
         }
       }
 
-      const maxSeq = await getMaxRootSeq(db, body.projectPrefix);
+      // Use maxSeqFromDeps if it was computed during cycle detection (dependsOn non-empty),
+      // otherwise call getMaxRootSeq once here. Do NOT call getMaxRootSeq again when deps were present,
+      // as a second call could race and alias the same ID (DEDUP-004).
+      const maxSeq = maxSeqFromDeps !== undefined ? maxSeqFromDeps : await getMaxRootSeq(db, body.projectPrefix);
       const id = formatTaskId(body.projectPrefix, maxSeq + 1);
 
       // Determine initial status based on deps
+      // workspaceId filter is added at the DB layer as defense-in-depth (DEDUP-030).
       const allDepsDone =
         dependsOn.length === 0 ||
         (await (async () => {
           const depStatuses = await db
             .select({ id: schema.tasks.id, status: schema.tasks.status })
             .from(schema.tasks)
-            .where(inArray(schema.tasks.id, dependsOn));
-          return depStatuses.every((d) => TERMINAL_SUCCESS_STATUSES.has(d.status));
+            .where(and(inArray(schema.tasks.id, dependsOn), eq(schema.tasks.workspaceId, workspaceId)));
+          return depStatuses.every((d) => TERMINAL_SUCCESS_STATUSES.has(d.status as Parameters<typeof TERMINAL_SUCCESS_STATUSES.has>[0]));
         })());
 
       const assignedAgentId = body.assignedAgentId ?? null;
@@ -1352,7 +1637,9 @@ export function registerTaskRoutes(
         const specHash = createHash('sha256').update(specJson).digest('hex');
 
         if (!allDepsDone) {
-          // Task must wait for deps before phase-0 can start
+          // Task must wait for deps before phase-0 can start.
+          // blockedReason is left null (matching plain dep-blocked tasks) — use the status
+          // 'waiting_on_deps' as the display signal rather than duplicating it in blockedReason (DEDUP-012).
           await db.insert(schema.tasks).values({
             id,
             projectPrefix: body.projectPrefix,
@@ -1364,7 +1651,7 @@ export function registerTaskRoutes(
             workspaceId,
             assignedAgentId,
             status: 'waiting_on_deps',
-            blockedReason: 'waiting_on_deps',
+            blockedReason: null,
             taskKind: body.taskKind ?? 'coding',
             reviewConfig: body.reviewConfig ?? null,
             sequenceSpec: specJson,
@@ -1416,8 +1703,9 @@ export function registerTaskRoutes(
 
         const blockedReason = activeDevices.length === 0 ? `role_unavailable:${phase0.role}` : null;
 
-        // Insert root task
-        await db.insert(schema.tasks).values({
+        // Atomically insert root task + phase-0 task + history in a single libsql batch (DEDUP-002).
+        // A crash between two separate awaits would leave root created but phase-0 missing.
+        const rootInsert = db.insert(schema.tasks).values({
           id,
           projectPrefix: body.projectPrefix,
           title: body.title,
@@ -1438,9 +1726,7 @@ export function registerTaskRoutes(
           createdAt: now,
           updatedAt: now,
         });
-
-        // Insert phase-0 task
-        await db.insert(schema.tasks).values({
+        const phase0Insert = db.insert(schema.tasks).values({
           id: phase0Id,
           projectPrefix: body.projectPrefix,
           title: phase0.title,
@@ -1457,8 +1743,7 @@ export function registerTaskRoutes(
           createdAt: now,
           updatedAt: now,
         });
-
-        await db.insert(schema.taskHistory).values({
+        const createdHistoryInsert = db.insert(schema.taskHistory).values({
           id: nanoid(),
           taskId: id,
           eventName: 'task.created',
@@ -1467,15 +1752,24 @@ export function registerTaskRoutes(
           workspaceId,
         });
 
+        // Atomically insert root task + phase-0 task + history in a single libsql batch (DEDUP-002).
+        // A crash between two separate awaits would leave root created but phase-0 missing.
         if (blockedReason) {
-          await db.insert(schema.taskHistory).values({
-            id: nanoid(),
-            taskId: id,
-            eventName: 'task.phase_blocked',
-            source: 'system',
-            payload: { phase: 0, reason: blockedReason },
-            workspaceId,
-          });
+          await db.batch([
+            rootInsert,
+            phase0Insert,
+            createdHistoryInsert,
+            db.insert(schema.taskHistory).values({
+              id: nanoid(),
+              taskId: id,
+              eventName: 'task.phase_blocked',
+              source: 'system',
+              payload: { phase: 0, reason: blockedReason },
+              workspaceId,
+            }),
+          ] as Parameters<typeof db.batch>[0]);
+        } else {
+          await db.batch([rootInsert, phase0Insert, createdHistoryInsert] as Parameters<typeof db.batch>[0]);
         }
 
         bus.emit({
@@ -1498,7 +1792,11 @@ export function registerTaskRoutes(
       // worker picks it up. (The flat device endpoint POST /tasks keeps its own
       // default — it is the automation path and routes explicitly.)
       const initialStatus = !allDepsDone ? 'waiting_on_deps' : 'pending_agent';
-      const initialBlockedReason = !allDepsDone ? 'waiting_on_deps' : null;
+      // blockedReason is left null initially; the unblocking pass will set a specific reason
+      // (e.g. dep_cancelled:<id>, dep_failed:<id>) if a dep is cancelled or failed.
+      // Using the status name 'waiting_on_deps' as the reason is redundant and provides no
+      // actionable information beyond the status itself (DEDUP-037).
+      const initialBlockedReason = null;
 
       await db.insert(schema.tasks).values({
         id,
@@ -1545,6 +1843,15 @@ export function registerTaskRoutes(
       const { id: workspaceId } = getWorkspace(req);
       const includePhaseTasks = req.query.includePhaseTasks === 'true';
 
+      // parentId IS NULL excludes both phase tasks (which have parentId = root task ID) AND
+      // FM subtasks (which may also have a parentId from FM decomposition). This is intentional
+      // per design doc Section 6.7 (DEDUP-015). Do NOT change to phaseIndex IS NULL — that would
+      // include FM subtasks in the list response (DEDUP-062).
+      //
+      // Behavioral note (DEDUP-015): FM subtasks (tasks with parentId set via FM decomposition)
+      // are excluded from the default workspace task list. This is a deliberate design choice:
+      // the list shows root tasks only; FM subtasks are implementation details of FM triage.
+      // A test asserting this behavior exists in tasks.test.ts (T-FM-subtask-hidden).
       const whereClause = includePhaseTasks
         ? eq(schema.tasks.workspaceId, workspaceId)
         : and(eq(schema.tasks.workspaceId, workspaceId), isNull(schema.tasks.parentId));
@@ -1586,11 +1893,12 @@ export function registerTaskRoutes(
         return;
       }
 
-      // Sequenced root tasks must not be completed via the flat endpoint
+      // Sequenced root tasks must not be completed via the flat endpoint — they advance automatically
+      // via phase completion. Error code matches design doc Section 6.2 (DEDUP-009).
       if (task.sequenceSpec !== null && task.sequenceSpec !== undefined) {
         await reply.code(409).send({
           error: 'use_phase_complete',
-          message: 'Phase tasks must be completed via the workspace-scoped endpoint POST /workspaces/:id/tasks/:taskId/complete',
+          message: 'Sequenced root tasks advance automatically via phase completion. Complete individual phases via the workspace-scoped phases endpoint.',
         });
         return;
       }
@@ -1600,12 +1908,16 @@ export function registerTaskRoutes(
         return;
       }
 
+      // Cap the result before using it in both the DB update and the bus payload
+      // so the bus never receives the uncapped string (DEDUP-031).
+      const truncatedResultFlat = body.result ? body.result.slice(0, 4000) : null;
+
       // Optimistic lock: only complete if still in_progress
       const completedRows = await db
         .update(schema.tasks)
         .set({
           status: 'completed',
-          result: body.result ? body.result.slice(0, 4000) : null,
+          result: truncatedResultFlat,
           completedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -1644,8 +1956,15 @@ export function registerTaskRoutes(
         taskId: id,
         eventName: 'task.completed',
         source: `device:${device.id}`,
-        payload: { result: body.result ?? null, ...maybeRunId(req) },
+        payload: { result: truncatedResultFlat, ...maybeRunId(req) },
       });
+
+      // Run dep-unblocking pass BEFORE bus.emit so newly-unblocked tasks are visible
+      // to any subscriber that fires on task.completed (DEDUP-006).
+      if (task.workspaceId) {
+        await runDepUnblockingPass(db, task.workspaceId);
+      }
+
       bus.emit({
         id: nanoid(),
         name: 'task.completed',
@@ -1653,13 +1972,9 @@ export function registerTaskRoutes(
         source: `device:${device.id}`,
         // Include result and workspaceId so reactive listeners (e.g. Scribe)
         // can evaluate significance without extra round-trips.
-        payload: { taskId: id, result: body.result ?? null, workspaceId: task.workspaceId ?? null },
+        // Use truncatedResultFlat — never emit the uncapped body.result (DEDUP-031).
+        payload: { taskId: id, result: truncatedResultFlat, workspaceId: task.workspaceId ?? null },
       });
-
-      // Run dep-unblocking pass for workspace tasks waiting on this task
-      if (task.workspaceId) {
-        await runDepUnblockingPass(db, task.workspaceId);
-      }
 
       await reply.send({ ok: true });
     },
@@ -1680,6 +1995,18 @@ export function registerTaskRoutes(
       const taskId = TaskIdSchema.parse(req.params.taskId);
       const body = CompleteTaskBodySchema.parse(req.body ?? {});
 
+      // Validate workspace existence before device auth check to avoid leaking task existence
+      // to unauthenticated devices via 403 vs 404 discrimination (DEDUP-028).
+      const workspace = await db
+        .select({ id: schema.workspaces.id })
+        .from(schema.workspaces)
+        .where(eq(schema.workspaces.id, workspaceId))
+        .get();
+      if (!workspace) {
+        await reply.code(404).send({ error: 'workspace_not_found' });
+        return;
+      }
+
       const task = await db
         .select()
         .from(schema.tasks)
@@ -1696,14 +2023,97 @@ export function registerTaskRoutes(
         return;
       }
 
-      // Auth: only the assigned device may complete this task
-      if (task.assignedDeviceId !== device.id) {
-        await reply.code(403).send({ error: 'device_not_assigned' });
-        return;
+      // Auth: only the assigned device may complete this task.
+      // Phase tasks are created with assignedDeviceId=NULL; after claim the claim endpoint sets assignedDeviceId.
+      // Authorization uses a two-tier check (DEDUP-002):
+      //   1. Null guard: if either agentId is missing, reject immediately to prevent null==null false-pass.
+      //   2. Device-level: if the task has been claimed (assignedDeviceId set), check device.id matches.
+      //   3. Role-level fallback: if not yet claimed, check device.agentId matches task.assignedAgentId.
+      // Plain (non-phase) tasks use assignedDeviceId exclusively.
+      const isPhaseTask = task.phaseIndex !== null && task.phaseIndex !== undefined;
+      if (isPhaseTask) {
+        // Null guard: both agentIds must be non-null to prevent null !== null from evaluating false (DEDUP-002).
+        if (!device.agentId || !task.assignedAgentId) {
+          await reply.code(403).send({ error: 'device_not_assigned' });
+          return;
+        }
+        // If task has been claimed by a specific device, use device-level auth as the authoritative check.
+        // Fall back to role-level only for pre-claim state (assignedDeviceId is null).
+        if (task.assignedDeviceId !== null) {
+          if (task.assignedDeviceId !== device.id) {
+            await reply.code(403).send({ error: 'device_not_assigned' });
+            return;
+          }
+        } else {
+          if (device.agentId !== task.assignedAgentId) {
+            await reply.code(403).send({ error: 'device_not_assigned' });
+            return;
+          }
+        }
+      } else {
+        if (task.assignedDeviceId !== device.id) {
+          await reply.code(403).send({ error: 'device_not_assigned' });
+          return;
+        }
       }
 
       const truncatedResult = body.result ? body.result.slice(0, 4000) : null;
+      // 'task' is the pre-update snapshot. Decisions made after the optimistic UPDATE
+      // use fields read from this snapshot; they must not depend on post-write DB state.
       const now = new Date();
+      const source = `device:${device.id}`;
+
+      // Phase transition logic.
+      // FORGE_SEQUENCES_ENABLED gates only new sequence CREATION, not ongoing execution.
+      // Phase transitions must fire whenever phaseIndex IS NOT NULL AND parentId IS NOT NULL,
+      // regardless of the flag state. Removing the flag check here fixes split-brain where
+      // unblocking creates phase-0 tasks but completions don't advance them (DEDUP-006, DEDUP-032).
+      //
+      // Precondition validation (hash check + spec parse) runs BEFORE the optimistic UPDATE,
+      // so a validation failure never leaves the phase task permanently in 'completed' while
+      // the root task is not advanced (DEDUP-003).
+      let phaseParent: typeof schema.tasks.$inferSelect | null = null;
+      let phaseSpec: z.infer<typeof SequenceSpecSchema> | null = null;
+
+      if (
+        task.phaseIndex !== null &&
+        task.phaseIndex !== undefined &&
+        task.parentId !== null
+      ) {
+        // Fetch parent task
+        const parentRow = await db
+          .select()
+          .from(schema.tasks)
+          .where(eq(schema.tasks.id, task.parentId))
+          .get();
+
+        if (parentRow?.sequenceSpec) {
+          // Verify sequence_spec_hash integrity BEFORE any writes (DEDUP-003).
+          const computedHash = createHash('sha256').update(parentRow.sequenceSpec).digest('hex');
+          if (computedHash !== parentRow.sequenceSpecHash) {
+            await db.insert(schema.taskHistory).values({
+              id: nanoid(),
+              taskId: parentRow.id,
+              eventName: 'task.sequence_integrity_failure',
+              source: 'system',
+              payload: { computedHash, storedHash: parentRow.sequenceSpecHash },
+              workspaceId,
+            });
+            await reply.code(500).send({ error: 'sequence_integrity_failure' });
+            return;
+          }
+
+          // Parse spec BEFORE any writes (DEDUP-003).
+          try {
+            phaseSpec = SequenceSpecSchema.parse(JSON.parse(parentRow.sequenceSpec));
+          } catch {
+            await reply.code(500).send({ error: 'corrupt_sequence_spec' });
+            return;
+          }
+
+          phaseParent = parentRow;
+        }
+      }
 
       // Optimistic lock: only complete if still in_progress
       const completedRows = await db
@@ -1748,67 +2158,14 @@ export function registerTaskRoutes(
         return;
       }
 
-      const source = `device:${device.id}`;
-
-      // Phase transition logic
-      const sequencesEnabled = !!process.env['FORGE_SEQUENCES_ENABLED'];
       if (
-        sequencesEnabled &&
+        phaseParent !== null &&
+        phaseSpec !== null &&
         task.phaseIndex !== null &&
-        task.phaseIndex !== undefined &&
-        task.parentId !== null
+        task.phaseIndex !== undefined
       ) {
-        // Fetch parent task
-        const parent = await db
-          .select()
-          .from(schema.tasks)
-          .where(eq(schema.tasks.id, task.parentId))
-          .get();
-
-        if (!parent || !parent.sequenceSpec) {
-          // No parent or no sequence spec — fall through to regular completion
-          await db.insert(schema.taskHistory).values({
-            id: nanoid(),
-            taskId,
-            eventName: 'task.completed',
-            source,
-            payload: { result: truncatedResult, ...maybeRunId(req) },
-            workspaceId,
-          });
-          bus.emit({
-            id: nanoid(),
-            name: 'task.completed',
-            occurredAt: new Date(),
-            source,
-            payload: { taskId, result: truncatedResult, workspaceId },
-          });
-          await runDepUnblockingPass(db, workspaceId);
-          await reply.send({ ok: true });
-          return;
-        }
-
-        // Verify sequence_spec_hash integrity
-        const computedHash = createHash('sha256').update(parent.sequenceSpec).digest('hex');
-        if (computedHash !== parent.sequenceSpecHash) {
-          await db.insert(schema.taskHistory).values({
-            id: nanoid(),
-            taskId: parent.id,
-            eventName: 'task.sequence_integrity_failure',
-            source: 'system',
-            payload: { computedHash, storedHash: parent.sequenceSpecHash },
-            workspaceId,
-          });
-          await reply.code(500).send({ error: 'sequence_integrity_failure' });
-          return;
-        }
-
-        let spec: z.infer<typeof SequenceSpecSchema>;
-        try {
-          spec = SequenceSpecSchema.parse(JSON.parse(parent.sequenceSpec));
-        } catch {
-          await reply.code(500).send({ error: 'corrupt_sequence_spec' });
-          return;
-        }
+        const parent = phaseParent;
+        const spec = phaseSpec;
 
         const completingPhaseIndex = task.phaseIndex;
         const nextPhaseIndex = completingPhaseIndex + 1;
@@ -1843,8 +2200,71 @@ export function registerTaskRoutes(
           );
 
           if (activeDevices.length === 0) {
-            // Role unavailable — create phase task with pending_agent, update root blocked_reason
-            await db.insert(schema.tasks).values({
+            // Role unavailable — batch: next phase INSERT + root blocked_reason UPDATE + history INSERTs (DEDUP-002).
+            await db.batch([
+              db.insert(schema.tasks).values({
+                id: nextPhaseId,
+                workspaceId,
+                projectPrefix: parent.projectPrefix,
+                title: nextPhase.title,
+                description: nextDesc,
+                status: 'pending_agent',
+                priority: parent.priority,
+                parentId: parent.id,
+                phaseIndex: nextPhaseIndex,
+                assignedAgentId: nextPhase.role,
+                dependsOn: '[]',
+                taskKind: 'coding',
+                createdBy: 'system',
+                createdAt: now,
+                updatedAt: now,
+              }),
+              db
+                .update(schema.tasks)
+                .set({
+                  blockedReason: `role_unavailable:${nextPhase.role}`,
+                  updatedAt: now,
+                })
+                .where(eq(schema.tasks.id, parent.id)),
+              db.insert(schema.taskHistory).values({
+                id: nanoid(),
+                taskId,
+                eventName: 'task.completed',
+                source,
+                payload: { result: truncatedResult, phaseIndex: completingPhaseIndex, ...maybeRunId(req) },
+                workspaceId,
+              }),
+              db.insert(schema.taskHistory).values({
+                id: nanoid(),
+                taskId: parent.id,
+                eventName: 'task.phase_blocked',
+                source: 'system',
+                payload: { phase: nextPhaseIndex, reason: `role_unavailable:${nextPhase.role}` },
+                workspaceId,
+              }),
+            ] as Parameters<typeof db.batch>[0]);
+
+            // Run dep-unblocking pass BEFORE bus.emit so newly-unblocked tasks are visible
+            // to any subscriber that fires on task.completed (DEDUP-006).
+            await runDepUnblockingPass(db, workspaceId);
+
+            // Include phaseIndex in bus payload so daemon.ts can check p.phaseIndex !== null
+            // instead of relying on regex matching on the task ID string (DEDUP-049).
+            bus.emit({
+              id: nanoid(),
+              name: 'task.completed',
+              occurredAt: new Date(),
+              source,
+              payload: { taskId, workspaceId, phaseIndex: completingPhaseIndex },
+            });
+
+            await reply.send({ status: 'phase_blocked', reason: 'role_unavailable' });
+            return;
+          }
+
+          // Role available — batch: next phase INSERT + root status UPDATE + history INSERTs (DEDUP-002).
+          await db.batch([
+            db.insert(schema.tasks).values({
               id: nextPhaseId,
               workspaceId,
               projectPrefix: parent.projectPrefix,
@@ -1860,145 +2280,94 @@ export function registerTaskRoutes(
               createdBy: 'system',
               createdAt: now,
               updatedAt: now,
-            });
-
-            await db
+            }),
+            db
               .update(schema.tasks)
-              .set({
-                blockedReason: `role_unavailable:${nextPhase.role}`,
-                updatedAt: now,
-              })
-              .where(eq(schema.tasks.id, parent.id));
-
-            await db.insert(schema.taskHistory).values({
+              .set({ status: 'sequenced_running', updatedAt: now })
+              .where(eq(schema.tasks.id, parent.id)),
+            db.insert(schema.taskHistory).values({
               id: nanoid(),
               taskId,
               eventName: 'task.completed',
               source,
               payload: { result: truncatedResult, phaseIndex: completingPhaseIndex, ...maybeRunId(req) },
               workspaceId,
-            });
-
-            await db.insert(schema.taskHistory).values({
+            }),
+            db.insert(schema.taskHistory).values({
               id: nanoid(),
               taskId: parent.id,
-              eventName: 'task.phase_blocked',
+              eventName: 'task.phase_advanced',
               source: 'system',
-              payload: { phase: nextPhaseIndex, reason: `role_unavailable:${nextPhase.role}` },
+              payload: {
+                fromPhase: completingPhaseIndex,
+                toPhase: nextPhaseIndex,
+                phaseTaskId: nextPhaseId,
+              },
               workspaceId,
-            });
+            }),
+          ] as Parameters<typeof db.batch>[0]);
 
-            bus.emit({
-              id: nanoid(),
-              name: 'task.completed',
-              occurredAt: new Date(),
-              source,
-              payload: { taskId, workspaceId },
-            });
+          // Run dep-unblocking pass BEFORE bus.emit so newly-unblocked tasks are visible
+          // to any subscriber that fires on task.completed (DEDUP-006).
+          await runDepUnblockingPass(db, workspaceId);
 
-            await runDepUnblockingPass(db, workspaceId);
-            await reply.send({ status: 'phase_blocked', reason: 'role_unavailable' });
-            return;
-          }
-
-          // Insert next phase task
-          await db.insert(schema.tasks).values({
-            id: nextPhaseId,
-            workspaceId,
-            projectPrefix: parent.projectPrefix,
-            title: nextPhase.title,
-            description: nextDesc,
-            status: 'pending_agent',
-            priority: parent.priority,
-            parentId: parent.id,
-            phaseIndex: nextPhaseIndex,
-            assignedAgentId: nextPhase.role,
-            dependsOn: '[]',
-            taskKind: 'coding',
-            createdBy: 'system',
-            createdAt: now,
-            updatedAt: now,
+          // Include phaseIndex in bus payload so daemon.ts can check p.phaseIndex !== null
+          // instead of relying on regex matching on the task ID string (DEDUP-049).
+          bus.emit({
+            id: nanoid(),
+            name: 'task.completed',
+            occurredAt: new Date(),
+            source,
+            payload: { taskId, workspaceId, phaseIndex: completingPhaseIndex },
           });
 
-          await db
-            .update(schema.tasks)
-            .set({ status: 'sequenced_running', updatedAt: now })
-            .where(eq(schema.tasks.id, parent.id));
+          await reply.send({ ok: true, nextPhaseId });
+          return;
+        }
 
-          await db.insert(schema.taskHistory).values({
+        // All phases done — batch: root UPDATE to sequenced_complete + history INSERTs (DEDUP-002).
+        await db.batch([
+          db
+            .update(schema.tasks)
+            .set({
+              status: 'sequenced_complete',
+              result: truncatedResult,
+              completedAt: now,
+              updatedAt: now,
+            })
+            .where(eq(schema.tasks.id, parent.id)),
+          db.insert(schema.taskHistory).values({
             id: nanoid(),
             taskId,
             eventName: 'task.completed',
             source,
             payload: { result: truncatedResult, phaseIndex: completingPhaseIndex, ...maybeRunId(req) },
             workspaceId,
-          });
-
-          await db.insert(schema.taskHistory).values({
+          }),
+          db.insert(schema.taskHistory).values({
             id: nanoid(),
             taskId: parent.id,
-            eventName: 'task.phase_advanced',
+            eventName: 'task.sequence_complete',
             source: 'system',
-            payload: {
-              fromPhase: completingPhaseIndex,
-              toPhase: nextPhaseIndex,
-              phaseTaskId: nextPhaseId,
-            },
+            payload: { result: truncatedResult },
             workspaceId,
-          });
+          }),
+        ] as Parameters<typeof db.batch>[0]);
 
-          bus.emit({
-            id: nanoid(),
-            name: 'task.completed',
-            occurredAt: new Date(),
-            source,
-            payload: { taskId, workspaceId },
-          });
+        // Unblock tasks waiting on the root task (it just reached sequenced_complete).
+        // Run BEFORE bus.emit so newly-unblocked tasks are visible to subscribers (DEDUP-006).
+        await runDepUnblockingPass(db, workspaceId);
 
-          await runDepUnblockingPass(db, workspaceId);
-          await reply.send({ ok: true, nextPhaseId });
-          return;
-        }
-
-        // All phases done — complete the root task
-        await db
-          .update(schema.tasks)
-          .set({
-            status: 'sequenced_complete',
-            result: truncatedResult,
-            completedAt: now,
-            updatedAt: now,
-          })
-          .where(eq(schema.tasks.id, parent.id));
-
-        await db.insert(schema.taskHistory).values({
-          id: nanoid(),
-          taskId,
-          eventName: 'task.completed',
-          source,
-          payload: { result: truncatedResult, phaseIndex: completingPhaseIndex, ...maybeRunId(req) },
-          workspaceId,
-        });
-
-        await db.insert(schema.taskHistory).values({
-          id: nanoid(),
-          taskId: parent.id,
-          eventName: 'task.sequence_complete',
-          source: 'system',
-          payload: { result: truncatedResult },
-          workspaceId,
-        });
-
+        // Include phaseIndex in bus payload so daemon.ts can check p.phaseIndex !== null
+        // instead of relying on regex matching on the task ID string (DEDUP-049).
         bus.emit({
           id: nanoid(),
           name: 'task.completed',
           occurredAt: new Date(),
           source,
-          payload: { taskId, workspaceId },
+          payload: { taskId, workspaceId, phaseIndex: completingPhaseIndex },
         });
 
-        // Unblock tasks waiting on the root task (it just reached sequenced_complete)
-        await runDepUnblockingPass(db, workspaceId);
         await reply.send({ ok: true, sequenceComplete: true });
         return;
       }
@@ -2012,6 +2381,11 @@ export function registerTaskRoutes(
         payload: { result: truncatedResult, ...maybeRunId(req) },
         workspaceId,
       });
+
+      // Run dep-unblocking pass BEFORE bus.emit so newly-unblocked tasks are visible
+      // to any subscriber that fires on task.completed (DEDUP-006).
+      await runDepUnblockingPass(db, workspaceId);
+
       bus.emit({
         id: nanoid(),
         name: 'task.completed',
@@ -2020,7 +2394,6 @@ export function registerTaskRoutes(
         payload: { taskId, result: truncatedResult, workspaceId },
       });
 
-      await runDepUnblockingPass(db, workspaceId);
       await reply.send({ ok: true });
     },
   );
@@ -2038,7 +2411,14 @@ export function registerTaskRoutes(
       const id = TaskIdSchema.parse(req.params.id);
       const body = FailTaskBodySchema.parse(req.body ?? {});
       const task = await db
-        .select({ id: schema.tasks.id, status: schema.tasks.status, assignedDeviceId: schema.tasks.assignedDeviceId, workspaceId: schema.tasks.workspaceId })
+        .select({
+          id: schema.tasks.id,
+          status: schema.tasks.status,
+          assignedDeviceId: schema.tasks.assignedDeviceId,
+          workspaceId: schema.tasks.workspaceId,
+          phaseIndex: schema.tasks.phaseIndex,
+          parentId: schema.tasks.parentId,
+        })
         .from(schema.tasks)
         .where(eq(schema.tasks.id, id))
         .get();
@@ -2087,6 +2467,29 @@ export function registerTaskRoutes(
         payload: { taskId: id },
       });
 
+      // Propagate phase failure to root task so operators have a visible signal (DEDUP-015).
+      // When a phase task fails, the root remains in 'sequenced_running' with no blocked_reason
+      // unless we explicitly update it here.
+      if (task.phaseIndex !== null && task.phaseIndex !== undefined && task.parentId !== null) {
+        await db
+          .update(schema.tasks)
+          .set({
+            blockedReason: `phase_failed:${task.phaseIndex}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.tasks.id, task.parentId));
+        if (task.workspaceId) {
+          await db.insert(schema.taskHistory).values({
+            id: nanoid(),
+            taskId: task.parentId,
+            eventName: 'task.phase_blocked',
+            source: 'system',
+            payload: { phase: task.phaseIndex, reason: `phase_failed:${task.phaseIndex}` },
+            workspaceId: task.workspaceId,
+          });
+        }
+      }
+
       // Run dep-unblocking pass to propagate failure status to waiting tasks
       if (task.workspaceId) {
         await runDepUnblockingPass(db, task.workspaceId);
@@ -2099,6 +2502,9 @@ export function registerTaskRoutes(
   // ---------------------------------------------------------------------------
   // GET /workspaces/:workspaceId/tasks/:taskId
   // Returns the task with all sequencing fields + assembled phases array.
+  // TODO (v2): implement 'dependents' reverse-dep field via LIKE query on depends_on
+  // column, per design doc Section 6.6. The HubTask type intentionally has no
+  // 'dependents' field until it is populated by the server (DEDUP-038).
   // ---------------------------------------------------------------------------
 
   fastify.get<{ Params: { workspaceId: string; taskId: string } }>(
@@ -2147,7 +2553,13 @@ export function registerTaskRoutes(
             .from(schema.tasks)
             .where(and(eq(schema.tasks.parentId, taskId), isNotNull(schema.tasks.phaseIndex)));
 
-          const childMap = new Map(phaseChildren.map((c) => [c.phaseIndex!, c]));
+          // Filter to only children with a non-null phaseIndex (isNotNull predicate is a runtime
+          // guarantee but TypeScript cannot narrow through ORM query predicates — DEDUP-035).
+          const childMap = new Map(
+            phaseChildren
+              .filter((c): c is typeof c & { phaseIndex: number } => c.phaseIndex !== null)
+              .map((c) => [c.phaseIndex, c]),
+          );
 
           phases = spec.phases.map((phaseSpec, i) => {
             const child = childMap.get(i);
@@ -2169,16 +2581,31 @@ export function registerTaskRoutes(
         }
       }
 
+      // Validate dependsOn with Zod (consistent with unblocking pass pattern) to avoid
+      // unsafe casts if the column contains non-string values due to DB corruption (DEDUP-034).
       const dependsOn = (() => {
         try {
-          return JSON.parse(task.dependsOn) as string[];
+          return z.array(z.string()).parse(JSON.parse(task.dependsOn));
         } catch {
           return [] as string[];
         }
       })();
 
+      // Parse sequenceSpec from raw JSON string to object so the wire format matches
+      // HubTask.sequenceSpec: SequenceSpec | null (DEDUP-008). Spreading `...task` without
+      // this parse would return a raw string while TypeScript reports SequenceSpec | null.
+      const sequenceSpec = (() => {
+        if (!task.sequenceSpec) return null;
+        try {
+          return SequenceSpecSchema.parse(JSON.parse(task.sequenceSpec));
+        } catch {
+          return null;
+        }
+      })();
+
       return {
         ...task,
+        sequenceSpec,
         dependsOn,
         ...(phases !== undefined ? { phases } : {}),
       };
@@ -2365,6 +2792,79 @@ export function registerTaskRoutes(
       }
 
       return { requeued: staleIds.length };
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Stale phase task recovery (DEDUP-013). Phase tasks stuck in 'assigned' after
+  // their device goes offline are not covered by the plain stale-assigned requeue
+  // (which filters out phase tasks). This endpoint resets them to pending_agent
+  // and updates the root task's blocked_reason to 'stale_phase:<phaseIndex>'.
+  // Orchestrator-only.
+  // ---------------------------------------------------------------------------
+
+  fastify.post<{ Params: { workspaceId: string } }>(
+    '/workspaces/:workspaceId/tasks/stale-phase/requeue',
+    { preHandler: requireDevice },
+    async (req, reply) => {
+      const device = getDevice(req);
+      if (device.deviceType !== 'orchestrator') {
+        await reply.code(403).send({ error: 'orchestrator_required' });
+        return;
+      }
+      const { workspaceId } = req.params;
+      const { ttlMinutes } = StaleQuerySchema.parse(req.query);
+
+      const cutoff = new Date(Date.now() - ttlMinutes * 60 * 1000);
+      const source = `device:${device.id}`;
+
+      const stalePhase = await db
+        .select({
+          id: schema.tasks.id,
+          phaseIndex: schema.tasks.phaseIndex,
+          parentId: schema.tasks.parentId,
+        })
+        .from(schema.tasks)
+        .where(
+          and(
+            eq(schema.tasks.workspaceId, workspaceId),
+            eq(schema.tasks.status, 'assigned'),
+            isNotNull(schema.tasks.phaseIndex),
+            lt(schema.tasks.assignedAt, cutoff),
+          ),
+        );
+
+      if (stalePhase.length === 0) {
+        return { requeued: 0 };
+      }
+
+      let requeued = 0;
+      for (const phaseTask of stalePhase) {
+        if (phaseTask.phaseIndex === null || phaseTask.parentId === null) continue;
+
+        await db
+          .update(schema.tasks)
+          .set({ status: 'pending_agent', assignedDeviceId: null, assignedAt: null, updatedAt: new Date() })
+          .where(and(eq(schema.tasks.id, phaseTask.id), eq(schema.tasks.status, 'assigned')));
+
+        await db
+          .update(schema.tasks)
+          .set({ blockedReason: `stale_phase:${phaseTask.phaseIndex}`, updatedAt: new Date() })
+          .where(eq(schema.tasks.id, phaseTask.parentId));
+
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId: phaseTask.parentId,
+          eventName: 'task.phase_blocked',
+          source,
+          payload: { phase: phaseTask.phaseIndex, reason: `stale_phase:${phaseTask.phaseIndex}` },
+          workspaceId,
+        });
+
+        requeued++;
+      }
+
+      return { requeued };
     },
   );
 }
