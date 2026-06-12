@@ -19,7 +19,12 @@ COPY packages/forge-dash-community/package.json packages/forge-dash-community/ts
 
 RUN pnpm install --frozen-lockfile
 
-# Copy dash source (no workspace source deps — dash has no workspace imports)
+# Build forge-core so its dist/ is available to the dash build
+COPY packages/forge-core/src packages/forge-core/src
+COPY packages/forge-core/tsconfig.json packages/forge-core/tsconfig.build.json packages/forge-core/
+RUN pnpm --filter @forge-lab/core build
+
+# Copy dash source
 COPY packages/forge-dash-community/src packages/forge-dash-community/src
 COPY packages/forge-dash-community/public packages/forge-dash-community/public
 COPY packages/forge-dash-community/next.config.ts \
