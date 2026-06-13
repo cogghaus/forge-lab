@@ -135,8 +135,7 @@ services:
 
   forge-waker:
     build:
-      context: ..
-      dockerfile: deploy/waker/Dockerfile
+      context: ./waker
     container_name: forge-waker
     restart: always
     environment:
