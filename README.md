@@ -8,11 +8,12 @@ Hub server + local daemons + per-agent personalities + cross-device dashboard. T
 
 **Active development. All core systems operational.** Not yet recommended for production without reading the deployment runbook.
 
-- forge-hub: 325 tests passing
+- forge-hub: ~480 tests passing
 - forge-daemon: 117 tests passing
 - forge-agents: 27 tests passing
 
-See [docs/roadmap/current-state.md](docs/roadmap/current-state.md) for detailed status and gap analysis.
+See [docs/handoff/HANDOFF.md](docs/handoff/HANDOFF.md) for the authoritative current
+status and open work. (`docs/roadmap/current-state.md` is historical / superseded.)
 
 ## Packages
 
