@@ -27,6 +27,7 @@ services:
       FORGE_HUB_COOKIE_SECURE: "true"
       FORGE_HUB_SESSION_TTL_HOURS: "336"
       FORGE_HUB_BCRYPT_COST: "12"
+      FORGE_SEQUENCES_ENABLED: "1"  # gate for new sequenced-task creation (POST sequenceSpec); ongoing phase execution runs regardless
       RESEND_API_KEY: "${RESEND_API_KEY}"
       APP_BASE_URL: "${APP_BASE_URL:-https://lab.local.cogg.haus}"
     volumes:
