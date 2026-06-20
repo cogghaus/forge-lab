@@ -1,5 +1,11 @@
 # Paperclip Integration
 
+> **STALE (2026-06-20).** P2.0 (multi-tenancy) and most of P2.1 are already
+> **shipped** (migrations `0001`-`0004`). The starting prompt in
+> `04-claude-code-prompt.md` targets P2.0.1 and must NOT be followed as-is.
+> See [`docs/handoff/HANDOFF.md`](../handoff/HANDOFF.md) section 2 for what
+> actually remains on this track (P2.1 leftovers, P2.2-P2.4).
+
 Phase 2 work for forge-lab. Adopts patterns from [Paperclip](https://github.com/paperclipai/paperclip) (MIT-licensed agent orchestration platform) while preserving forge-lab's existing architecture decisions in `context/architecture.md`.
 
 ## Status

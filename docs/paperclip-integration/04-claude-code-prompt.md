@@ -1,5 +1,10 @@
 # Claude Code Prompt: Paperclip Integration P2.0.1
 
+> **DO NOT USE (2026-06-20).** P2.0.1 (workspaces + members) shipped weeks ago,
+> as did the rest of P2.0 and most of P2.1. This prompt is preserved only as a
+> template. For current work, see `docs/handoff/HANDOFF.md`.
+
+
 Drop this into a Claude Code session at the root of the forge-lab repo. Use it as the opening message of a fresh conversation in Claude Code. Adjust the `--workspaces` directive to target only what you want this session to touch.
 
 ---

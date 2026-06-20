@@ -1,8 +1,13 @@
 ---
 date: 2026-05-27
-status: Active
+status: Superseded
 maintained-by: Scribe
 ---
+
+> **SUPERSEDED (2026-06-20).** This document predates the shipping of Phases
+> A-G. All of Phases A through G, ADR-004, and Heimdall Phase 1+2 are now
+> **shipped**. Treat this file as historical. The authoritative current status
+> and open work live in [`docs/handoff/HANDOFF.md`](../handoff/HANDOFF.md).
 
 # forge-lab: Current State and Gap Analysis
 
