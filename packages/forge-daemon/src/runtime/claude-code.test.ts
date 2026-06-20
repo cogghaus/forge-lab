@@ -120,10 +120,46 @@ describe('ClaudeCodeRuntime', () => {
     expect(call.args).toEqual([
       '--system-prompt',
       'You are Scribe.',
+      '--model',
+      'claude-sonnet-4-6',
       'startup',
     ]);
     expect(call.options.cwd).toBe(workdir);
     expect(call.options.detached).toBe(true);
+  });
+
+  it('passes --model with sonnet default when no model is configured', async () => {
+    const { spawner, calls } = makeFakeSpawner();
+    const rt = new ClaudeCodeRuntime({ useWindowsTerminal: false, spawner });
+
+    await rt.spawn(
+      { agentId: 'a', personality: 'sys', workdir, taskId: 'fl-m01', config: {} },
+      'go',
+    );
+
+    const args = calls[0]!.args;
+    expect(args).toContain('--model');
+    const modelIdx = args.indexOf('--model');
+    expect(args[modelIdx + 1]).toBe('claude-sonnet-4-6');
+  });
+
+  it('passes --model with the configured model when set', async () => {
+    const { spawner, calls } = makeFakeSpawner();
+    const rt = new ClaudeCodeRuntime({
+      useWindowsTerminal: false,
+      model: 'claude-opus-4-8',
+      spawner,
+    });
+
+    await rt.spawn(
+      { agentId: 'a', personality: 'sys', workdir, taskId: 'fl-m02', config: {} },
+      'go',
+    );
+
+    const args = calls[0]!.args;
+    expect(args).toContain('--model');
+    const modelIdx = args.indexOf('--model');
+    expect(args[modelIdx + 1]).toBe('claude-opus-4-8');
   });
 
   it('passes --dangerously-skip-permissions when dangerouslySkipPermissions is true (direct spawn)', async () => {
