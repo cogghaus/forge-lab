@@ -1571,6 +1571,47 @@ describe('POST /tasks/:id/fail', () => {
     });
     expect(res.statusCode).toBe(401);
   });
+
+  it('orchestrator device gets policy_denied on task:fail (Heimdall enforcement)', async () => {
+    const taskId = await createTask(hub, cookie);
+    // Claim the task as the worker device (standard flow)
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    // Force-assign the task to the orchestrator device id so ownership check passes
+    const orchRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'fm-orch', agentId: 'forge-master', deviceType: 'orchestrator' },
+    });
+    const orchToken = (orchRes.json() as { token: string }).token;
+
+    // Try to fail with orchestrator -- policy check fires before ownership check
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${orchToken}` },
+      payload: { reason: 'test' },
+    });
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { error: string; action?: string };
+    expect(body.error).toBe('policy_denied');
+    expect(body.action).toBe('task:fail');
+  });
+
+  it('worker device can fail its own in_progress task (policy allow check)', async () => {
+    const taskId = await createAndClaimTask();
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { reason: 'policy allow test' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
 });
 
 describe('GET /tasks/stats', () => {
@@ -2329,7 +2370,7 @@ describe('POST /workspaces/:workspaceId/tasks/:taskId/cancel', () => {
       headers: { cookie },
     });
     expect(r1.statusCode).toBe(200);
-    // Second cancel: task is now cancelled (terminal) → already_terminal
+    // Second cancel: task is now cancelled (terminal) -> already_terminal
     const r2 = await hub.fastify.inject({
       method: 'POST',
       url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
@@ -2337,6 +2378,29 @@ describe('POST /workspaces/:workspaceId/tasks/:taskId/cancel', () => {
     });
     expect(r2.statusCode).toBe(409);
     expect((r2.json() as { error: string }).error).toBe('already_terminal');
+  });
+
+  it('task:cancel blocked by workspace DB deny rule returns policy_denied (Heimdall enforcement)', async () => {
+    // Create a workspace-scoped deny rule for all users on task:cancel.
+    // Before checkPolicy enforcement this rule is never evaluated and cancel succeeds.
+    // After enforcement the rule fires and returns policy_denied.
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/policy-rules`,
+      headers: { cookie },
+      payload: { principal: 'user:*', action: 'task:cancel', effect: 'deny', priority: 200 },
+    });
+
+    const taskId = await createWsTask('pending_agent');
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/cancel`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { error: string; action?: string };
+    expect(body.error).toBe('policy_denied');
+    expect(body.action).toBe('task:cancel');
   });
 });
 

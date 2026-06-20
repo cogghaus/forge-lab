@@ -6,6 +6,8 @@ import { CreateWorkspaceInputSchema, RepoUrlSchema, RepoBranchSchema, schema } f
 import type { Db } from '../db/index.js';
 import { hasUniqueConstraint } from '../db/errors.js';
 import { requireUser, requireDevice, requireWorkspaceMember, getUser, getWorkspace, getDevice } from '../auth/middleware.js';
+import { checkPolicy } from '../policy/engine.js';
+import { buildDevicePrincipal } from '../policy/principals.js';
 
 const ACTIVITY_LIMIT = 50;
 
@@ -237,8 +239,19 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
     { preHandler: requireDevice },
     async (req, reply) => {
       const device = getDevice(req);
-      if (device.deviceType !== 'orchestrator') {
-        await reply.code(403).send({ error: 'orchestrator_required' });
+      const principal = buildDevicePrincipal(device);
+      const decision = await checkPolicy(
+        principal,
+        'workspace:list',
+        { type: 'workspace' },
+        { db },
+      );
+      if (!decision.allowed) {
+        await reply.code(403).send({
+          error: 'policy_denied',
+          action: 'workspace:list',
+          principal: decision.principal,
+        });
         return;
       }
       const rows = await db
@@ -260,11 +273,22 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
     { preHandler: requireDevice },
     async (req, reply) => {
       const device = getDevice(req);
-      if (device.deviceType !== 'orchestrator') {
-        await reply.code(403).send({ error: 'orchestrator_required' });
+      const workspaceId = req.params.workspaceId;
+      const principal = buildDevicePrincipal(device);
+      const ctxDecision = await checkPolicy(
+        principal,
+        'context:read',
+        { type: 'workspace', workspaceId },
+        { db, workspaceId },
+      );
+      if (!ctxDecision.allowed) {
+        await reply.code(403).send({
+          error: 'policy_denied',
+          action: 'context:read',
+          principal: ctxDecision.principal,
+        });
         return;
       }
-      const workspaceId = req.params.workspaceId;
 
       const [
         docs,

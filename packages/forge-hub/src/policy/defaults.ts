@@ -133,14 +133,72 @@ export const BUILT_IN_RULES: readonly BuiltInRule[] = [
     priority: 100,
   },
 
-  // ── Priority 50: worker allows ──────────────────────────────────────────
+  // ---- Priority 150: backward-compat orchestrator allows -----------------
 
-  // Workers claim tasks — that is their primary function.
+  // Any orchestrator may read the FM context bundle and enumerate workspaces.
+  // To be tightened to agent:forge-master only once Heimdall is stable in
+  // production (Phase 2 hardening).
+  {
+    id: 'builtin_orchestrator_context_read_allow_compat',
+    principal: 'role:orchestrator',
+    action: 'context:read',
+    effect: 'allow',
+    priority: 150,
+  },
+  {
+    id: 'builtin_orchestrator_workspace_list_allow_compat',
+    principal: 'role:orchestrator',
+    action: 'workspace:list',
+    effect: 'allow',
+    priority: 150,
+  },
+  // Any orchestrator may update, supersede, or archive docs. To be tightened
+  // to agent:scribe once Heimdall is stable.
+  {
+    id: 'builtin_orchestrator_doc_update_allow_compat',
+    principal: 'role:orchestrator',
+    action: 'doc:update',
+    effect: 'allow',
+    priority: 150,
+  },
+  {
+    id: 'builtin_orchestrator_doc_supersede_allow_compat',
+    principal: 'role:orchestrator',
+    action: 'doc:supersede',
+    effect: 'allow',
+    priority: 150,
+  },
+  {
+    id: 'builtin_orchestrator_doc_archive_allow_compat',
+    principal: 'role:orchestrator',
+    action: 'doc:archive',
+    effect: 'allow',
+    priority: 150,
+  },
+
+  // ---- Priority 50: worker allows -----------------------------------------
+
+  // Workers claim tasks -- that is their primary function.
   // The SQL agentId filter in the claim handler is defense-in-depth.
   {
     id: 'builtin_worker_task_claim_allow',
     principal: 'role:worker',
     action: 'task:claim',
+    effect: 'allow',
+    priority: 50,
+  },
+  // Workers complete and fail tasks they have claimed.
+  {
+    id: 'builtin_worker_task_complete_allow',
+    principal: 'role:worker',
+    action: 'task:complete',
+    effect: 'allow',
+    priority: 50,
+  },
+  {
+    id: 'builtin_worker_task_fail_allow',
+    principal: 'role:worker',
+    action: 'task:fail',
     effect: 'allow',
     priority: 50,
   },
@@ -175,6 +233,22 @@ export const BUILT_IN_RULES: readonly BuiltInRule[] = [
     id: 'builtin_user_doc_update_allow',
     principal: 'user:*',
     action: 'doc:update',
+    condition: { type: 'workspace_role_gte', role: 'collaborator' },
+    effect: 'allow',
+    priority: 50,
+  },
+  {
+    id: 'builtin_user_doc_supersede_allow',
+    principal: 'user:*',
+    action: 'doc:supersede',
+    condition: { type: 'workspace_role_gte', role: 'collaborator' },
+    effect: 'allow',
+    priority: 50,
+  },
+  {
+    id: 'builtin_user_doc_archive_allow',
+    principal: 'user:*',
+    action: 'doc:archive',
     condition: { type: 'workspace_role_gte', role: 'collaborator' },
     effect: 'allow',
     priority: 50,
