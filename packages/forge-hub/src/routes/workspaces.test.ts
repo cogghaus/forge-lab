@@ -646,7 +646,7 @@ describe('GET /workspaces/:workspaceId/context', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('returns 403 for worker-type device (non-orchestrator)', async () => {
+  it('returns 403 policy_denied for worker-type device (Heimdall context:read enforcement)', async () => {
     const workerRes = await hub.fastify.inject({
       method: 'POST',
       url: '/devices',
@@ -661,7 +661,9 @@ describe('GET /workspaces/:workspaceId/context', () => {
       headers: { authorization: `Bearer ${workerToken}` },
     });
     expect(res.statusCode).toBe(403);
-    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+    const body = res.json() as { error: string; action?: string };
+    expect(body.error).toBe('policy_denied');
+    expect(body.action).toBe('context:read');
   });
 
   it('returns all context keys with empty data for a fresh workspace', async () => {
@@ -1250,14 +1252,16 @@ describe('GET /dispatcher/workspaces', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('returns 403 for worker-type device', async () => {
+  it('returns 403 policy_denied for worker-type device (Heimdall workspace:list enforcement)', async () => {
     const res = await hub.fastify.inject({
       method: 'GET',
       url: '/dispatcher/workspaces',
       headers: { authorization: `Bearer ${workerToken}` },
     });
     expect(res.statusCode).toBe(403);
-    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+    const body = res.json() as { error: string; action?: string };
+    expect(body.error).toBe('policy_denied');
+    expect(body.action).toBe('workspace:list');
   });
 
   it('returns empty array when no workspaces exist', async () => {
