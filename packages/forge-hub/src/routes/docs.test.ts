@@ -577,4 +577,86 @@ describe('/workspaces/:workspaceId/docs', () => {
     expect(res.statusCode).toBe(403);
     expect((res.json() as { error: string }).error).toBe('orchestrator_required');
   });
+
+  // Heimdall Phase 3: PATCH enforcement tests (failing-first)
+
+  it('worker device gets policy_denied on doc:update (PATCH with content change)', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { key: 'patch-test-update', title: 'Patch Update Test', content: 'Initial.', category: 'adr' },
+    });
+
+    const workerToken = await registerWorker(hub, cookie);
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/docs/patch-test-update`,
+      headers: { authorization: `Bearer ${workerToken}` },
+      payload: { content: 'Updated content.' },
+    });
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { error: string; action?: string };
+    expect(body.error).toBe('policy_denied');
+    expect(body.action).toBe('doc:update');
+  });
+
+  it('worker device gets policy_denied on doc:archive (PATCH with status=archived)', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { key: 'patch-test-archive', title: 'Patch Archive Test', content: 'Content.', category: 'adr' },
+    });
+
+    const workerToken = await registerWorker(hub, cookie);
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/docs/patch-test-archive`,
+      headers: { authorization: `Bearer ${workerToken}` },
+      payload: { status: 'archived' },
+    });
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { error: string; action?: string };
+    expect(body.error).toBe('policy_denied');
+    expect(body.action).toBe('doc:archive');
+  });
+
+  it('worker device gets policy_denied on doc:supersede (PATCH with status=superseded)', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { key: 'patch-test-supersede', title: 'Patch Supersede Test', content: 'Content.', category: 'adr' },
+    });
+
+    const workerToken = await registerWorker(hub, cookie);
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/docs/patch-test-supersede`,
+      headers: { authorization: `Bearer ${workerToken}` },
+      payload: { status: 'superseded', supersededReason: 'replaced' },
+    });
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { error: string; action?: string };
+    expect(body.error).toBe('policy_denied');
+    expect(body.action).toBe('doc:supersede');
+  });
+
+  it('orchestrator device can update a doc via PATCH (doc:update compat allow)', async () => {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { key: 'patch-orch-update', title: 'Orch Update Test', content: 'Initial.', category: 'adr' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/docs/patch-orch-update`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { content: 'Updated by orchestrator.' },
+    });
+    expect(res.statusCode).toBe(200);
+  });
 });

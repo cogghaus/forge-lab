@@ -7,6 +7,7 @@ import type { Db } from '../db/index.js';
 import { hasUniqueConstraint } from '../db/errors.js';
 import { getDevice } from '../auth/middleware.js';
 import { checkPolicy } from '../policy/engine.js';
+import type { PolicyPrincipal } from '../policy/engine.js';
 import { buildDevicePrincipal } from '../policy/principals.js';
 
 // ---------------------------------------------------------------------------
@@ -196,19 +197,16 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
     },
   );
 
-  // PATCH /:key — update content/title, archive, or supersede.
+  // PATCH /:key - update content/title, archive, or supersede.
   fastify.patch<{ Params: { workspaceId: string; key: string } }>(
     '/workspaces/:workspaceId/docs/:key',
     async (req, reply) => {
       const { workspaceId, key } = req.params;
       let updatedBy: string;
+      let memberRole: 'owner' | 'admin' | 'collaborator' | 'viewer' | undefined;
 
       if (req.authDevice) {
         const device = getDevice(req);
-        if (device.deviceType !== 'orchestrator') {
-          await reply.code(403).send({ error: 'orchestrator_required' });
-          return;
-        }
         updatedBy = device.agentId ?? `device:${device.id}`;
       } else if (req.authUser) {
         const member = await db
@@ -226,6 +224,7 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
           return;
         }
         updatedBy = `user:${req.authUser.id}`;
+        memberRole = member.role as 'owner' | 'admin' | 'collaborator' | 'viewer';
       } else {
         await reply.code(401).send({ error: 'unauthorized' });
         return;
@@ -235,6 +234,55 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
       if (Object.keys(body).length === 0) {
         await reply.code(400).send({ error: 'no_fields' });
         return;
+      }
+
+      // Determine action for policy check from the body.
+      const docAction =
+        body.status === 'archived'
+          ? 'doc:archive'
+          : body.status === 'superseded'
+          ? 'doc:supersede'
+          : 'doc:update';
+
+      // Heimdall policy check for both device and user principals.
+      if (req.authDevice) {
+        const device = getDevice(req);
+        const principal = buildDevicePrincipal(device);
+        const decision = await checkPolicy(
+          principal,
+          docAction,
+          { type: 'doc', workspaceId },
+          { db, workspaceId },
+        );
+        if (!decision.allowed) {
+          await reply.code(403).send({
+            error: 'policy_denied',
+            action: docAction,
+            principal: decision.principal,
+          });
+          return;
+        }
+      } else if (req.authUser && memberRole !== undefined) {
+        const userPrincipal: PolicyPrincipal = {
+          type: 'user',
+          id: req.authUser.id,
+          memberWorkspaces: [workspaceId],
+          workspaceRole: memberRole,
+        };
+        const decision = await checkPolicy(
+          userPrincipal,
+          docAction,
+          { type: 'doc', workspaceId },
+          { db, workspaceId },
+        );
+        if (!decision.allowed) {
+          await reply.code(403).send({
+            error: 'policy_denied',
+            action: docAction,
+            principal: decision.principal,
+          });
+          return;
+        }
       }
 
       const existing = await db

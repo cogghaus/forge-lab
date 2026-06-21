@@ -16,6 +16,7 @@ import type { Db } from '../db/index.js';
 import { requireDevice, getDevice, requireWorkspaceMember, getWorkspace, getUser } from '../auth/middleware.js';
 import type { EventBus } from '../events/bus.js';
 import { checkPolicy } from '../policy/engine.js';
+import type { PolicyPrincipal } from '../policy/engine.js';
 import { buildDevicePrincipal } from '../policy/principals.js';
 
 const CompleteTaskBodySchema = z.object({
@@ -1052,10 +1053,33 @@ export function registerTaskRoutes(
     '/workspaces/:workspaceId/tasks/:taskId/cancel',
     { preHandler: requireWorkspaceMember(db, 'collaborator') },
     async (req, reply) => {
-      const { id: workspaceId } = getWorkspace(req);
+      const workspace = getWorkspace(req);
+      const workspaceId = workspace.id;
       const user = getUser(req);
       const taskId = TaskIdSchema.parse(req.params.taskId);
       const body = CancelTaskBodySchema.parse(req.body ?? {});
+
+      // Heimdall policy check: user:* allow task:cancel (workspace_member condition).
+      const cancelPrincipal: PolicyPrincipal = {
+        type: 'user',
+        id: user.id,
+        memberWorkspaces: [workspaceId],
+        workspaceRole: workspace.role,
+      };
+      const cancelDecision = await checkPolicy(
+        cancelPrincipal,
+        'task:cancel',
+        { type: 'task', workspaceId },
+        { db, workspaceId },
+      );
+      if (!cancelDecision.allowed) {
+        await reply.code(403).send({
+          error: 'policy_denied',
+          action: 'task:cancel',
+          principal: cancelDecision.principal,
+        });
+        return;
+      }
 
       const task = await db
         .select({ id: schema.tasks.id, status: schema.tasks.status, phaseIndex: schema.tasks.phaseIndex })
@@ -1227,10 +1251,33 @@ export function registerTaskRoutes(
     '/workspaces/:workspaceId/tasks/:taskId/retry',
     { preHandler: requireWorkspaceMember(db, 'collaborator') },
     async (req, reply) => {
-      const { id: workspaceId } = getWorkspace(req);
+      const workspace = getWorkspace(req);
+      const workspaceId = workspace.id;
       const user = getUser(req);
       const taskId = TaskIdSchema.parse(req.params.taskId);
       const body = RetryTaskBodySchema.parse(req.body ?? {});
+
+      // Heimdall policy check: user:* allow task:retry (workspace_member condition).
+      const retryPrincipal: PolicyPrincipal = {
+        type: 'user',
+        id: user.id,
+        memberWorkspaces: [workspaceId],
+        workspaceRole: workspace.role,
+      };
+      const retryDecision = await checkPolicy(
+        retryPrincipal,
+        'task:retry',
+        { type: 'task', workspaceId },
+        { db, workspaceId },
+      );
+      if (!retryDecision.allowed) {
+        await reply.code(403).send({
+          error: 'policy_denied',
+          action: 'task:retry',
+          principal: retryDecision.principal,
+        });
+        return;
+      }
 
       const task = await db
         .select({
@@ -1884,6 +1931,24 @@ export function registerTaskRoutes(
       const device = getDevice(req);
       const id = TaskIdSchema.parse(req.params.id);
       const body = CompleteTaskBodySchema.parse(req.body ?? {});
+
+      // Heimdall policy check: role:worker allow task:complete.
+      const completePrincipal = buildDevicePrincipal(device);
+      const completeDecision = await checkPolicy(
+        completePrincipal,
+        'task:complete',
+        { type: 'task', id },
+        { db },
+      );
+      if (!completeDecision.allowed) {
+        await reply.code(403).send({
+          error: 'policy_denied',
+          action: 'task:complete',
+          principal: completeDecision.principal,
+        });
+        return;
+      }
+
       const task = await db.select().from(schema.tasks).where(eq(schema.tasks.id, id)).get();
       if (!task) {
         await reply.code(404).send({ error: 'not_found' });
@@ -2000,6 +2065,23 @@ export function registerTaskRoutes(
       const { workspaceId } = req.params;
       const taskId = TaskIdSchema.parse(req.params.taskId);
       const body = CompleteTaskBodySchema.parse(req.body ?? {});
+
+      // Heimdall policy check: role:worker allow task:complete.
+      const wsCompletePrincipal = buildDevicePrincipal(device);
+      const wsCompleteDecision = await checkPolicy(
+        wsCompletePrincipal,
+        'task:complete',
+        { type: 'task', id: taskId, workspaceId },
+        { db, workspaceId },
+      );
+      if (!wsCompleteDecision.allowed) {
+        await reply.code(403).send({
+          error: 'policy_denied',
+          action: 'task:complete',
+          principal: wsCompleteDecision.principal,
+        });
+        return;
+      }
 
       // Validate workspace existence before device auth check to avoid leaking task existence
       // to unauthenticated devices via 403 vs 404 discrimination (DEDUP-028).
@@ -2416,6 +2498,24 @@ export function registerTaskRoutes(
       const device = getDevice(req);
       const id = TaskIdSchema.parse(req.params.id);
       const body = FailTaskBodySchema.parse(req.body ?? {});
+
+      // Heimdall policy check: role:worker allow task:fail.
+      const failPrincipal = buildDevicePrincipal(device);
+      const failDecision = await checkPolicy(
+        failPrincipal,
+        'task:fail',
+        { type: 'task', id },
+        { db },
+      );
+      if (!failDecision.allowed) {
+        await reply.code(403).send({
+          error: 'policy_denied',
+          action: 'task:fail',
+          principal: failDecision.principal,
+        });
+        return;
+      }
+
       const task = await db
         .select({
           id: schema.tasks.id,
