@@ -137,9 +137,8 @@ export interface DaemonOptions {
   gitOps?: GitOps;
   /**
    * How many times to re-spawn a worker task whose agent died with a transient
-   * auth-failure signature (e.g. the shared OAuth token rotating mid-run). The
-   * winning daemon writes fresh credentials, so a retry reads a valid token.
-   * After the limit the task is marked failed instead of stuck in_progress.
+   * auth failure (e.g. an invalid or rotated ANTHROPIC_API_KEY). After the
+   * limit the task is marked failed instead of stuck in_progress.
    * Default: 2.
    */
   authRetryLimit?: number;
@@ -424,21 +423,17 @@ export class Daemon {
     }
   }
 
-  /**
-   * Markers in a dead agent's log that indicate a transient auth failure (the
-   * shared OAuth token rotating mid-run), as opposed to a real task failure.
-   */
-  // Anchored on the claude CLI's own auth prompts ("... · Please run /login")
-  // and OAuth refresh failures — phrases unlikely to appear in normal task
-  // output, to avoid misclassifying a real crash whose text mentions auth.
+  // Anchored on the claude CLI's own auth prompts ("... Please run /login")
+  // and API key rejection messages. Phrases unlikely to appear in normal task
+  // output, preventing misclassification of real crashes that mention auth.
   private static readonly AUTH_FAILURE_RE =
-    /please run \/login|invalid_grant|invalid api key|oauth[^\n]{0,40}(expired|invalid|error)/i;
+    /please run \/login|invalid api key/i;
 
   /**
    * A worker task whose agent died without writing its done file. If the agent
-   * log shows a transient auth failure and we're under the retry limit, re-spawn
-   * (by now the winning daemon has written fresh shared credentials). Otherwise
-   * fail the task so it is not left stuck in_progress.
+   * log shows a transient auth failure (invalid API key or auth prompt) and we
+   * are under the retry limit, re-spawn. Otherwise fail the task so it is not
+   * left stuck in_progress.
    */
   private async handleDeadWorkerTask(taskId: string): Promise<void> {
     // The agent may have finished in the gap between the isAlive probe and now.
