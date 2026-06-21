@@ -76,8 +76,9 @@ export interface ClaudeCodeRuntimeOptions {
    */
   dangerouslySkipPermissions?: boolean;
   /**
-   * Claude model to use. When set, passes `--model <model>` to claude.
-   * When unset, claude uses its own default.
+   * Claude model to use. Passed as `--model <model>` to claude.
+   * Defaults to 'claude-sonnet-4-6' when unset to prevent the claude CLI
+   * from falling back to Opus.
    */
   model?: string;
   /** Extra environment variables merged into the spawned process env. */
@@ -140,9 +141,8 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       .replace('{taskId}', config.taskId ?? 'idle');
 
     const claudeArgs: string[] = ['--system-prompt', systemPrompt];
-    if (this.model) {
-      claudeArgs.push('--model', this.model);
-    }
+    const model = this.model ?? 'claude-sonnet-4-6';
+    claudeArgs.push('--model', model);
     if (this.dangerouslySkipPermissions) {
       claudeArgs.push('--dangerously-skip-permissions');
     }
