@@ -1,5 +1,5 @@
 {
-  "_comment": "forge-lab project-level Claude Code settings. Uses bypassPermissions mode so spawned agents (reviewers, workers) run without prompting on every tool use. This is a personal dev project on Adam's machine; the git history is the safety net. No Stop hooks: forge-lab agents do discrete tasks and exit cleanly, the Planning Hub dispatches follow-up work rather than a worker loop. vibe-forge's worker-loop hook is deliberately NOT inherited here.",
+  "_comment": "forge-lab project-level Claude Code settings. Uses bypassPermissions mode so spawned agents run without prompting. AGENT MODEL LOCKED TO SONNET - Opus burned $95 in 2 days via forge-daemon runaway. Use --model flag explicitly in main window if Opus is needed for design work. API key disabled 2026-06-13 pending spend audit.",
   "permissions": {
     "defaultMode": "bypassPermissions",
     "allow": [
@@ -73,5 +73,6 @@
     "PreToolUse": [],
     "PostToolUse": [],
     "SessionStart": []
-  }
+  },
+  "model": "claude-sonnet-4-6"
 }
