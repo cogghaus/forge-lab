@@ -64,8 +64,8 @@ export default async function WorkspaceLayout({
 
   const stats = {
     active: countStatus(tasks, ['assigned', 'in_progress']),
-    pending: countStatus(tasks, ['pending_agent', 'pending_design']),
-    review: countStatus(tasks, ['design_review', 'pending_dispatcher_action']),
+    pending: countStatus(tasks, ['pending_agent', 'pending_design', 'pending_dispatcher_action']),
+    review: countStatus(tasks, ['design_review']),
     done: countStatus(tasks, ['completed']),
   };
 

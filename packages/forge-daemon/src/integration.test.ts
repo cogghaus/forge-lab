@@ -385,7 +385,8 @@ describe('integration: description truncation + empty personality fallback', () 
     expect(lastSpawnPrompt.length).toBeLessThanOrEqual(9_000);
     expect(lastSpawnPrompt).toContain('Trunc task');
     // Done-file instruction still present even with truncated description
-    expect(lastSpawnPrompt).toContain('.forge/tasks/');
+    // (absolute path — see issue 3)
+    expect(lastSpawnPrompt).toContain(doneFilePath(workdir, taskId));
   });
 
   it('initialPrompt includes done-file write instruction with taskId', { timeout: 20000 }, async () => {
@@ -406,9 +407,41 @@ describe('integration: description truncation + empty personality fallback', () 
 
     // Initial prompt must include explicit done-file write instruction so agents
     // actually write the file (not just describe writing it in text output).
-    expect(lastSpawnPrompt).toContain('.forge/tasks/');
     expect(lastSpawnPrompt).toContain(taskId);
     expect(lastSpawnPrompt).toContain('.done');
+  });
+
+  it('initialPrompt names the ABSOLUTE done path and workdir preamble for non-repo-bound spawns (issue 3)', { timeout: 20000 }, async () => {
+    const createRes = await fetch(`${hubUrl}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: sessionCookie },
+      body: JSON.stringify({ projectPrefix: 'tr', title: 'Absolute done path test' }),
+    });
+    expect(createRes.status).toBe(201);
+    const { id: taskId } = (await createRes.json()) as { id: string };
+
+    await waitFor(async () => {
+      const res = await fetch(`${hubUrl}/tasks/${taskId}`, { headers: { cookie: sessionCookie } });
+      if (!res.ok) return null;
+      const task = (await res.json()) as { status: string };
+      return task.status === 'completed' ? task : null;
+    }, 12000);
+
+    // Issue 3: the relative '.forge/tasks/<id>.done' let agents that resolved
+    // "repository root" to a PARENT directory write the done file outside the
+    // watched workdir — successful runs were marked failed. The instruction must
+    // name the absolute path (same as the repo-bound branch).
+    expect(lastSpawnPrompt).toContain(`\`${doneFilePath(workdir, taskId)}\``);
+
+    // And the prompt must open with an explicit working-directory preamble so
+    // the agent never re-resolves the project root to a parent directory.
+    const preamble =
+      `Your working directory and project root is exactly ${workdir}. ` +
+      'Do all work inside it. Do not treat any parent or other directory as the repository root.';
+    expect(lastSpawnPrompt).toContain(preamble);
+    expect(lastSpawnPrompt.indexOf(preamble)).toBeLessThan(
+      lastSpawnPrompt.indexOf('Absolute done path test'),
+    );
   });
 
   it('empty defaultPersonality falls back to non-empty string (not blank --system-prompt)', { timeout: 20000 }, async () => {

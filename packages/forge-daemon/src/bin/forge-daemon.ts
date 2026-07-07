@@ -80,6 +80,7 @@ async function main(): Promise<void> {
     runtimes,
     defaultRuntimeId: config.defaultRuntimeId,
     defaultAgentId: config.defaultAgentId,
+    defaultAgentIdWasDefaulted: config.defaultAgentIdWasDefaulted,
     ...(personalityRegistry !== undefined && { personalityRegistry }),
     ...(config.workspaceId !== undefined && { workspaceId: config.workspaceId }),
     ...(config.dispatcherMode && { dispatcherMode: true }),

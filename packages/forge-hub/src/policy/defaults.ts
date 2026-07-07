@@ -202,6 +202,17 @@ export const BUILT_IN_RULES: readonly BuiltInRule[] = [
     effect: 'allow',
     priority: 50,
   },
+  // FM quarantine (issue 44): the dispatcher fails tasks stuck in
+  // pending_dispatcher_action after repeated triage deferrals. The route
+  // handler restricts orchestrator fails to exactly that status; this rule
+  // only opens the policy gate.
+  {
+    id: 'builtin_orchestrator_task_fail_allow',
+    principal: 'role:orchestrator',
+    action: 'task:fail',
+    effect: 'allow',
+    priority: 50,
+  },
 
   // ── Priority 50: user allows scoped by workspace ─────────────────────────
 

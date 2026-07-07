@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { and, asc, count, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { CreateWorkspaceInputSchema, RepoUrlSchema, RepoBranchSchema, schema } from '@forge-lab/core';
+import { CreateWorkspaceInputSchema, RepoUrlSchema, RepoBranchSchema, DEFAULT_WORKSPACE_AGENT_ROSTER, schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { hasUniqueConstraint } from '../db/errors.js';
 import { requireUser, requireDevice, requireWorkspaceMember, getUser, getWorkspace, getDevice } from '../auth/middleware.js';
@@ -60,6 +60,20 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
       userId: user.id,
       role: 'owner',
     });
+    // Seed the default agent roster (issue 43). A fresh workspace with an empty
+    // agents table makes FM triage defer forever ('no agents registered in
+    // workspace') until someone manually registers agents, so every workspace
+    // starts with the standard ADR-004 fleet. Personality names double as the
+    // agent name and personality id; 'background' matches the daemon runtime.
+    await db.insert(schema.agents).values(
+      DEFAULT_WORKSPACE_AGENT_ROSTER.map((name) => ({
+        id: nanoid(),
+        name,
+        personality: name,
+        runtimeId: 'background',
+        workspaceId: id,
+      })),
+    );
     await reply.code(201).send({ id });
   });
 

@@ -28,6 +28,18 @@ describe('loadConfig', () => {
     expect(cfg.defaultAgentId).toBe('crucible');
   });
 
+  it('exposes defaultAgentIdWasDefaulted=true when FORGE_DAEMON_AGENT_ID is unset (issue 12)', () => {
+    const cfg = loadConfig({ ...REQUIRED });
+    expect(cfg.defaultAgentIdWasDefaulted).toBe(true);
+  });
+
+  it('exposes defaultAgentIdWasDefaulted=false when FORGE_DAEMON_AGENT_ID is set explicitly — even to architect (issue 12)', () => {
+    const explicit = loadConfig({ ...REQUIRED, FORGE_DAEMON_AGENT_ID: 'architect' });
+    expect(explicit.defaultAgentIdWasDefaulted).toBe(false);
+    const other = loadConfig({ ...REQUIRED, FORGE_DAEMON_AGENT_ID: 'crucible' });
+    expect(other.defaultAgentIdWasDefaulted).toBe(false);
+  });
+
   it('skipPermissions defaults to true', () => {
     const cfg = loadConfig({ ...REQUIRED });
     expect(cfg.skipPermissions).toBe(true);

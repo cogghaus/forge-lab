@@ -120,6 +120,15 @@ export interface DaemonOptions {
   reconnectMaxAttempts?: number;
   /** Per-request HTTP timeout in ms passed to the hub client. Default: 30000. */
   requestTimeoutMs?: number;
+  /** Injectable clock (tests). Defaults to Date.now. Used by the claim backoff. */
+  now?: () => number;
+  /**
+   * True when defaultAgentId was not provided explicitly (FORGE_DAEMON_AGENT_ID
+   * unset) and the config fell back to 'architect'. Worker-mode daemons log a
+   * prominent startup warning in that case, because an unscoped worker will not
+   * be able to claim FM-routed tasks for any other agent (issue 12).
+   */
+  defaultAgentIdWasDefaulted?: boolean;
   /**
    * Dev-capability: when set, worker agents check out this repo into
    * `${workdir}/repo`, branch per task, and are instructed to commit/push/open a
@@ -211,6 +220,22 @@ export class Daemon {
   private readonly quarantinedTaskIds = new Set<string>();
   /** FM spawns at most this many times for the same stuck task before quarantining. */
   private static readonly MAX_TRIAGE_ATTEMPTS = 3;
+  /** Consecutive claim failures for a task before claim attempts back off (issue 46). */
+  private static readonly CLAIM_BACKOFF_THRESHOLD = 3;
+  /** First backoff window once the threshold is reached (doubles per failure). */
+  private static readonly CLAIM_BACKOFF_BASE_MS = 30_000;
+  /** Ceiling for the per-task claim backoff window. */
+  private static readonly CLAIM_BACKOFF_CAP_MS = 300_000;
+  /**
+   * Per-task claim failure state (issue 46). Without it the worker poll retried
+   * POST /tasks/:id/claim every 5s forever on 409/403, one error line each —
+   * the same runaway shape as the 2026-05-27 incident (9,567 errors over 7h).
+   * `nextAttemptAt` is 0 until CLAIM_BACKOFF_THRESHOLD consecutive failures.
+   * Reset on successful claim or when the task leaves the poll results.
+   */
+  private readonly claimBackoff = new Map<string, { failures: number; nextAttemptAt: number }>();
+  /** Injectable clock (tests). */
+  private readonly now: () => number;
   /** Timestamp (ms) of last FM spawn per workspace. Enforces fmCooldownMs. */
   private readonly lastFmSpawnAt = new Map<string, number>();
   /** Maps synthetic FM task ID → workspaceId so dead-FM recovery can clear the cooldown. */
@@ -224,6 +249,7 @@ export class Daemon {
     this.runtimes = opts.runtimes;
     this.logger = opts.logger ?? noopLogger;
     this.gitOps = opts.gitOps ?? defaultGitOps;
+    this.now = opts.now ?? Date.now;
     // A repo-bound daemon reuses a single ${workdir}/repo checkout, so it MUST
     // run one task at a time — concurrent agents would corrupt the shared tree.
     if (opts.repoUrl && (opts.maxConcurrentTasks ?? Infinity) !== 1) {
@@ -290,6 +316,15 @@ export class Daemon {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    // Issue 12: an unscoped worker silently falling back to 'architect' claims
+    // unrouted work as the wrong personality and cannot claim FM-routed tasks
+    // for any other agent. Keep the default (production compose sets the env),
+    // but make the fallback loud at startup.
+    if (!this.opts.dispatcherMode && this.opts.defaultAgentIdWasDefaulted) {
+      this.logger.error(
+        'FORGE_DAEMON_AGENT_ID not set; defaulting to architect; FM-routed tasks for other agents will not be claimable by this daemon',
+      );
+    }
     await this.client.connect();
     // task.created / task.assigned / task.requeued all funnel through
     // handleIncomingTask. The hub's claim endpoint is an atomic SQL UPDATE
@@ -399,6 +434,14 @@ export class Daemon {
     }
 
     const { tasks } = await this.client.listTasks(this.opts.workspaceId);
+    // Claim backoff reset: a task that no longer appears in the poll (claimed
+    // elsewhere, completed, cancelled) must not carry stale failure state.
+    if (this.claimBackoff.size > 0) {
+      const listedIds = new Set(tasks.map((t) => t.id));
+      for (const id of this.claimBackoff.keys()) {
+        if (!listedIds.has(id)) this.claimBackoff.delete(id);
+      }
+    }
     const myAgentId = this.opts.defaultAgentId;
     for (const task of tasks) {
       // Pick up unrouted work (pending_agent) AND work the dispatcher routed to
@@ -683,7 +726,15 @@ export class Daemon {
         });
         // M6: persist quarantine by failing the task. Survives FM restarts.
         // Users can retry via the dashboard; FM won't re-triage failed tasks.
-        await this.client.failTask(task.id, 'fm_quarantine:max_attempts').catch((err) => {
+        // The reason string is surfaced to humans in the dashboard, so spell out
+        // what happened and what is expected (issue 44). If the fail call errors
+        // (e.g. the hub does not yet allow failing pending_dispatcher_action),
+        // this logs exactly once: the task is already in quarantinedTaskIds, so
+        // no later triage cycle retries the failTask.
+        await this.client.failTask(
+          task.id,
+          `fm_quarantine: task deferred ${Daemon.MAX_TRIAGE_ATTEMPTS} consecutive triage cycles; human action required`,
+        ).catch((err) => {
           this.logger.error('failed to fail quarantined task', {
             taskId: task.id,
             error: err instanceof Error ? err.message : String(err),
@@ -783,6 +834,12 @@ export class Daemon {
     if (!taskId) return;
     if (this.activeInstances.has(taskId) || this.activeReviews.has(taskId)) return;
 
+    // Issue 46: after repeated claim failures for this task, skip further claim
+    // attempts until the backoff window elapses. The escalation was already
+    // logged when the window was set — a skip is silent by design.
+    const backoff = this.claimBackoff.get(taskId);
+    if (backoff !== undefined && this.now() < backoff.nextAttemptAt) return;
+
     // Concurrency cap: when maxConcurrentTasks is set, skip the claim attempt
     // until a slot opens. The task remains in pending_agent and will be
     // re-delivered when another daemon (or this daemon after a slot frees)
@@ -815,12 +872,14 @@ export class Daemon {
         return;
       }
       await this.client.claimTask(taskId);
+      this.claimBackoff.delete(taskId);
       this.resetIdleTimer();
     } catch (err) {
       this.logger.error('failed to claim task', {
         taskId,
         error: err instanceof Error ? err.message : String(err),
       });
+      this.recordClaimFailure(taskId);
       return;
     }
 
@@ -833,6 +892,26 @@ export class Daemon {
     } else {
       await this.spawnClaimedTask(claimed);
     }
+  }
+
+  /**
+   * Record a failed claim attempt for a task (issue 46). Below the threshold
+   * this only counts; from the threshold on it opens an exponentially growing
+   * skip window (base 30s, doubling, capped at 5 min) and logs exactly one
+   * summary line per escalation instead of an error per 5s poll.
+   */
+  private recordClaimFailure(taskId: string): void {
+    const failures = (this.claimBackoff.get(taskId)?.failures ?? 0) + 1;
+    if (failures < Daemon.CLAIM_BACKOFF_THRESHOLD) {
+      this.claimBackoff.set(taskId, { failures, nextAttemptAt: 0 });
+      return;
+    }
+    const backoffMs = Math.min(
+      Daemon.CLAIM_BACKOFF_BASE_MS * 2 ** (failures - Daemon.CLAIM_BACKOFF_THRESHOLD),
+      Daemon.CLAIM_BACKOFF_CAP_MS,
+    );
+    this.claimBackoff.set(taskId, { failures, nextAttemptAt: this.now() + backoffMs });
+    this.logger.info('claim backoff', { taskId, failures, nextAttemptInMs: backoffMs });
   }
 
   private async runReviewTask(task: Task): Promise<void> {
@@ -920,13 +999,18 @@ export class Daemon {
         priorMemory = await this.client.getAgentMemory(taskId).catch(() => null);
       }
 
+      // Done marker: ALWAYS an absolute path inside the daemon's workdir. A
+      // relative path let agents that re-resolved "repository root" to a parent
+      // directory (e.g. a monorepo above the workdir) write the done file where
+      // the workdir-scoped done-watcher never sees it, so successful runs were
+      // marked "agent exited without completing" (issue 3). For repo-bound
+      // daemons the absolute path also keeps the marker OUTSIDE the checkout
+      // (un-committed and detectable by the watcher).
+      const donePath = path.join(this.opts.workdir, '.forge', 'tasks', `${claimed.id}.done`);
       // Dev-capability: when the daemon is repo-bound, check out the repo into
       // ${workdir}/repo on a per-task branch and instruct the agent to commit,
-      // push, and open a PR. The agent works inside ./repo, so the done marker
-      // uses an absolute path OUTSIDE the checkout (keeps it un-committed and
-      // detectable by the workdir-scoped done-watcher).
+      // push, and open a PR.
       let repoAddendum = '';
-      let donePath = `.forge/tasks/${claimed.id}.done`;
       if (this.opts.repoUrl && this.opts.gitToken) {
         const co = await this.gitOps.checkout({
           workdir: this.opts.workdir,
@@ -937,7 +1021,6 @@ export class Daemon {
           userName: this.opts.gitUserName || 'forge-lab[bot]',
           userEmail: this.opts.gitUserEmail || 'forge-lab@example.com',
         });
-        donePath = path.join(this.opts.workdir, '.forge', 'tasks', `${claimed.id}.done`);
         repoAddendum =
           `\n\n---\nA git checkout of ${this.opts.repoUrl} is at the absolute path ` +
           `\`${co.repoDir}\`, already on a fresh branch \`${co.branch}\` (cut from ` +
@@ -961,9 +1044,18 @@ export class Daemon {
       const memoryBlock = priorMemory
         ? `\n\n---\nPRIOR SESSION CONTEXT (your last work on this task):\n${priorMemory}\nIf this context is not relevant to your current task, ignore it.`
         : '';
+      // Working-directory preamble (issue 3): agents given a task description
+      // that mentions "the repository root" have been observed (3x live)
+      // resolving it to a PARENT directory carrying repo markers and doing all
+      // work — including the done file — there. Pin the root explicitly, before
+      // the task text. The repo-bound addendum then redirects work into the
+      // checkout, which is inside the workdir, so the two never conflict.
+      const workdirPreamble =
+        `Your working directory and project root is exactly ${this.opts.workdir}. ` +
+        `Do all work inside it. Do not treat any parent or other directory as the repository root.\n\n`;
       const initialPrompt = desc != null
-        ? `${claimed.title}\n\n${desc}${repoAddendum}${memoryBlock}${doneInstruction}`
-        : `${claimed.title}${repoAddendum}${memoryBlock}${doneInstruction}`;
+        ? `${workdirPreamble}${claimed.title}\n\n${desc}${repoAddendum}${memoryBlock}${doneInstruction}`
+        : `${workdirPreamble}${claimed.title}${repoAddendum}${memoryBlock}${doneInstruction}`;
       // Reset the agent log so post-mortem classification (auth-failure
       // detection) reads only THIS run, not a prior attempt's appended output.
       await resetAgentLog(this.opts.workdir, claimed.id);

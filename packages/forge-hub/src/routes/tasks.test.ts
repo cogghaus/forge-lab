@@ -39,7 +39,7 @@ describe('/workspaces/:workspaceId/tasks', () => {
     expect(task?.workspaceId).toBe(workspaceId);
   });
 
-  it('POST without an agent lands in pending_agent so FM can triage it', async () => {
+  it('POST without an agent lands in pending_dispatcher_action so FM triages it (issue 2)', async () => {
     const res = await hub.fastify.inject({
       method: 'POST',
       url: `/workspaces/${workspaceId}/tasks`,
@@ -54,9 +54,10 @@ describe('/workspaces/:workspaceId/tasks', () => {
       .from(schema.tasks)
       .where(eq(schema.tasks.id, id))
       .get();
-    // Regression: was pending_dispatcher_action, which maps to the Review kanban lane.
-    // New tasks must start in pending_agent so they appear in the Pending lane.
-    expect(task?.status).toBe('pending_agent');
+    // FM-as-front-door (issue 2): an unassigned workspace-created task goes to the
+    // dispatcher inbox for FM triage. The previous assertion (pending_agent) encoded
+    // the bug: any worker raced to claim the task before FM ever saw it.
+    expect(task?.status).toBe('pending_dispatcher_action');
     expect(task?.assignedAgentId).toBeNull();
   });
 
@@ -1572,36 +1573,12 @@ describe('POST /tasks/:id/fail', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('orchestrator device gets policy_denied on task:fail (Heimdall enforcement)', async () => {
-    const taskId = await createTask(hub, cookie);
-    // Claim the task as the worker device (standard flow)
-    await hub.fastify.inject({
-      method: 'POST',
-      url: `/tasks/${taskId}/claim`,
-      headers: { authorization: `Bearer ${deviceToken}` },
-    });
-    // Force-assign the task to the orchestrator device id so ownership check passes
-    const orchRes = await hub.fastify.inject({
-      method: 'POST',
-      url: '/devices',
-      headers: { cookie },
-      payload: { name: 'fm-orch', agentId: 'forge-master', deviceType: 'orchestrator' },
-    });
-    const orchToken = (orchRes.json() as { token: string }).token;
-
-    // Try to fail with orchestrator -- policy check fires before ownership check
-    const res = await hub.fastify.inject({
-      method: 'POST',
-      url: `/tasks/${taskId}/fail`,
-      headers: { authorization: `Bearer ${orchToken}` },
-      payload: { reason: 'test' },
-    });
-    expect(res.statusCode).toBe(403);
-    const body = res.json() as { error: string; action?: string };
-    expect(body.error).toBe('policy_denied');
-    expect(body.action).toBe('task:fail');
-  });
-
+  // OPS-1 originally asserted orchestrators get policy_denied on task:fail.
+  // The FM quarantine feature (issue 44) retires that default: orchestrators
+  // now have a builtin task:fail allow, and the route-level guards scope it
+  // to pending_dispatcher_action tasks only (see the issue 44 tests below,
+  // which cover the worker-cannot and wrong-status cases the old test
+  // protected against).
   it('worker device can fail its own in_progress task (policy allow check)', async () => {
     const taskId = await createAndClaimTask();
     const res = await hub.fastify.inject({
@@ -1611,6 +1588,90 @@ describe('POST /tasks/:id/fail', () => {
       payload: { reason: 'policy allow test' },
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  // -------------------------------------------------------------------------
+  // FM quarantine fail-path (issue 44): an orchestrator device may fail a task
+  // stuck in pending_dispatcher_action after repeated triage deferrals.
+  // -------------------------------------------------------------------------
+
+  /** Create a workspace task and force it into pending_dispatcher_action. */
+  async function createInboxTask(): Promise<string> {
+    // Each test gets a fresh in-memory hub, so a constant slug cannot collide.
+    const workspaceId = await createWorkspace(hub, cookie, { name: 'Fail WS', slug: 'fail-ws' });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'qr', title: 'Quarantine candidate' },
+    });
+    const id = (res.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, id));
+    return id;
+  }
+
+  it('orchestrator can fail a pending_dispatcher_action task (quarantine, issue 44)', async () => {
+    const fm = await registerDevice(hub, cookie, 'fm-device', {
+      agentId: 'forge-master',
+      deviceType: 'orchestrator',
+    });
+    const taskId = await createInboxTask();
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${fm.token}` },
+      payload: { reason: 'quarantined after 3 triage deferrals' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('failed');
+
+    const history = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    const failEvents = history.filter((h) => h.eventName === 'task.failed');
+    expect(failEvents).toHaveLength(1);
+    const payload = failEvents[0]?.payload as Record<string, unknown> | undefined;
+    expect(payload?.['reason']).toBe('quarantined after 3 triage deferrals');
+  });
+
+  it('worker device cannot fail a pending_dispatcher_action task (issue 44)', async () => {
+    const taskId = await createInboxTask();
+
+    // deviceToken belongs to a plain worker device registered in beforeEach.
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { reason: 'should not be allowed' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('orchestrator_required');
+
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('pending_dispatcher_action');
+  });
+
+  it('orchestrator still cannot fail a pending_agent task (issue 44 scope guard)', async () => {
+    const fm = await registerDevice(hub, cookie, 'fm-device-2', {
+      agentId: 'forge-master',
+      deviceType: 'orchestrator',
+    });
+    const taskId = await createTask(hub, cookie); // flat task, pending_agent
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${fm.token}` },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('not_in_progress');
   });
 });
 
@@ -2890,6 +2951,203 @@ describe('PATCH /workspaces/:workspaceId/tasks/:taskId/assign — user session',
   });
 });
 
+// ---------------------------------------------------------------------------
+// Assign identifier validation (issue 45): personality NAMES are the canonical
+// identifier domain (daemons claim with FORGE_DAEMON_AGENT_ID names). The assign
+// endpoints must resolve workspace-agent row IDs to names, accept known names or
+// live device agentIds as-is, and reject everything else with 422 unknown_agent.
+// ---------------------------------------------------------------------------
+
+describe('assign identifier validation (issue 45)', () => {
+  let hub: Hub;
+  let cookie: string;
+  let workspaceId: string;
+
+  async function registerOrchestratorDevice(): Promise<{ token: string }> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/devices',
+      headers: { cookie },
+      payload: { name: 'forge-master', agentId: 'forge-master', deviceType: 'orchestrator' },
+    });
+    return { token: (res.json() as { token: string }).token };
+  }
+
+  async function createInboxTask(): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'val', title: 'Validated assignment task' },
+    });
+    const id = (res.json() as { id: string }).id;
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'pending_dispatcher_action' })
+      .where(eq(schema.tasks.id, id));
+    return id;
+  }
+
+  /** Register a workspace agent and return its row id. */
+  async function registerWorkspaceAgent(name: string): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/agents`,
+      headers: { cookie },
+      payload: { name, personality: name, runtimeId: 'background' },
+    });
+    return (res.json() as { id: string }).id;
+  }
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, cookie);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('device path resolves a workspace-agent row ID to the agent NAME', async () => {
+    // Observed live: FM assigned the nanoid row id ('rnDR...') instead of 'furnace',
+    // making the task unclaimable by any worker (workers claim by personality name).
+    const rowId = await registerWorkspaceAgent('smelter');
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createInboxTask();
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: rowId },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const task = await hub.db
+      .select({ assignedAgentId: schema.tasks.assignedAgentId, status: schema.tasks.status })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.status).toBe('assigned');
+    expect(task?.assignedAgentId).toBe('smelter');
+  });
+
+  it('device path stores a workspace agent NAME as-is', async () => {
+    await registerWorkspaceAgent('smelter');
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createInboxTask();
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'smelter' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const task = await hub.db
+      .select({ assignedAgentId: schema.tasks.assignedAgentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.assignedAgentId).toBe('smelter');
+  });
+
+  it('device path accepts the agentId of an active device of the owning user', async () => {
+    // 'custom-daemon' is not a registered workspace agent, but a live daemon
+    // identifies as it (FORGE_DAEMON_AGENT_ID), so assignment must be claimable.
+    await registerDevice(hub, cookie, 'custom-daemon-device', { agentId: 'custom-daemon' });
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createInboxTask();
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'custom-daemon' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const task = await hub.db
+      .select({ assignedAgentId: schema.tasks.assignedAgentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.assignedAgentId).toBe('custom-daemon');
+  });
+
+  it('device path rejects an unknown agent identifier with 422 unknown_agent', async () => {
+    const { token: fmToken } = await registerOrchestratorDevice();
+    const taskId = await createInboxTask();
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { agentId: 'no-such-agent' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error).toBe('unknown_agent');
+
+    const task = await hub.db
+      .select({ assignedAgentId: schema.tasks.assignedAgentId, status: schema.tasks.status })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.assignedAgentId).toBeNull();
+    expect(task?.status).toBe('pending_dispatcher_action');
+  });
+
+  it('user path resolves a workspace-agent row ID to the agent NAME', async () => {
+    const rowId = await registerWorkspaceAgent('smelter');
+    const taskId = await createInboxTask();
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: rowId },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const task = await hub.db
+      .select({ assignedAgentId: schema.tasks.assignedAgentId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.assignedAgentId).toBe('smelter');
+  });
+
+  it('user path rejects an unknown agent identifier with 422 unknown_agent', async () => {
+    const taskId = await createInboxTask();
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: 'no-such-agent' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect((res.json() as { error: string }).error).toBe('unknown_agent');
+  });
+
+  it('user path can still clear assignment with agentId null (no validation)', async () => {
+    const taskId = await createInboxTask();
+    await hub.db.update(schema.tasks).set({ status: 'pending_agent' }).where(eq(schema.tasks.id, taskId));
+
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/tasks/${taskId}/assign`,
+      headers: { cookie },
+      payload: { agentId: null },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
 describe('review tasks', () => {
   let hub: Hub;
   let cookie: string;
@@ -3303,7 +3561,40 @@ describe('task dependency graph', () => {
       headers: { authorization: `Bearer ${engToken}` },
     });
 
-    // dep-002 should now be pending_agent
+    // dep-002 is unassigned, so the dep-release routes it to the dispatcher inbox
+    // (issue 2: FM-as-front-door). The previous assertion (pending_agent) encoded the bug.
+    const after = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'dep-002')).get();
+    expect(after?.status).toBe('pending_dispatcher_action');
+  });
+
+  it('D02b - dep-release routes a pre-assigned waiting task to pending_agent (issue 2)', async () => {
+    const { token: engToken } = await registerDevice(hub, cookie, 'eng-device', { agentId: 'engineer' });
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'Dependency task', assignedAgentId: 'engineer' },
+    });
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie },
+      payload: { projectPrefix: 'dep', title: 'Dependent pre-assigned task', dependsOn: ['dep-001'], assignedAgentId: 'furnace' },
+    });
+
+    const before = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'dep-002')).get();
+    expect(before?.status).toBe('waiting_on_deps');
+
+    await hub.fastify.inject({ method: 'POST', url: '/tasks/dep-001/claim', headers: { authorization: `Bearer ${engToken}` } });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks/dep-001/complete',
+      headers: { authorization: `Bearer ${engToken}` },
+    });
+
+    // Pre-assigned tasks skip the dispatcher inbox and go straight to the claimable pool.
     const after = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, 'dep-002')).get();
     expect(after?.status).toBe('pending_agent');
   });
@@ -3381,7 +3672,7 @@ describe('task dependency graph', () => {
     expect(blocked?.blockedReason).toContain('dep_cancelled');
   });
 
-  it('D05 - task with no deps starts immediately in pending_agent', async () => {
+  it('D05 - unassigned task with no deps starts in pending_dispatcher_action (issue 2)', async () => {
     const res = await hub.fastify.inject({
       method: 'POST',
       url: `/workspaces/${workspaceId}/tasks`,
@@ -3391,7 +3682,9 @@ describe('task dependency graph', () => {
     expect(res.statusCode).toBe(201);
     const { id } = res.json() as { id: string };
 
+    // FM-as-front-door (issue 2): deps are satisfied but no agent is assigned,
+    // so the task goes to the dispatcher inbox rather than the claimable pool.
     const task = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, id)).get();
-    expect(task?.status).toBe('pending_agent');
+    expect(task?.status).toBe('pending_dispatcher_action');
   });
 });

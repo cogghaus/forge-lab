@@ -96,8 +96,12 @@ describe('/workspaces/:workspaceId/agents', () => {
     });
     expect(res.statusCode).toBe(200);
     const { agents } = res.json() as { agents: { name: string }[] };
-    expect(agents).toHaveLength(1);
-    expect(agents[0]!.name).toBe('ws-agent');
+    // Workspace creation seeds the default 9-agent roster (issue 43), so the
+    // explicitly registered agent is the 10th. The flat agent must not appear.
+    expect(agents).toHaveLength(10);
+    const names = agents.map((a) => a.name);
+    expect(names).toContain('ws-agent');
+    expect(names).not.toContain('flat-agent');
   });
 
   it('GET /agents excludes workspace-scoped agents', async () => {

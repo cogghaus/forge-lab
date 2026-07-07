@@ -36,7 +36,10 @@ const KANBAN_COLS: KanbanCol[] = [
     fill:     'rgba(255,255,255,0.1)',
     edge:     'rgba(255,255,255,0.45)',
     text:     'rgba(255,255,255,0.55)',
-    statuses: ['pending_agent', 'pending_design'],
+    // pending_dispatcher_action is the FM triage inbox: work that has not started
+    // yet. It moved here from the Review lane when the FM front door was fixed
+    // (issue 2) so new unassigned tasks land in Pending, not Review.
+    statuses: ['pending_agent', 'pending_design', 'pending_dispatcher_action'],
   },
   {
     key:      'blocked',
@@ -60,7 +63,7 @@ const KANBAN_COLS: KanbanCol[] = [
     fill:     'rgba(255,181,71,0.2)',
     edge:     '#FFB547',
     text:     '#FFB547',
-    statuses: ['design_review', 'pending_dispatcher_action'],
+    statuses: ['design_review'],
   },
   {
     key:      'complete',
