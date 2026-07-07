@@ -29,3 +29,4 @@ deploy/secrets/*
 !deploy/secrets/.gitkeep
 cookies.txt
 .claude/worktrees/
+graphify-out/
