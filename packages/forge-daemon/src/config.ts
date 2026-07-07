@@ -81,10 +81,18 @@ const ConfigSchema = z.object({
   dispatcherWorkspaceMode: z.enum(['single', 'all']).default('single'),
 });
 
-export type DaemonConfig = z.infer<typeof ConfigSchema>;
+export type DaemonConfig = z.infer<typeof ConfigSchema> & {
+  /**
+   * True when FORGE_DAEMON_AGENT_ID was not provided and defaultAgentId fell
+   * back to 'architect'. Exposed explicitly so callers can warn about the
+   * silent fallback without inferring it by string equality with 'architect'
+   * (an operator may set the env to 'architect' on purpose). Issue 12.
+   */
+  defaultAgentIdWasDefaulted: boolean;
+};
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
-  return ConfigSchema.parse({
+  const parsed = ConfigSchema.parse({
     hubUrl: env['FORGE_DAEMON_HUB_URL'],
     deviceToken: env['FORGE_DAEMON_DEVICE_TOKEN'],
     workdir: env['FORGE_DAEMON_WORKDIR'] ?? process.cwd(),
@@ -107,4 +115,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     model: env['FORGE_DAEMON_MODEL'],
     idleShutdownMs: env['FORGE_DAEMON_IDLE_SHUTDOWN_MS'],
   });
+  return {
+    ...parsed,
+    // Mirrors the Zod .default() semantics above: only an absent variable
+    // triggers the default (an empty string passes through as an empty agentId).
+    defaultAgentIdWasDefaulted: env['FORGE_DAEMON_AGENT_ID'] === undefined,
+  };
 }

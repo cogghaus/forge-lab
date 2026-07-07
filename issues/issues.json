@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "nextId": 48,
+  "nextId": 50,
   "_conventions": "One issue per finding. status: open|in-progress|fixed|deferred|wont-fix. Closing REQUIRES resolution (root cause + fix location). Flip statuses as work lands, not in an end sweep. source: where the finding came from. round: product-pass-2026-07-07 for this seeding.",
   "issues": [
     {
@@ -22,12 +22,13 @@
       "detail": "The comment at forge-hub/src/routes/tasks.ts:1793-1799 says tasks created without an explicit agent go to the dispatcher inbox (pending_dispatcher_action) so FM triages them. The code at line 1800 contradicts it: initialStatus = !allDepsDone ? 'waiting_on_deps' : 'pending_agent'. Result: every dashboard-created task lands directly in the claimable pool; any worker races to claim it with its default personality (architect), bypassing FM triage entirely. Verified live in the product-pass smoke run: worker claimed the task the same second it was created; FM never triaged. Fix: unassigned -> 'pending_dispatcher_action', pre-assigned -> 'pending_agent'. Failing-first test.",
       "category": "bug",
       "area": "forge-hub",
-      "status": "open",
+      "status": "fixed",
       "priority": "critical",
       "round": "product-pass-2026-07-07",
       "source": "e2e-smoke-run",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "pending_agent hardcode at the plain workspace create; fixed in forge-hub tasks.ts:1884-1889 (unassigned -> pending_dispatcher_action) and both dep-release branches (tasks.ts:360,459). Tests: issue-2 create test, D02, D05, D02b. Verified live: mone-001 started in the FM inbox."
     },
     {
       "id": 3,
@@ -35,12 +36,13 @@
       "detail": "daemon.ts:934 sets donePath to the RELATIVE '.forge/tasks/{id}.done' when the daemon is not repo-bound (repo-bound branch at :945 correctly uses an absolute path). Reproduced 3x (twice in the live pipeline, once via BackgroundRuntime directly): a task description saying 'at the repository root' makes the agent resolve the root to the PARENT directory (G:/dev, which has .claude/CLAUDE.md markers) and do ALL work there, including the relative done file; the workdir-scoped done-watcher never sees it and the daemon marks the successful run 'agent exited without completing' -> failed. Control prompts without 'repository root' resolved correctly 4/4, so the trigger is prompt ambiguity, but the vulnerability is the relative donePath. Fix: (1) always pass absolute donePath in the done instruction; (2) prepend to initialPrompt: 'Your working directory and project root is exactly <absolute workdir>; do all work under it.'",
       "category": "bug",
       "area": "forge-daemon",
-      "status": "open",
+      "status": "fixed",
       "priority": "critical",
       "round": "product-pass-2026-07-07",
       "source": "e2e-smoke-run",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "Relative donePath + no workdir statement in prompt; fixed in forge-daemon daemon.ts:1014 (absolute donePath always) + working-directory preamble at daemon.ts:1058-1067. Tests in daemon-dispatch-fixes.test.ts + integration.test.ts. Verified live with adversarial repository-root phrasing: artifact and done file landed in the workdir."
     },
     {
       "id": 4,
@@ -152,12 +154,13 @@
       "detail": "config.ts defaults defaultAgentId to architect; an unscoped worker spawns the architect personality for any unassigned task it claims. Silent and surprising. Should either require explicit agentId, or log prominently, or (with issue 2 fixed) only claim tasks whose assignedAgentId matches.",
       "category": "bug",
       "area": "forge-daemon",
-      "status": "open",
+      "status": "fixed",
       "priority": "medium",
       "round": "product-pass-2026-07-07",
       "source": "e2e-smoke-run",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "Silent architect fallback; config.ts now exposes defaultAgentIdWasDefaulted and daemon.ts:324-327 logs a prominent worker-mode startup warning. Tests in config.test.ts + daemon-dispatch-fixes.test.ts."
     },
     {
       "id": 13,
@@ -438,12 +441,13 @@
       "detail": "Adam's personal GitHub CLI grant appeared in a transcript. GitHub Settings -> Applications -> Authorized OAuth Apps -> revoke 'GitHub CLI' -> re-auth. Human-only; do not attempt from a clone.",
       "category": "security",
       "area": "ops",
-      "status": "open",
+      "status": "deferred",
       "priority": "critical",
       "round": "product-pass-2026-07-07",
       "source": "docs/handoff/HANDOFF.md,memory",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "Deferred by Adam 2026-07-07: low risk while private; will revoke/rotate before anything goes public."
     },
     {
       "id": 35,
@@ -451,12 +455,13 @@
       "detail": "PAT appeared in a session transcript. Rotate when token rotation exists, or immediately by hand. Human-only.",
       "category": "security",
       "area": "ops",
-      "status": "open",
+      "status": "deferred",
       "priority": "high",
       "round": "product-pass-2026-07-07",
       "source": "docs/handoff/HANDOFF.md,memory",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "Deferred by Adam 2026-07-07: low risk while private; will revoke/rotate before anything goes public."
     },
     {
       "id": 36,
@@ -555,12 +560,13 @@
       "detail": "Fresh workspace has an empty agents table; the 13 built-in personalities are never registered anywhere. FM triage correctly defers ('no agents registered in workspace') cycle after cycle, burning an FM spawn each time, until someone manually curls POST /workspaces/:id/agents (no dash UI for this - dashboard-audit found agent CRUD has no front door). After 3 deferrals the task is quarantined. Fix: seed workspace agents from loadBuiltinRegistry() at workspace creation (or a one-click 'register standard roster' action + dash UI).",
       "category": "product",
       "area": "forge-hub,forge-dash-community",
-      "status": "open",
+      "status": "fixed",
       "priority": "critical",
       "round": "product-pass-2026-07-07",
       "source": "e2e-smoke-run",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "No agent seeding at workspace creation; fixed via DEFAULT_WORKSPACE_AGENT_ROSTER in forge-core types/agent.ts + seeding in forge-hub workspaces.ts:66-74. Test: POST /workspaces seeds the default agent roster. Verified live: fresh workspace returned 9 agents."
     },
     {
       "id": 44,
@@ -568,12 +574,13 @@
       "detail": "After 3 triage deferrals the dispatcher quarantines the task and tries POST /tasks/:id/fail, which requires in_progress; a pending_dispatcher_action task 409s ('not_in_progress'), so quarantine neither fails the task nor creates a human-attention signal - it just stops triaging (in-memory attempt counter; daemon restart resets it). Fix: quarantine should use a status transition that exists for inbox tasks (e.g. blocked with blockedReason, or a dedicated escalation task), with a hub-side test.",
       "category": "bug",
       "area": "forge-daemon,forge-hub",
-      "status": "open",
+      "status": "fixed",
       "priority": "high",
       "round": "product-pass-2026-07-07",
       "source": "e2e-smoke-run",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "Hub fail endpoint required in_progress + claiming device; DEVICE_FAILABLE_STATUSES added (tasks.ts:103) so orchestrator devices can fail pending_dispatcher_action tasks (tasks.ts:2524-2580); daemon quarantine reason now fm_quarantine with log-once (daemon.ts:739-742). Tests both sides."
     },
     {
       "id": 45,
@@ -581,12 +588,13 @@
       "detail": "PATCH /tasks/:id/assign stores body.agentId verbatim (tasks.ts:~908,:987) - no validation that any daemon identifies as it. Workspace agents are nanoid rows (name=furnace, id=rnDR...); daemons claim with FORGE_DAEMON_AGENT_ID (personality names). In the smoke run FM (an LLM reading workspace context) passed the row id; the furnace-named assignment became unclaimable by any worker and sat in 'assigned' until the 30-min stale sweep would requeue it. Same dispatch worked when a human reassigned by name. Fix: pick ONE identifier domain (personality name is what daemons use), have the assign endpoint resolve/validate against registered workspace agents + live device agentIds, and make FM's instructions explicit about which field to use.",
       "category": "bug",
       "area": "forge-hub,forge-agents",
-      "status": "open",
+      "status": "fixed",
       "priority": "high",
       "round": "product-pass-2026-07-07",
       "source": "e2e-smoke-run",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "Assign stored body.agentId verbatim; resolveAssignAgentId (tasks.ts:266) resolves workspace-agent row IDs to names, validates names/device agentIds, 422 unknown_agent otherwise; wired into device (tasks.ts:967) and user (tasks.ts:1062) paths. Verified live: FM routed by name (scribe)."
     },
     {
       "id": 46,
@@ -594,12 +602,13 @@
       "detail": "When a task is assigned/visible but not claimable by this device, the worker retries POST /tasks/:id/claim every poll (5s) with no backoff, no give-up, one ERROR log line each. Observed live: ~20 identical 409s in 100s until manually fixed. This is the same failure shape as the 2026-05-27 incident (9,567 claim errors over 7h); commit ab66a3c fixed the FM/dispatcher side (circuit breaker + cooldown) but not the worker claim retry. Fix: per-task claim backoff + skip-after-N with a single summary log.",
       "category": "reliability",
       "area": "forge-daemon",
-      "status": "open",
+      "status": "fixed",
       "priority": "high",
       "round": "product-pass-2026-07-07",
       "source": "e2e-smoke-run",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "Worker claim loop had no per-task backoff; claimBackoff map in daemon.ts:224-238 with skip gate (:845), reset on claim/poll-exit, threshold 3 / base 30s / cap 5min, one summary log per escalation. Test with injected clock. Verified live: one claim-failure line total in the M1 run."
     },
     {
       "id": 47,
@@ -611,6 +620,32 @@
       "priority": "high",
       "round": "product-pass-2026-07-07",
       "source": "e2e-smoke-run",
+      "created": "2026-07-07",
+      "updated": "2026-07-07"
+    },
+    {
+      "id": 48,
+      "title": "FM synthetic-task done instruction still uses a relative .forge path",
+      "detail": "daemon.ts ~line 771: the dispatcher synthetic task done instruction uses relative .forge/tasks/<id>.done - same exposure as issue 3 if the FM personality ever re-resolves its root. Low risk (FM prompt has no repository-root language) but should use the absolute path for consistency. Spotted during the issue-3 fix.",
+      "category": "cleanup",
+      "area": "forge-daemon",
+      "status": "open",
+      "priority": "low",
+      "round": "product-pass-2026-07-07",
+      "source": "m1-daemon-engineer",
+      "created": "2026-07-07",
+      "updated": "2026-07-07"
+    },
+    {
+      "id": 49,
+      "title": "repo.test.ts real-git checkout test flakes under parallel turbo run (5s timeout + Windows EBUSY cleanup)",
+      "detail": "forge-daemon src/git/repo.test.ts (defaultGitOps.checkout, does NOT persist the token) timed out at 5000ms during a root pnpm test (all packages parallel) then EBUSY on temp-dir rmdir; passes in isolation (172/172 twice). Real git under contention needs a longer per-test timeout and retry-tolerant temp cleanup on Windows.",
+      "category": "maintenance",
+      "area": "forge-daemon",
+      "status": "open",
+      "priority": "low",
+      "round": "product-pass-2026-07-07",
+      "source": "m1-integration",
       "created": "2026-07-07",
       "updated": "2026-07-07"
     }

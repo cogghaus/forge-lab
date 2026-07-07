@@ -96,6 +96,16 @@ const TERMINAL_SUCCESS_STATUSES = new Set([
 /** Statuses a user may reassign/clear via the user-session assign path. */
 const USER_ASSIGNABLE_STATUSES = ['pending_agent', 'assigned'] as const;
 
+/** Statuses the device fail endpoint may transition to 'failed' (issue 44).
+ * in_progress: the claiming worker device fails its own task (spawn-failure recovery).
+ * pending_dispatcher_action: an orchestrator device quarantines an inbox task after
+ * repeated triage deferrals; without this the FM quarantine 409s and the task is
+ * stuck in limbo. Type annotation enforces membership against the canonical enum. */
+const DEVICE_FAILABLE_STATUSES = new Set([
+  'in_progress',
+  'pending_dispatcher_action',
+] as const) satisfies ReadonlySet<import('@forge-lab/core').TaskStatus>;
+
 const USER_ALLOWED_TRANSITIONS: Record<string, string[]> = {
   pending_dispatcher_action: ['cancelled'],
   pending_agent: ['cancelled'],
@@ -242,6 +252,57 @@ function detectCycle(
 }
 
 /**
+ * Resolve an incoming assign identifier to the canonical agent-name domain (issue 45).
+ * Personality NAMES are canonical: daemons claim tasks with FORGE_DAEMON_AGENT_ID
+ * set to a personality name, so anything else stored in assignedAgentId produces an
+ * unclaimable assignment that sits until the stale sweep requeues it.
+ *
+ * Resolution order:
+ * 1. A workspace-agents row ID for this workspace resolves to that row's NAME
+ *    (observed live: FM assigned the nanoid row id instead of 'furnace').
+ * 2. A workspace agent NAME, or the agentId of any active device belonging to the
+ *    workspace owner, is stored as-is.
+ * 3. Anything else returns null; callers reply 422 unknown_agent.
+ */
+async function resolveAssignAgentId(
+  db: Db,
+  workspaceId: string,
+  agentId: string,
+): Promise<string | null> {
+  const wsAgents = await db
+    .select({ id: schema.agents.id, name: schema.agents.name })
+    .from(schema.agents)
+    .where(eq(schema.agents.workspaceId, workspaceId));
+
+  const byRowId = wsAgents.find((a) => a.id === agentId);
+  if (byRowId) return byRowId.name;
+
+  if (wsAgents.some((a) => a.name === agentId)) return agentId;
+
+  const workspace = await db
+    .select({ ownerUserId: schema.workspaces.ownerUserId })
+    .from(schema.workspaces)
+    .where(eq(schema.workspaces.id, workspaceId))
+    .get();
+  if (workspace) {
+    const liveDevice = await db
+      .select({ id: schema.devices.id })
+      .from(schema.devices)
+      .where(
+        and(
+          eq(schema.devices.userId, workspace.ownerUserId),
+          eq(schema.devices.agentId, agentId),
+          eq(schema.devices.status, 'active'),
+        ),
+      )
+      .get();
+    if (liveDevice) return agentId;
+  }
+
+  return null;
+}
+
+/**
  * Dep-unblocking pass: scan all waiting_on_deps tasks in the workspace and
  * unblock those whose all deps have reached terminal-success.
  * Returns Drizzle batch statements to be included in the caller's batch,
@@ -294,9 +355,13 @@ async function runDepUnblockingPass(
       if (blocked.sequenceSpec !== null && blocked.sequenceSpec !== undefined) {
         await unblockSequencedTask(db, blocked, workspaceId);
       } else {
+        // FM-as-front-door (issue 2): a released task with no assigned agent goes
+        // to the dispatcher inbox for FM triage; a pre-assigned one goes straight
+        // to the claimable pool.
+        const releasedStatus = blocked.assignedAgentId === null ? 'pending_dispatcher_action' : 'pending_agent';
         await db
           .update(schema.tasks)
-          .set({ status: 'pending_agent', blockedReason: null, updatedAt: new Date() })
+          .set({ status: releasedStatus, blockedReason: null, updatedAt: new Date() })
           .where(eq(schema.tasks.id, blocked.id));
         await db.insert(schema.taskHistory).values({
           id: nanoid(),
@@ -389,9 +454,13 @@ async function runDepUnblockingPass(
       // Sequenced task: run phase-0 creation logic
       await unblockSequencedTask(db, blocked, workspaceId);
     } else {
+      // FM-as-front-door (issue 2): a released task with no assigned agent goes
+      // to the dispatcher inbox for FM triage; a pre-assigned one goes straight
+      // to the claimable pool.
+      const releasedStatus = blocked.assignedAgentId === null ? 'pending_dispatcher_action' : 'pending_agent';
       await db
         .update(schema.tasks)
-        .set({ status: 'pending_agent', blockedReason: null, updatedAt: new Date() })
+        .set({ status: releasedStatus, blockedReason: null, updatedAt: new Date() })
         .where(eq(schema.tasks.id, blocked.id));
       await db.insert(schema.taskHistory).values({
         id: nanoid(),
@@ -894,6 +963,14 @@ export function registerTaskRoutes(
           return;
         }
 
+        // Normalize + validate the identifier (issue 45): row ids resolve to names,
+        // unknown identifiers are rejected so the task cannot become unclaimable.
+        const resolvedAgentId = await resolveAssignAgentId(db, workspaceId, body.agentId);
+        if (resolvedAgentId === null) {
+          await reply.code(422).send({ error: 'unknown_agent' });
+          return;
+        }
+
         const source = `device:${device.id}`;
 
         // Snapshot contextDocs at assignment time so the worker has them without a separate fetch.
@@ -906,7 +983,7 @@ export function registerTaskRoutes(
         await db
           .update(schema.tasks)
           .set({
-            assignedAgentId: body.agentId,
+            assignedAgentId: resolvedAgentId,
             assignedAt: new Date(),
             status: 'assigned',
             updatedAt: new Date(),
@@ -919,7 +996,7 @@ export function registerTaskRoutes(
           taskId,
           eventName: 'task.assigned',
           source,
-          payload: { agentId: body.agentId, ...maybeRunId(req) },
+          payload: { agentId: resolvedAgentId, ...maybeRunId(req) },
           workspaceId,
         });
         bus.emit({
@@ -927,7 +1004,7 @@ export function registerTaskRoutes(
           name: 'task.assigned',
           occurredAt: new Date(),
           source,
-          payload: { taskId, workspaceId, agentId: body.agentId },
+          payload: { taskId, workspaceId, agentId: resolvedAgentId },
         });
 
         return { ok: true };
@@ -981,11 +1058,19 @@ export function registerTaskRoutes(
       const source = `user:${user.id}`;
 
       if (body.agentId !== null) {
+        // Normalize + validate the identifier (issue 45): row ids resolve to names,
+        // unknown identifiers are rejected so the task cannot become unclaimable.
+        const resolvedAgentId = await resolveAssignAgentId(db, workspaceId, body.agentId);
+        if (resolvedAgentId === null) {
+          await reply.code(422).send({ error: 'unknown_agent' });
+          return;
+        }
+
         // Reassign to a specific agent
         await db
           .update(schema.tasks)
           .set({
-            assignedAgentId: body.agentId,
+            assignedAgentId: resolvedAgentId,
             assignedAt: new Date(),
             status: 'assigned',
             updatedAt: new Date(),
@@ -997,7 +1082,7 @@ export function registerTaskRoutes(
           taskId,
           eventName: 'task.assigned',
           source,
-          payload: { agentId: body.agentId, ...maybeRunId(req) },
+          payload: { agentId: resolvedAgentId, ...maybeRunId(req) },
           workspaceId,
         });
         bus.emit({
@@ -1005,7 +1090,7 @@ export function registerTaskRoutes(
           name: 'task.assigned',
           occurredAt: new Date(),
           source,
-          payload: { taskId, workspaceId, agentId: body.agentId },
+          payload: { taskId, workspaceId, agentId: resolvedAgentId },
         });
 
         return { ok: true };
@@ -1844,7 +1929,11 @@ export function registerTaskRoutes(
       // pre-assigns an agent keeps the direct pending_agent path so the target
       // worker picks it up. (The flat device endpoint POST /tasks keeps its own
       // default — it is the automation path and routes explicitly.)
-      const initialStatus = !allDepsDone ? 'waiting_on_deps' : 'pending_agent';
+      const initialStatus = !allDepsDone
+        ? 'waiting_on_deps'
+        : assignedAgentId === null
+          ? 'pending_dispatcher_action'
+          : 'pending_agent';
       // blockedReason is left null initially; the unblocking pass will set a specific reason
       // (e.g. dep_cancelled:<id>, dep_failed:<id>) if a dep is cancelled or failed.
       // Using the status name 'waiting_on_deps' as the reason is redundant and provides no
@@ -2499,7 +2588,9 @@ export function registerTaskRoutes(
       const id = TaskIdSchema.parse(req.params.id);
       const body = FailTaskBodySchema.parse(req.body ?? {});
 
-      // Heimdall policy check: role:worker allow task:fail.
+      // Heimdall policy check: role:worker and role:orchestrator allow
+      // task:fail (the orchestrator case is scoped to the quarantine path by
+      // the status/deviceType guards below).
       const failPrincipal = buildDevicePrincipal(device);
       const failDecision = await checkPolicy(
         failPrincipal,
@@ -2532,25 +2623,42 @@ export function registerTaskRoutes(
         await reply.code(404).send({ error: 'not_found' });
         return;
       }
-      if (task.status !== 'in_progress') {
+      if (!DEVICE_FAILABLE_STATUSES.has(task.status as Parameters<typeof DEVICE_FAILABLE_STATUSES.has>[0])) {
         await reply.code(409).send({ error: 'not_in_progress' });
         return;
       }
-      if (task.assignedDeviceId !== device.id) {
+      // FM quarantine path (issue 44): an orchestrator device may fail a task
+      // still in the dispatcher inbox (pending_dispatcher_action) after repeated
+      // triage deferrals. Such a task has no claiming device, so the
+      // assignedDeviceId guard does not apply. All other statuses keep the
+      // original constraint: only the claiming device may fail its own
+      // in_progress task.
+      const isQuarantineFail = task.status === 'pending_dispatcher_action';
+      if (isQuarantineFail) {
+        if (device.deviceType !== 'orchestrator') {
+          await reply.code(403).send({ error: 'orchestrator_required' });
+          return;
+        }
+      } else if (task.assignedDeviceId !== device.id) {
         await reply.code(403).send({ error: 'not_assigned_to_you' });
         return;
       }
-      // Atomic UPDATE with status + device guard prevents concurrent fail requests
-      // from the same device from both inserting duplicate task.failed history events.
+      // Atomic UPDATE with status (+ device on the worker path) guard prevents
+      // concurrent fail requests from inserting duplicate task.failed history events.
       const failed = await db
         .update(schema.tasks)
         .set({ status: 'failed', updatedAt: new Date() })
         .where(
-          and(
-            eq(schema.tasks.id, id),
-            eq(schema.tasks.status, 'in_progress'),
-            eq(schema.tasks.assignedDeviceId, device.id),
-          ),
+          isQuarantineFail
+            ? and(
+                eq(schema.tasks.id, id),
+                eq(schema.tasks.status, 'pending_dispatcher_action'),
+              )
+            : and(
+                eq(schema.tasks.id, id),
+                eq(schema.tasks.status, 'in_progress'),
+                eq(schema.tasks.assignedDeviceId, device.id),
+              ),
         )
         .returning({ id: schema.tasks.id });
       if (failed.length === 0) {
@@ -2563,7 +2671,11 @@ export function registerTaskRoutes(
         taskId: id,
         eventName: 'task.failed',
         source: `device:${device.id}`,
-        payload: { reason: body.reason ?? null, ...maybeRunId(req) },
+        payload: {
+          reason: body.reason ?? null,
+          ...(isQuarantineFail ? { quarantine: true } : {}),
+          ...maybeRunId(req),
+        },
       });
       bus.emit({
         id: nanoid(),

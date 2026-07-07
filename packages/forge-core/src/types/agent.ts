@@ -1,5 +1,26 @@
 import { z } from 'zod';
 
+/**
+ * Default agent roster seeded into every new workspace (ADR-004 fleet).
+ * Personality NAMES are the canonical agent identifier domain: daemons claim
+ * tasks using FORGE_DAEMON_AGENT_ID set to one of these names.
+ *
+ * NOTE: this list duplicates the personality roster shipped in
+ * packages/forge-agents/personalities. Single-sourcing the roster is tracked
+ * as issue 21; until then keep the two in sync.
+ */
+export const DEFAULT_WORKSPACE_AGENT_ROSTER = [
+  'architect',
+  'furnace',
+  'anvil',
+  'crucible',
+  'oracle',
+  'scribe',
+  'herald',
+  'temper',
+  'aegis',
+] as const;
+
 export const AgentSchema = z.object({
   id: z.string(),
   workspaceId: z.string().nullable(),

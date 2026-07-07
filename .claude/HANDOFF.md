@@ -23,18 +23,24 @@ protocol for multi-agent sessions.
 
 ## Known traps (hit during the product pass; issue numbers refer to issues.json)
 
-- Workspace-created tasks currently SKIP FM triage: `tasks.ts:1800` hardcodes
-  `pending_agent` where the comment above it promises `pending_dispatcher_action`
-  (issue 2). Don't trust the FM inbox until fixed.
-- Non-repo-bound spawns get a RELATIVE done-file path (`daemon.ts:934`); an agent
-  that loses its cwd completes work but is marked failed (issue 3). Happened live.
+- FIXED in M1 (2026-07-07): FM front door (issue 2), relative done path (3),
+  unseeded workspace agents (43), quarantine 409 limbo (44), assign identifier
+  validation (45), claim retry spam (46), silent architect default now warns (12).
+  See issues.json resolutions for locations.
 - A daemon crash mid-task orphans `in_progress` forever - no lease/heartbeat/reclaim
-  (issue 1). Manual cancel/retry is the only recovery.
-- `FORGE_DAEMON_AGENT_ID` silently defaults to `architect` (issue 12).
-- Dispatcher-mode daemons still run the worker claim loop and spam policy_denied
-  (issue 11).
+  (issue 1, M3). Manual cancel/retry is the only recovery.
+- Claim eligibility uses the DEVICE ROW agentId, set only at registration; PATCH
+  /devices silently drops agentId updates (issue 47, M2). FORGE_DAEMON_AGENT_ID only
+  picks the spawn personality. Register worker devices WITH the agentId.
+- Dispatcher-mode daemons still run the worker claim loop (issue 11); the claim
+  backoff mutes the spam but the proper skip is open.
 - Spawned agents inherit the daemon's full env including auth vars (issue 42). Pin
   `FORGE_DAEMON_MODEL=claude-sonnet-4-6` explicitly until OPS-2 (issue 6) lands.
+- `projectPrefix` must be 2-6 lowercase LETTERS (no digits); task create 422s
+  otherwise.
+- forge-daemon's real-git test (repo.test.ts) can flake under a parallel root
+  `pnpm test` on Windows (issue 49); rerun the package suite in isolation before
+  blaming your change.
 
 ## Orchestration protocol (multi-agent sessions in this repo)
 

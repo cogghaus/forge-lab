@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { nanoid } from 'nanoid';
 import { eq } from 'drizzle-orm';
-import { schema } from '@forge-lab/core';
+import { schema, DEFAULT_WORKSPACE_AGENT_ROSTER } from '@forge-lab/core';
 import { createHub, type Hub } from '../app.js';
 import { createSession } from '../auth/sessions.js';
 import { TEST_HUB_CONFIG, setupAdmin, createWorkspace } from '../test-utils.js';
@@ -76,6 +76,37 @@ describe('/workspaces routes', () => {
     expect(members).toHaveLength(1);
     expect(members[0]!.userId).toBe(ownerId);
     expect(members[0]!.role).toBe('owner');
+  });
+
+  it('POST /workspaces seeds the default agent roster (issue 43)', async () => {
+    // A fresh workspace must have registered agents or FM triage defers forever
+    // ('no agents registered in workspace') and quarantines every task.
+    const { cookie } = await setupAdmin(hub);
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'Seeded', slug: 'seeded' },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const agentsRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${id}/agents`,
+      headers: { cookie },
+    });
+    expect(agentsRes.statusCode).toBe(200);
+    const { agents } = agentsRes.json() as {
+      agents: { name: string; personality: string; runtimeId: string; workspaceId: string }[];
+    };
+    expect(agents).toHaveLength(DEFAULT_WORKSPACE_AGENT_ROSTER.length);
+    expect(agents.map((a) => a.name).sort()).toEqual([...DEFAULT_WORKSPACE_AGENT_ROSTER].sort());
+    for (const agent of agents) {
+      expect(agent.personality).toBe(agent.name);
+      expect(agent.runtimeId).toBe('background');
+      expect(agent.workspaceId).toBe(id);
+    }
   });
 
   it('POST /workspaces - 409 for duplicate slug', async () => {
