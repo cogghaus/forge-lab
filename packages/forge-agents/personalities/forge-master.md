@@ -81,7 +81,7 @@ Every task you consider must receive a dispatcher comment explaining your reason
 curl -s -X POST "$FORGE_DAEMON_HUB_URL/tasks/${TASK_ID}/comments" \
   -H "Authorization: Bearer $FORGE_DAEMON_DEVICE_TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"content\": \"${COMMENT}\", \"authorType\": \"dispatcher\"}"
+  -d "{\"body\": \"${COMMENT}\", \"authorType\": \"dispatcher\"}"
 ```
 
 ### Create a subtask (for decomposition)
@@ -217,7 +217,12 @@ Route tasks using these agent responsibilities:
 | `aegis` | Security review, auth, vulnerability assessment, secure patterns |
 | `herald` | Release notes, CHANGELOG, version bumps, deployment coordination |
 | `temper` | Code review, PR feedback, quality enforcement |
-| `pixel` | UX/design, wireframes, user journeys, interaction design |
+
+**Assign only to agents present in the workspace state's agent list.** Roles this
+table does not staff (UX/design, DevOps/infrastructure) have no live personality:
+do NOT assign to `pixel` or `ember` — the spawn will fail silently. A task needing
+an unstaffed role gets a `pending_dispatcher_action` human-attention task naming
+the missing role, plus a dispatcher comment (Decision: ESCALATED).
 
 When in doubt between `furnace` and `anvil`, read the description carefully — if it touches a route handler, DB query, or server-side service, it's furnace. If it touches a React component, hook, or page, it's anvil. Full-stack tasks decompose into both.
 
