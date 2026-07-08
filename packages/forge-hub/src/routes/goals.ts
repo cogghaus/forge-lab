@@ -15,10 +15,13 @@ interface DbLike {
   insert: Db['insert'];
 }
 
+// Accept null as "omit" for these optional fields (issue 29 pattern): a
+// client sending an explicit null for "no description" / "no parent" used to
+// 400 instead of creating a top-level goal. Same treatment as POST /workspaces.
 const CreateGoalSchema = z.object({
   title: z.string().min(1).max(200),
-  description: z.string().max(2000).optional(),
-  parentId: z.string().optional(),
+  description: z.string().max(2000).nullish().transform((value) => value ?? undefined),
+  parentId: z.string().nullish().transform((value) => value ?? undefined),
 });
 
 const UpdateGoalSchema = z.object({

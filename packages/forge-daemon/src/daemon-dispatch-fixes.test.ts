@@ -368,3 +368,109 @@ describe('issue 12: startup warning when defaultAgentId was silently defaulted',
     expect(warningLogs()).toHaveLength(0);
   });
 });
+
+describe('issue 47: startup warning when FORGE_DAEMON_AGENT_ID differs from the hub device row agentId', () => {
+  let workdir: string;
+  let logs: CapturedLog[];
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-devrow-'));
+    logs = [];
+  });
+
+  afterEach(async () => {
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  function makeDaemon(opts: { defaultAgentId?: string; defaulted?: boolean }): Daemon {
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(new InertRuntime());
+    const daemon = new Daemon({
+      hubUrl: 'http://127.0.0.1:1',
+      deviceToken: 'tok',
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      pollIntervalMs: 60_000,
+      logger: makeLogger(logs),
+      ...(opts.defaultAgentId !== undefined ? { defaultAgentId: opts.defaultAgentId } : {}),
+      ...(opts.defaulted !== undefined ? { defaultAgentIdWasDefaulted: opts.defaulted } : {}),
+    });
+    vi.spyOn(daemon.hubClient, 'connect').mockResolvedValue(undefined);
+    vi.spyOn(daemon.hubClient, 'close').mockResolvedValue(undefined);
+    vi.spyOn(daemon.hubClient, 'listTasks').mockResolvedValue({ tasks: [] });
+    return daemon;
+  }
+
+  function mismatchWarnings(): CapturedLog[] {
+    return logs.filter((l) => l.msg.toUpperCase().includes('DEVICE ROW'));
+  }
+
+  it('warns when FORGE_DAEMON_AGENT_ID differs from the device row agentId, naming both values', async () => {
+    const daemon = makeDaemon({ defaultAgentId: 'furnace', defaulted: false });
+    vi.spyOn(daemon.hubClient, 'getSelf').mockResolvedValue({
+      id: 'dev-1',
+      name: 'worker-1',
+      agentId: 'architect',
+      deviceType: 'worker',
+      status: 'active',
+    });
+    await daemon.start();
+    await daemon.stop();
+    expect(mismatchWarnings()).toHaveLength(1);
+    expect(mismatchWarnings()[0]!.msg).toContain('furnace');
+    expect(mismatchWarnings()[0]!.msg).toContain('architect');
+  });
+
+  it('warns when the device row agentId is null/unset', async () => {
+    const daemon = makeDaemon({ defaultAgentId: 'furnace', defaulted: false });
+    vi.spyOn(daemon.hubClient, 'getSelf').mockResolvedValue({
+      id: 'dev-1',
+      name: 'worker-1',
+      agentId: null,
+      deviceType: 'worker',
+      status: 'active',
+    });
+    await daemon.start();
+    await daemon.stop();
+    expect(mismatchWarnings()).toHaveLength(1);
+    expect(mismatchWarnings()[0]!.msg).toContain('furnace');
+  });
+
+  it('does not warn when FORGE_DAEMON_AGENT_ID matches the device row agentId', async () => {
+    const daemon = makeDaemon({ defaultAgentId: 'architect', defaulted: false });
+    vi.spyOn(daemon.hubClient, 'getSelf').mockResolvedValue({
+      id: 'dev-1',
+      name: 'worker-1',
+      agentId: 'architect',
+      deviceType: 'worker',
+      status: 'active',
+    });
+    await daemon.start();
+    await daemon.stop();
+    expect(mismatchWarnings()).toHaveLength(0);
+  });
+
+  it('does not warn (and does not even fetch the device row) when FORGE_DAEMON_AGENT_ID is unset', async () => {
+    const daemon = makeDaemon({ defaultAgentId: 'architect', defaulted: true });
+    const getSelf = vi.spyOn(daemon.hubClient, 'getSelf').mockResolvedValue({
+      id: 'dev-1',
+      name: 'worker-1',
+      agentId: 'someone-else',
+      deviceType: 'worker',
+      status: 'active',
+    });
+    await daemon.start();
+    await daemon.stop();
+    expect(mismatchWarnings()).toHaveLength(0);
+    expect(getSelf).not.toHaveBeenCalled();
+  });
+
+  it('does not fail startup when the hub device-row fetch errors (e.g. route not deployed yet)', async () => {
+    const daemon = makeDaemon({ defaultAgentId: 'furnace', defaulted: false });
+    vi.spyOn(daemon.hubClient, 'getSelf').mockRejectedValue(new Error('GET /devices/me 404: not_found'));
+    await expect(daemon.start()).resolves.toBeUndefined();
+    await daemon.stop();
+    expect(mismatchWarnings()).toHaveLength(0);
+  });
+});

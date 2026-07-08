@@ -45,8 +45,20 @@ If you cannot complete the task (blocked, ambiguous, out of scope), write the do
 - **Private companion:** https://github.com/sugar-crash-studios/forge-dash-pro (dashboard + marketing site, proprietary, personal use only — Magic UI Pro is NOT redistributable)
 - **Deployment configs:** `homelab-docs` repo
 - **Developer:** Adam (sole developer)
-- **Current state:** Phase 1 vertical slice complete (commit `d7d9c44`). 28 tests green. Ready to begin Phase 2.
-- **Victory milestone:** Phase 2 complete + community dashboard used daily for two weeks.
+- **Current state:** Deployed and operational, not a Phase 1 vertical slice. 9 agent
+  daemons run in production on deploy-host (<deploy-host>), dashboard live at
+  `https://forge.example.com`, hub is on migration `0017` (18 hand-written
+  migrations total). Test counts by package, counted directly from `*.test.ts`
+  files in this repo on 2026-07-08: forge-core ~50, forge-hub ~570,
+  forge-daemon ~175, forge-agents ~25, forge-dash-community ~20, forge-mcp 0
+  (roughly 840 total). The "28 tests" figure previously in this file was long
+  stale. Authoritative, continuously-refreshed status (including the
+  canonical per-package test table) lives in `docs/handoff/HANDOFF.md`; this
+  file is the tech-stack/conventions brief loaded at agent spawn and is
+  refreshed less often, so defer to HANDOFF.md for anything time-sensitive.
+- **Victory milestone (original target, largely achieved):** Phase 2 complete +
+  community dashboard used daily. The dashboard (`forge-dash-community`) is
+  built and deployed, not future work; see Tech Stack below.
 
 ---
 
@@ -68,12 +80,13 @@ If you cannot complete the task (blocked, ambiguous, out of scope), write the do
 - **WebSocket:** `@fastify/websocket`
 - **IDs:** nanoid
 
-### Frontend (future, Phase 2+)
-- **Framework:** Next.js (App Router)
+### Frontend (shipped: `packages/forge-dash-community`)
+- **Framework:** Next.js 15 (App Router)
 - **Styling:** Tailwind
 - **Component library:** HeroUI v3 (community dashboard, free to bundle)
 - **Visual library:** Magic UI Pro (forge-dash-pro ONLY, proprietary, never in public repo)
 - **Motion:** Framer Motion
+- Live in production at `https://forge.example.com`; boots locally with `pnpm dev` (port 3001). Not future work.
 
 ### CLI (future, Phase 4)
 - **Prompts:** `@clack/prompts`
@@ -89,23 +102,33 @@ If you cannot complete the task (blocked, ambiguous, out of scope), write the do
 ```
 forge-lab/
 ├── packages/
-│   ├── forge-core/       # Zod schemas, AgentRuntime interface, Drizzle schema, event taxonomy
-│   ├── forge-hub/        # Fastify hub server, auth, routes, WebSocket, migrations
-│   ├── forge-daemon/     # Hub client, runtime registry, task file sync, MockRuntime, ClaudeCodeRuntime
-│   └── forge-agents/     # Personality schema, registry (personalities stub — port in progress)
+│   ├── forge-core/            # Zod schemas, AgentRuntime interface, Drizzle schema, event taxonomy
+│   ├── forge-hub/              # Fastify hub server, auth, routes, WebSocket, migrations (18: 0000-0017)
+│   ├── forge-daemon/           # Hub client, runtime registry, task file sync, MockRuntime, ClaudeCodeRuntime
+│   ├── forge-agents/           # Personality schema + 13 personality files under personalities/ (shipped, not a stub)
+│   ├── forge-dash-community/   # Next.js 15 dashboard (HeroUI), the public/community dashboard
+│   └── forge-mcp/              # MCP surface
 ├── scripts/
-│   └── check-license.mjs # License scanner (blocks Magic UI Pro in public repo)
+│   ├── check-license.mjs # License scanner (blocks Magic UI Pro in public repo)
+│   ├── dev.sh / dev.ps1  # Local dev bootstrap helpers
+│   └── smoke-test.sh     # End-to-end smoke helper
+├── deploy/
+│   ├── compose.yml            # Hub compose stack
+│   └── daemons.compose.yml    # Daemon fleet compose stack (current production deployment model)
 ├── .github/workflows/
-│   └── ci.yml            # lint / typecheck / build / test / license scanner
-├── context/              # Project brief for vibe-forge agents (this file lives here)
-├── _vibe-forge/          # Vibe Forge tool + its internal state (most of it is gitignored; tasks/ and context/ tracked)
+│   ├── ci.yml             # lint / typecheck / build / test / license scanner
+│   └── cd.yml             # deploy to deploy-host on merge to main
+├── context/               # Project brief for vibe-forge agents (this file lives here)
+├── docs/                  # Handoffs, ADRs, runbooks, design docs, QUICKSTART.md
+├── issues/                # issues.json, the findings/backlog source of truth
+├── _vibe-forge/           # Vibe Forge tool + its internal state (most of it is gitignored; tasks/ and context/ tracked)
 ├── pnpm-workspace.yaml
 ├── turbo.json
 ├── tsconfig.base.json
 └── package.json
 ```
 
-Phase 2 and later will add `packages/forge-cli`, `packages/forge-context`, `packages/forge-dash-shared`, `packages/forge-dash-community`. Private dashboard and marketing site live in the separate `forge-dash-pro` repo.
+`forge-cli` and `forge-context` (mentioned in earlier planning as future packages) do not exist yet. Private dashboard and marketing site live in the separate `forge-dash-pro` repo, layering Magic UI Pro on top of the same HeroUI base as `forge-dash-community`.
 
 ---
 
@@ -150,12 +173,12 @@ Decided 2026-04-10. Same SQLite file format, different Node driver. libsql has N
 No unauthenticated endpoints, ever. First account becomes admin; subsequent registrations are disabled (by design — this is a personal tool). Device tokens are hashed before storage. Session tokens are also hashed. `/healthz` is the only endpoint that skips auth, and it returns a static payload.
 
 ### Heimdall and Worker Loop moved to daemon
-vibe-forge implements Heimdall as a Claude Code PreToolUse hook and the worker loop as a Claude Code Stop hook. Both are Claude-Code specific. forge-lab moves them into the daemon so they work with any runtime. Phase 1 has Heimdall as a pass-through stub; the real policy engine lands in Phase 2.
+vibe-forge implements Heimdall as a Claude Code PreToolUse hook and the worker loop as a Claude Code Stop hook. Both are Claude-Code specific. forge-lab moves them into the daemon so they work with any runtime. Heimdall is no longer a pass-through stub: the policy engine (`packages/forge-hub/src/policy/`), condition evaluator, and `policy_rule_changes` audit trail (migration `0012`) are live. Enforcement coverage across all declared `VALID_ACTIONS` was completed by OPS-1 (see `docs/handoff/HANDOFF.md`); check that doc for current enforcement status rather than assuming full coverage indefinitely.
 
 ### Task IDs are project-prefixed
 Task IDs follow the pattern `<project_prefix>-<sequence>`, e.g. `fl-001` for forge-lab, `cg-001` for a hypothetical project prefixed `cg`. The hub computes the next sequence per project on task create. Vibe-forge tasks in `_vibe-forge/tasks/` use domain prefixes like `ARCH-001`; forge-lab tasks created via Vibe Forge use `FL-XXX`.
 
-### Dashboard strategy (Phase 2+)
+### Dashboard strategy (shipped)
 Two dashboards. `forge-dash-community` lives in the public repo and uses HeroUI only, free to bundle. `forge-dash-pro/packages/dash` lives in the private repo and layers Magic UI Pro on top of HeroUI for Adam's personal experience. Feature parity is mandatory. Magic UI Pro NEVER appears in the public repo — the license scanner enforces this.
 
 ### Why libsql over built-in node:sqlite
@@ -189,12 +212,20 @@ Requires Node 20+ LTS and pnpm 10+. The repo is TypeScript strict with `exactOpt
 
 ### Environment Variables (forge-daemon)
 
+Non-exhaustive; see `packages/forge-daemon/src/config.ts` for the full set and
+`docs/QUICKSTART.md` for a worked example of booting an FM and a worker daemon.
+
 | Variable | Required | Description |
 |---|---|---|
 | `FORGE_DAEMON_HUB_URL` | yes | Hub base URL |
 | `FORGE_DAEMON_DEVICE_TOKEN` | yes | Device token from `POST /devices` on the hub |
-| `FORGE_DAEMON_WORKDIR` | no | Defaults to `process.cwd()`. Where task files are written |
-| `FORGE_DAEMON_DEFAULT_RUNTIME` | no | Defaults to `mock`. Set to `claude-code` for real agents |
+| `FORGE_DAEMON_WORKDIR` | no | Defaults to `process.cwd()`. Where task files, agent logs, and done markers are written |
+| `FORGE_DAEMON_DEFAULT_RUNTIME` | no | Defaults to `background` (not `mock`). Real spawn path is `ClaudeCodeRuntime` behind a detached `BackgroundRuntime` |
+| `FORGE_DAEMON_MODEL` | no (but always set it) | Code defaults an unset value to `claude-sonnet-4-6`; set it explicitly anyway to avoid ever depending on that fallback |
+| `FORGE_DAEMON_AGENT_ID` | no | Selects the spawned personality. Does NOT control claim eligibility: that is the device row's `agentId` (set at `POST /devices` registration, updatable via `PATCH /devices/:deviceId`) |
+| `FORGE_DAEMON_WORKSPACE_ID` | no | Scopes this daemon to one workspace's tasks |
+| `FORGE_DAEMON_DISPATCHER_MODE` | no | Set `true` for the FM/dispatcher daemon; must be paired with `FORGE_DAEMON_DISPATCHER_PERSONALITY` |
+| `FORGE_DAEMON_SKIP_PERMISSIONS` | no | Defaults `true`; skips `--dangerously-skip-permissions` prompts for unattended background daemons |
 
 ---
 
@@ -216,7 +247,15 @@ Enforces test coverage. Global rule: bug fixes need failing-first tests. forge-l
 Keeps the "daily driver by Phase 2" victory milestone in view. Push back on work that does not move toward that. Oracle owns product positioning: forge-lab is a personal tool with a product door open (Option B from the notez Architecture Decisions note), not a SaaS. Requirements checks ask "does this make forge-lab usable daily, or is it polish?"
 
 ### Scribe (📝)
-Ports content from vibe-forge into forge-lab. The current active port is agent personalities (see FL-001 in `_vibe-forge/tasks/pending/`). Scribe reads the vibe-forge personality.md files at `G:\dev\vibe-forge\agents\{agent}\personality.md` and produces structured equivalents in `packages/forge-agents/personalities/` that match the `AgentPersonalitySchema` in `packages/forge-agents/src/personality.ts`.
+Ports content from vibe-forge into forge-lab. The personality port (FL-001) is
+done: `packages/forge-agents/personalities/` holds 13 personality files
+(`aegis`, `anvil`, `architect`, `crucible`, `flux`, `forge-master`,
+`furnace`, `herald`, `loki`, `oracle`, `scribe`, `slag`, `temper`),
+structured to match the `AgentPersonalitySchema` in
+`packages/forge-agents/src/personality.ts` (not stubs). Scribe's ongoing job
+is documentation: producing structured docs/ADRs from workspace activity and
+keeping ported content in sync with the vibe-forge source at
+`G:\dev\vibe-forge\agents\{agent}\personality.md` when it changes.
 
 ### Pixel (🎨)
 Comes in when dashboard or UI work is active. HeroUI for the community dashboard, Magic UI Pro for forge-dash-pro only (never in the public repo). Pixel follows the Pixel Design Vision note in notez for color, layout, and forge temperature.
