@@ -13,9 +13,39 @@ const ConfigSchema = z.object({
   appBaseUrl: z.string().default('http://localhost:3001'),
   /** Shared secret for the internal /waker/has-work endpoint. */
   wakerToken: z.string().optional(),
+  /**
+   * In_progress claim lease TTL in seconds (M3 issue 1). Left optional (rather
+   * than a zod .default()) so existing HubConfig object literals in tests keep
+   * compiling unchanged; DEFAULT_TASK_LEASE_SECONDS is applied at call sites
+   * via resolveTaskLeaseSeconds.
+   */
+  taskLeaseSeconds: z.coerce.number().int().positive().optional(),
+  /** Reclaim sweep interval in seconds. 0 disables the sweep. Optional for the same reason as taskLeaseSeconds. */
+  reclaimSweepSeconds: z.coerce.number().int().min(0).optional(),
+  /** Max lease reclaims before a task fails permanently. Optional for the same reason as taskLeaseSeconds. */
+  taskMaxReclaims: z.coerce.number().int().positive().optional(),
 });
 
 export type HubConfig = z.infer<typeof ConfigSchema>;
+
+/** Default in_progress lease TTL (30 minutes), per docs/design/m3-reliability.md Issue 1. */
+export const DEFAULT_TASK_LEASE_SECONDS = 1800;
+/** Default reclaim sweep interval in seconds. */
+export const DEFAULT_RECLAIM_SWEEP_SECONDS = 60;
+/** Default cap on lease reclaims before a task is failed permanently. */
+export const DEFAULT_TASK_MAX_RECLAIMS = 3;
+
+export function resolveTaskLeaseSeconds(config: HubConfig): number {
+  return config.taskLeaseSeconds ?? DEFAULT_TASK_LEASE_SECONDS;
+}
+
+export function resolveReclaimSweepSeconds(config: HubConfig): number {
+  return config.reclaimSweepSeconds ?? DEFAULT_RECLAIM_SWEEP_SECONDS;
+}
+
+export function resolveTaskMaxReclaims(config: HubConfig): number {
+  return config.taskMaxReclaims ?? DEFAULT_TASK_MAX_RECLAIMS;
+}
 
 function resolveSessionSecret(env: NodeJS.ProcessEnv): string | undefined {
   const direct = env['FORGE_HUB_SESSION_SECRET'];
@@ -39,5 +69,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HubConfig {
     resendApiKey: env['RESEND_API_KEY'],
     appBaseUrl: env['APP_BASE_URL'],
     wakerToken: env['FORGE_HUB_WAKER_TOKEN'],
+    taskLeaseSeconds: env['FORGE_HUB_TASK_LEASE_SECONDS'],
+    reclaimSweepSeconds: env['FORGE_HUB_RECLAIM_SWEEP_SECONDS'],
+    taskMaxReclaims: env['FORGE_HUB_TASK_MAX_RECLAIMS'],
   });
 }

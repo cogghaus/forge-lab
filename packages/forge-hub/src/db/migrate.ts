@@ -1,11 +1,16 @@
 import type { Client } from '@libsql/client';
 
-interface Migration {
+export interface Migration {
   name: string;
   sql: string;
 }
 
-const MIGRATIONS: readonly Migration[] = [
+/**
+ * Exported so migrate.test.ts can apply a prefix of this list directly
+ * (e.g. everything up to but excluding 0018_task_lease) to set up
+ * pre-migration state for backfill tests. Not used outside tests.
+ */
+export const MIGRATIONS: readonly Migration[] = [
   {
     name: '0000_init',
     sql: `
@@ -451,6 +456,23 @@ CREATE TABLE agent_memory (
 );
 -- Index required for ON DELETE CASCADE FK enforcement (SQLite does not auto-index FK targets)
 CREATE INDEX agent_memory_task_idx ON agent_memory(task_id);
+`,
+  },
+  {
+    name: '0018_task_lease',
+    sql: `
+-- In_progress claim lease (M3 issue 1). lease_expires_at is epoch ms, NULL means
+-- the task is not currently leased (not in_progress, or predates this migration
+-- and has not yet been touched). reclaim_count tracks how many times the reclaim
+-- sweep has taken the task back from a crashed daemon, capped by
+-- FORGE_HUB_TASK_MAX_RECLAIMS before the task is failed permanently.
+ALTER TABLE tasks ADD COLUMN lease_expires_at INTEGER;
+ALTER TABLE tasks ADD COLUMN reclaim_count INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX tasks_lease_idx ON tasks(status, lease_expires_at);
+-- Backfill: pre-existing in_progress rows join the lease world with one full
+-- default TTL window (1800s) from migration time, instead of being permanently
+-- exempt from the reclaim sweep.
+UPDATE tasks SET lease_expires_at = (unixepoch() * 1000) + 1800000 WHERE status = 'in_progress' AND lease_expires_at IS NULL;
 `,
   },
 ];

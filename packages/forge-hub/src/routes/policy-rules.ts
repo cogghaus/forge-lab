@@ -8,7 +8,7 @@ import { requireWorkspaceMember, getWorkspace, requireUser, getUser } from '../a
 import { parseCondition, validateCondition } from '../policy/conditions.js';
 
 const VALID_ACTIONS = [
-  'task:assign', 'task:claim', 'task:cancel', 'task:retry', 'task:complete', 'task:fail',
+  'task:assign', 'task:claim', 'task:cancel', 'task:retry', 'task:complete', 'task:fail', 'task:heartbeat',
   'doc:write', 'doc:update', 'doc:supersede', 'doc:archive',
   'device:rotate-token', 'device:deregister',
   'context:read', 'workspace:list',

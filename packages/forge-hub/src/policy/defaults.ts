@@ -202,6 +202,14 @@ export const BUILT_IN_RULES: readonly BuiltInRule[] = [
     effect: 'allow',
     priority: 50,
   },
+  // Workers heartbeat tasks they hold the in_progress lease on (M3 issue 1).
+  {
+    id: 'builtin_worker_task_heartbeat_allow',
+    principal: 'role:worker',
+    action: 'task:heartbeat',
+    effect: 'allow',
+    priority: 50,
+  },
   // FM quarantine (issue 44): the dispatcher fails tasks stuck in
   // pending_dispatcher_action after repeated triage deferrals. The route
   // handler restricts orchestrator fails to exactly that status; this rule

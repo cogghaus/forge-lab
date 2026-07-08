@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 import { createHub, type Hub } from '../app.js';
 import { schema } from '@forge-lab/core';
 import { TEST_HUB_CONFIG, setupAdmin, registerDevice, createTask, createWorkspace } from '../test-utils.js';
+import { sweepExpiredLeases } from './tasks.js';
 
 describe('/workspaces/:workspaceId/tasks', () => {
   let hub: Hub;
@@ -249,6 +250,29 @@ describe('/tasks/:id/claim', () => {
     expect(task?.assignedDeviceId).toBe(device1.id);
   });
 
+  // M3 issue 1: claim also sets a lease so a crashed daemon's task can be
+  // reclaimed instead of orphaned forever.
+  it('claim sets lease_expires_at roughly leaseTtlSeconds in the future', async () => {
+    const taskId = await createTask(hub, cookie);
+    const before = Date.now();
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${device1.token}` },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const task = await hub.db
+      .select({ leaseExpiresAt: schema.tasks.leaseExpiresAt })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect(task?.leaseExpiresAt).not.toBeNull();
+    // Default TTL is 1800s; assert the lease lands well beyond "now" without
+    // hardcoding tight bounds around timer jitter.
+    expect((task!.leaseExpiresAt as Date).getTime()).toBeGreaterThan(before + 1_000_000);
+  });
+
   it('cannot claim an in_progress task', async () => {
     const taskId = await createTask(hub, cookie);
     await hub.fastify.inject({
@@ -337,6 +361,148 @@ describe('/tasks/:id/claim', () => {
       headers: { cookie },
     });
     expect(res.statusCode).toBe(401);
+  });
+});
+
+describe('POST /tasks/:id/heartbeat (M3 issue 1)', () => {
+  let hub: Hub;
+  let cookie: string;
+  let device1: { id: string; token: string };
+  let device2: { id: string; token: string };
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    device1 = await registerDevice(hub, cookie, 'device-1');
+    device2 = await registerDevice(hub, cookie, 'device-2');
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  /** Create a task and claim it with device1, returns the task id. */
+  async function createAndClaimTask(): Promise<string> {
+    const taskId = await createTask(hub, cookie);
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${device1.token}` },
+    });
+    return taskId;
+  }
+
+  it('owning device extends the lease and gets ok:true + leaseExpiresAt', async () => {
+    const taskId = await createAndClaimTask();
+    const before = await hub.db
+      .select({ leaseExpiresAt: schema.tasks.leaseExpiresAt })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/heartbeat`,
+      headers: { authorization: `Bearer ${device1.token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; leaseExpiresAt: number };
+    expect(body.ok).toBe(true);
+    expect(typeof body.leaseExpiresAt).toBe('number');
+
+    const after = await hub.db
+      .select({ leaseExpiresAt: schema.tasks.leaseExpiresAt })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, taskId))
+      .get();
+    expect((after!.leaseExpiresAt as Date).getTime()).toBeGreaterThanOrEqual(
+      (before!.leaseExpiresAt as Date).getTime(),
+    );
+    expect((after!.leaseExpiresAt as Date).getTime()).toBe(body.leaseExpiresAt);
+  });
+
+  it('heartbeat writes no task_history row and no bus event (too chatty per design)', async () => {
+    const taskId = await createAndClaimTask();
+    let busEvents = 0;
+    hub.bus.subscribe(() => {
+      busEvents++;
+    });
+
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/heartbeat`,
+      headers: { authorization: `Bearer ${device1.token}` },
+    });
+
+    expect(busEvents).toBe(0);
+    const history = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    expect(history.filter((h) => h.eventName === 'task.heartbeat')).toHaveLength(0);
+  });
+
+  it('returns 409 lease_lost for a device that does not own the task', async () => {
+    const taskId = await createAndClaimTask();
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/heartbeat`,
+      headers: { authorization: `Bearer ${device2.token}` },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('lease_lost');
+  });
+
+  it('returns 409 lease_lost for a task that is not in_progress (e.g. already completed)', async () => {
+    const taskId = await createAndClaimTask();
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/complete`,
+      headers: { authorization: `Bearer ${device1.token}` },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/heartbeat`,
+      headers: { authorization: `Bearer ${device1.token}` },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('lease_lost');
+  });
+
+  it('returns 409 lease_lost for a non-existent task', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks/fl-9999/heartbeat',
+      headers: { authorization: `Bearer ${device1.token}` },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('lease_lost');
+  });
+
+  it('requires device auth (user session returns 401)', async () => {
+    const taskId = await createAndClaimTask();
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/heartbeat`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('returns 403 policy_denied for an orchestrator device (role:worker allow only)', async () => {
+    const taskId = await createAndClaimTask();
+    const fm = await registerDevice(hub, cookie, 'fm-device', {
+      agentId: 'forge-master',
+      deviceType: 'orchestrator',
+    });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/heartbeat`,
+      headers: { authorization: `Bearer ${fm.token}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('policy_denied');
   });
 });
 
@@ -3686,5 +3852,334 @@ describe('task dependency graph', () => {
     // so the task goes to the dispatcher inbox rather than the claimable pool.
     const task = await hub.db.select({ status: schema.tasks.status }).from(schema.tasks).where(eq(schema.tasks.id, id)).get();
     expect(task?.status).toBe('pending_dispatcher_action');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reclaim sweep (M3 issue 1). The interval itself lives in app.ts; these
+// tests call the exported sweepExpiredLeases function directly, matching the
+// design doc's test-plan instruction (TEST_HUB_CONFIG sets
+// reclaimSweepSeconds: 0 so no background timer races these assertions).
+// ---------------------------------------------------------------------------
+
+describe('sweepExpiredLeases (M3 issue 1)', () => {
+  let hub: Hub;
+  let cookie: string;
+  let device1: { id: string; token: string };
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+    device1 = await registerDevice(hub, cookie, 'device-1');
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  /** Claim taskId with the given device token, then force its lease into the past. */
+  async function claimAndExpireLease(taskId: string, deviceToken: string): Promise<void> {
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    await hub.db
+      .update(schema.tasks)
+      .set({ leaseExpiresAt: new Date(Date.now() - 1000) })
+      .where(eq(schema.tasks.id, taskId));
+  }
+
+  it('ignores in_progress tasks whose lease has not expired', async () => {
+    const taskId = await createTask(hub, cookie);
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${device1.token}` },
+    });
+
+    const result = await sweepExpiredLeases(hub.db, hub.bus, { maxReclaims: 3 });
+    expect(result).toEqual({ requeued: 0, failed: 0 });
+
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('in_progress');
+  });
+
+  it('requeues an unrouted expired task to pending_agent and increments reclaim_count', async () => {
+    const taskId = await createTask(hub, cookie);
+    await claimAndExpireLease(taskId, device1.token);
+
+    const result = await sweepExpiredLeases(hub.db, hub.bus, { maxReclaims: 3 });
+    expect(result).toEqual({ requeued: 1, failed: 0 });
+
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('pending_agent');
+    expect(task?.assignedDeviceId).toBeNull();
+    expect(task?.leaseExpiresAt).toBeNull();
+    expect(task?.reclaimCount).toBe(1);
+  });
+
+  it('requeues a routed expired task to assigned so the same worker re-claims it', async () => {
+    const routedDevice = await registerDevice(hub, cookie, 'routed-device', { agentId: 'engineer' });
+    const createRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'fl', title: 'Routed task', assignedAgentId: 'engineer' },
+    });
+    const { id: taskId } = createRes.json() as { id: string };
+    await claimAndExpireLease(taskId, routedDevice.token);
+
+    const result = await sweepExpiredLeases(hub.db, hub.bus, { maxReclaims: 3 });
+    expect(result).toEqual({ requeued: 1, failed: 0 });
+
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('assigned');
+    expect(task?.assignedAgentId).toBe('engineer');
+    expect(task?.reclaimCount).toBe(1);
+  });
+
+  it('emits a task.lease_reclaimed bus event and history row when requeued under the cap', async () => {
+    const taskId = await createTask(hub, cookie);
+    await claimAndExpireLease(taskId, device1.token);
+
+    const busEvents: Array<{ name: string; payload: Record<string, unknown> }> = [];
+    hub.bus.subscribe((env) => busEvents.push({ name: env.name, payload: env.payload as Record<string, unknown> }));
+
+    await sweepExpiredLeases(hub.db, hub.bus, { maxReclaims: 3 });
+
+    const reclaimed = busEvents.find((e) => e.name === 'task.lease_reclaimed');
+    expect(reclaimed).toBeDefined();
+    expect(reclaimed?.payload['reclaimCount']).toBe(1);
+    expect(reclaimed?.payload['taskId']).toBe(taskId);
+
+    const history = await hub.db.select().from(schema.taskHistory).where(eq(schema.taskHistory.taskId, taskId));
+    expect(history.filter((h) => h.eventName === 'task.lease_reclaimed')).toHaveLength(1);
+  });
+
+  it('fails a task permanently once reclaim_count would exceed maxReclaims', async () => {
+    const taskId = await createTask(hub, cookie);
+    await claimAndExpireLease(taskId, device1.token);
+    // Simulate a task already at the cap from prior sweep passes.
+    await hub.db.update(schema.tasks).set({ reclaimCount: 3 }).where(eq(schema.tasks.id, taskId));
+
+    const busEvents: string[] = [];
+    hub.bus.subscribe((env) => busEvents.push(env.name));
+
+    const result = await sweepExpiredLeases(hub.db, hub.bus, { maxReclaims: 3 });
+    expect(result).toEqual({ requeued: 0, failed: 1 });
+
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('failed');
+    expect(task?.assignedDeviceId).toBeNull();
+    expect(task?.leaseExpiresAt).toBeNull();
+
+    const history = await hub.db.select().from(schema.taskHistory).where(eq(schema.taskHistory.taskId, taskId));
+    const failEvent = history.find((h) => h.eventName === 'task.failed');
+    expect(failEvent).toBeDefined();
+    expect((failEvent?.payload as Record<string, unknown>)['reason']).toBe('lease_expired_max_reclaims');
+
+    expect(busEvents).toContain('task.failed');
+    expect(busEvents).not.toContain('task.lease_reclaimed');
+  });
+
+  it('over-cap phase task failure sets the root blockedReason and writes task.phase_blocked (mirrors stale-phase bookkeeping)', async () => {
+    process.env['FORGE_SEQUENCES_ENABLED'] = '1';
+    try {
+      const workspaceId = await createWorkspace(hub, cookie);
+      const architectDevice = await registerDevice(hub, cookie, 'architect-device', { agentId: 'architect' });
+
+      const createRes = await hub.fastify.inject({
+        method: 'POST',
+        url: `/workspaces/${workspaceId}/tasks`,
+        headers: { cookie },
+        payload: {
+          projectPrefix: 'swp',
+          title: 'Phase sweep task',
+          sequenceSpec: {
+            phases: [
+              { title: 'Design', role: 'architect', prompt: 'Design the feature.' },
+              { title: 'Implement', role: 'engineer', prompt: 'Implement the design.' },
+            ],
+          },
+        },
+      });
+      expect(createRes.statusCode).toBe(201);
+      const { id: rootId } = createRes.json() as { id: string };
+      const phase0Id = `${rootId}-p0`;
+
+      await claimAndExpireLease(phase0Id, architectDevice.token);
+      await hub.db.update(schema.tasks).set({ reclaimCount: 3 }).where(eq(schema.tasks.id, phase0Id));
+
+      const result = await sweepExpiredLeases(hub.db, hub.bus, { maxReclaims: 3 });
+      expect(result).toEqual({ requeued: 0, failed: 1 });
+
+      const phase0 = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, phase0Id)).get();
+      expect(phase0?.status).toBe('failed');
+
+      const root = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, rootId)).get();
+      expect(root?.blockedReason).toBe('phase_failed:0');
+
+      // Task creation itself may already have written a task.phase_blocked row
+      // (role_unavailable:<role>, if the device-availability check at create
+      // time didn't see the just-registered device yet), find the one the
+      // sweep wrote rather than assuming it is the only one.
+      const rootHistory = await hub.db.select().from(schema.taskHistory).where(eq(schema.taskHistory.taskId, rootId));
+      const blockedEvent = rootHistory.find(
+        (h) => h.eventName === 'task.phase_blocked' && (h.payload as Record<string, unknown>)['reason'] === 'phase_failed:0',
+      );
+      expect(blockedEvent).toBeDefined();
+    } finally {
+      delete process.env['FORGE_SEQUENCES_ENABLED'];
+    }
+  });
+
+  it('a raced task (status changed away from in_progress before the sweep writes) is left untouched', async () => {
+    const taskId = await createTask(hub, cookie);
+    await claimAndExpireLease(taskId, device1.token);
+    // Simulate another writer completing the task between the sweep's SELECT and UPDATE
+    // by completing it directly through the route before invoking the sweep.
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/complete`,
+      headers: { authorization: `Bearer ${device1.token}` },
+    });
+
+    const result = await sweepExpiredLeases(hub.db, hub.bus, { maxReclaims: 3 });
+    expect(result).toEqual({ requeued: 0, failed: 0 });
+
+    const task = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).get();
+    expect(task?.status).toBe('completed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Idempotency of terminal transitions (M3 issue 14 hub-side contract): a
+// retried complete/fail call after a half-applied first attempt must return a
+// benign non-5xx response, never a 500, so the daemon's retry-with-backoff
+// path converges instead of looping forever.
+// ---------------------------------------------------------------------------
+
+describe('terminal transition idempotency (M3 issue 14)', () => {
+  let hub: Hub;
+  let cookie: string;
+  let deviceToken: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    const admin = await setupAdmin(hub);
+    cookie = admin.cookie;
+    const dev = await registerDevice(hub, cookie, 'idempotency-device');
+    deviceToken = dev.token;
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function createClaimAndComplete(): Promise<string> {
+    const taskId = await createTask(hub, cookie);
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/complete`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    return taskId;
+  }
+
+  it('completing an already-completed task returns a benign non-5xx response, not a 500', async () => {
+    const taskId = await createClaimAndComplete();
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/complete`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+
+    expect(res.statusCode).toBeLessThan(500);
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('already_completed');
+
+    // The retry must not have produced a second history event or bus double-count.
+    const history = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    expect(history.filter((h) => h.eventName === 'task.completed')).toHaveLength(1);
+  });
+
+  it('failing an already-failed task returns a benign non-5xx response, not a 500', async () => {
+    const taskId = await createTask(hub, cookie);
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { reason: 'first failure' },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { reason: 'retried after the first attempt seemingly timed out' },
+    });
+
+    expect(res.statusCode).toBeLessThan(500);
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('not_in_progress');
+
+    const history = await hub.db
+      .select()
+      .from(schema.taskHistory)
+      .where(eq(schema.taskHistory.taskId, taskId));
+    expect(history.filter((h) => h.eventName === 'task.failed')).toHaveLength(1);
+  });
+
+  it('failing an already-completed task returns a benign non-5xx response, not a 500', async () => {
+    const taskId = await createClaimAndComplete();
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+      payload: { reason: 'stale retry racing a completed task' },
+    });
+
+    expect(res.statusCode).toBeLessThan(500);
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('completing an already-failed task returns a benign non-5xx response, not a 500', async () => {
+    const taskId = await createTask(hub, cookie);
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/claim`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/fail`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/complete`,
+      headers: { authorization: `Bearer ${deviceToken}` },
+    });
+
+    expect(res.statusCode).toBeLessThan(500);
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('task_failed');
   });
 });

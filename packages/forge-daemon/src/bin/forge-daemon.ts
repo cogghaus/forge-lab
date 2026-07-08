@@ -96,6 +96,9 @@ async function main(): Promise<void> {
     dispatcherWorkspaceMode: config.dispatcherWorkspaceMode,
     ...(config.fmCooldownMs !== undefined && { fmCooldownMs: config.fmCooldownMs }),
     ...(config.idleShutdownMs !== undefined && { idleShutdownMs: config.idleShutdownMs }),
+    ...(config.heartbeatMs !== undefined && { heartbeatMs: config.heartbeatMs }),
+    ...(config.maxTaskRuntimeMs !== undefined && { maxTaskRuntimeMs: config.maxTaskRuntimeMs }),
+    ...(config.terminalRetryLimit !== undefined && { terminalRetryLimit: config.terminalRetryLimit }),
     logger,
   });
 

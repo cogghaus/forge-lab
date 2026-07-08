@@ -1,6 +1,35 @@
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
+import { z } from 'zod';
 import type { CreateTaskInput, EventEnvelope, Task } from '@forge-lab/core';
+
+/**
+ * Thrown by {@link HubClient.request} for any non-2xx HTTP response. Carries the
+ * status code as a first-class field (rather than making callers regex the
+ * message) so retry logic (issue 14's terminal-call retry helper, issue 1's
+ * heartbeat loop) can branch on 4xx vs 5xx/network without string matching.
+ */
+export class HttpError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+  }
+}
+
+/**
+ * Response contract for POST /tasks/:id/heartbeat (M3 issue 1). The hub route
+ * is implemented in parallel (docs/design/m3-reliability.md); leaseExpiresAt is
+ * epoch ms per the migration 0018 column type. Validated at this boundary per
+ * repo convention (Zod at every external boundary) even though older HubClient
+ * methods predate that convention and are out of scope here.
+ */
+const HeartbeatResponseSchema = z.object({
+  ok: z.literal(true),
+  leaseExpiresAt: z.number(),
+});
+export type HeartbeatResponse = z.infer<typeof HeartbeatResponseSchema>;
 
 export interface TaskInstruction {
   id: string;
@@ -242,6 +271,18 @@ export class HubClient extends EventEmitter {
     await this.request<{ ok: boolean }>('POST', `/tasks/${id}/fail`, { reason });
   }
 
+  /**
+   * Extend this task's lease on the hub (M3 issue 1). Contract:
+   * success -> `{ok:true, leaseExpiresAt}`; the hub took the task back (lease
+   * expired and was reclaimed, or the task no longer exists) -> throws
+   * {@link HttpError} with status 409 or 404. Callers must not call `failTask`
+   * on that failure: the hub, not this daemon, decided the outcome.
+   */
+  async heartbeatTask(id: string): Promise<HeartbeatResponse> {
+    const raw = await this.request<unknown>('POST', `/tasks/${encodeURIComponent(id)}/heartbeat`);
+    return HeartbeatResponseSchema.parse(raw);
+  }
+
   listInstructions(taskId: string): Promise<{ instructions: TaskInstruction[] }> {
     return this.request<{ instructions: TaskInstruction[] }>(
       'GET',
@@ -338,7 +379,7 @@ export class HubClient extends EventEmitter {
       return res.content;
     } catch (err) {
       // 404 (no memory) is expected — treat all errors as "no memory"
-      if (err instanceof Error && err.message.includes('404')) return null;
+      if (err instanceof HttpError && err.status === 404) return null;
       throw err;
     }
   }
@@ -359,7 +400,7 @@ export class HubClient extends EventEmitter {
     const res = await fetch(url, init);
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`${method} ${path} ${res.status}: ${text}`);
+      throw new HttpError(res.status, `${method} ${path} ${res.status}: ${text}`);
     }
     const text = await res.text();
     return (text ? JSON.parse(text) : null) as T;
