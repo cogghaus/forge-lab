@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "nextId": 50,
+  "nextId": 53,
   "_conventions": "One issue per finding. status: open|in-progress|fixed|deferred|wont-fix. Closing REQUIRES resolution (root cause + fix location). Flip statuses as work lands, not in an end sweep. source: where the finding came from. round: product-pass-2026-07-07 for this seeding.",
   "issues": [
     {
@@ -379,12 +379,13 @@
       "detail": "Schema requires string-or-omit (exactOptionalPropertyTypes style). A null from any client is a confusing 422. Accept null as omit at the boundary (Zod .nullish() -> undefined) for optional fields on public creation endpoints.",
       "category": "polish",
       "area": "forge-hub",
-      "status": "open",
+      "status": "fixed",
       "priority": "low",
       "round": "product-pass-2026-07-07",
       "source": "e2e-smoke-run",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-08",
+      "resolution": "Root cause: CreateWorkspaceInputSchema required string-or-omit, so repoUrl:null 422d. Fix: local CreateWorkspaceBodySchema in forge-hub routes/workspaces.ts treats null as omit (nullishToUndefined) for description/repoUrl/repoBranch; same pattern applied to CreateGoalSchema description/parentId in routes/goals.ts. Shared forge-core schema untouched. Tests: workspaces.test.ts POST /workspaces accepts repoUrl:null as omit; goals.test.ts POST accepts description:null and parentId:null as omit. Other creation endpoints audited: tasks/devices/workspace-patch already nullable; comments.authorId, agent-instances.runtimeInstanceId, invites, agents.config deliberately skipped (see issue 51)."
     },
     {
       "id": 30,
@@ -392,12 +393,13 @@
       "detail": "PM2 runbook (production-deployment.md, hub.local hostname) vs compose/CD reality (daemons.compose.yml, lab.local, Traefik). project-context.md is badly stale (claims Phase 1, 28 tests, personalities as stubs). No single 'clone -> first dispatched task' walkthrough exists; the product-pass boot required reading source to discover env vars, device registration, dispatcher mode. Write docs/QUICKSTART.md validated on a clean machine; mark the PM2 runbook superseded; refresh project-context.md.",
       "category": "docs",
       "area": "docs",
-      "status": "open",
+      "status": "fixed",
       "priority": "high",
       "round": "product-pass-2026-07-07",
       "source": "docs-audit,e2e-smoke-run",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-08",
+      "resolution": "Wrote docs/QUICKSTART.md (clone -> first dispatched task, sourced from smoke skill and cross-checked against code, worker registered WITH agentId). Added superseded banner to docs/runbooks/production-deployment.md (PM2 model retired, points to compose/CD reality and QUICKSTART). Refreshed context/project-context.md (note: lives in context/, not docs/) including a wrong claim: FORGE_DAEMON_DEFAULT_RUNTIME defaults to background, not mock (config.ts:10). Also fixed stale smoke skill steps 3 and 6 (issue-2 workaround removed, worker agentId added). Pending live validation walk by verifier."
     },
     {
       "id": 31,
@@ -619,12 +621,13 @@
       "detail": "Claim eligibility uses the DEVICE ROW's agentId (tasks.ts:794-799), set only at POST /devices; PATCH /devices/:id silently drops an agentId field (observed live - response returned agentId:null after sending agentId:architect). The daemon env FORGE_DAEMON_AGENT_ID only picks the spawn personality. A device registered without agentId can never claim FM-routed tasks and there is no error pointing at the mismatch. Fix: allow agentId update via PATCH (or reject unknown fields loudly), and log a startup warning when daemon env agentId differs from the device row (GET /devices/me).",
       "category": "bug",
       "area": "forge-hub,forge-daemon",
-      "status": "open",
+      "status": "fixed",
       "priority": "high",
       "round": "product-pass-2026-07-07",
       "source": "e2e-smoke-run",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-08",
+      "resolution": "Hub: PatchDeviceBodySchema (routes/devices.ts) now makes name optional and accepts agentId (nullable); resolveDeviceAgentId validates against builtin registry or owned workspace-agent names, unknown id -> 422 unknown_agent, null clears; PATCH response reflects the update. Added GET /devices/me (device auth) returning own row. Note: the live symptom (silent drop) partially mismatched code archaeology - old RenameDeviceBodySchema required name, so agentId-only PATCH 400d; both failure modes now closed. Daemon: HubClient.getSelf() + warnIfAgentIdMismatchesDeviceRow() at startup logs a loud warning naming env vs device-row agentId when FORGE_DAEMON_AGENT_ID is set and differs (non-fatal, silent if unset, degrades gracefully if route missing). Tests: devices.test.ts PATCH updates/rejects-unknown/clears agentId + GET /devices/me 200/401; daemon-dispatch-fixes.test.ts issue-47 describe block (5 tests)."
     },
     {
       "id": 48,
@@ -651,6 +654,45 @@
       "source": "m1-integration",
       "created": "2026-07-07",
       "updated": "2026-07-07"
+    },
+    {
+      "id": 50,
+      "title": "CD builds docker images ON the production host; M1 deploy build wedged accserver (services unresponsive, runner died mid-job)",
+      "detail": "CD run 28907394605 (M1 push, 2026-07-08 00:03Z): self-hosted runner on accserver died during step 4 Build and deploy all services - job marked failure with the step still in_progress and no logs uploaded. Aftermath: host pings and ports 22/443 accept TCP, but sshd banner exchange and TLS handshakes time out for 30s+ - the box is alive but crushed (or docker/sshd wedged). Production containers, the runner, and the image builds all share one host, so a heavy multi-image rebuild can take down prod AND the deploy mechanism AND remote access simultaneously. Deploy state is unknown/partial. Fix options: build images in CI (GHCR) and have accserver only pull+up; or hard resource-limit the build (nice/ionice, docker build --memory/--cpu-quota); plus a runner watchdog. Needs Adam for the immediate recovery (console access, likely reboot).",
+      "category": "reliability",
+      "area": "ops",
+      "status": "open",
+      "priority": "critical",
+      "round": "product-pass-2026-07-07",
+      "source": "m1-deploy",
+      "created": "2026-07-08",
+      "updated": "2026-07-08"
+    },
+    {
+      "id": 51,
+      "title": "Residual null-vs-omit traps on low-traffic creation fields (comments.authorId, agent-instances.runtimeInstanceId, invites, agents.config)",
+      "detail": "Issue 29 fixed the public workspace/goal creation boundaries. Deliberately skipped: comments.ts CreateCommentInputSchema.authorId (device/system callers), agent-instances.ts runtimeInstanceId (device-auth daemon path), invites.ts fields (admin-only, null semantics ambiguous, needs product decision), agents.ts config (JSON blob, null means something different). Only worth fixing if a real client is observed sending null there.",
+      "category": "polish",
+      "area": "forge-hub",
+      "status": "open",
+      "priority": "low",
+      "round": "product-pass-2026-07-07",
+      "source": "m2-hub-agent",
+      "created": "2026-07-08",
+      "updated": "2026-07-08"
+    },
+    {
+      "id": 52,
+      "title": "resolveDeviceAgentId validates workspace-agent names only against workspaces the user OWNS, not ones they are a member of",
+      "detail": "PATCH /devices/:id agentId validation (issue 47 fix) mirrors resolveAssignAgentId ownership precedent. A collaborator registering a device against another owner workspace-agent name gets 422 unknown_agent. Enhancement, not a bug; revisit with the members/invites work (M6 issue 26).",
+      "category": "polish",
+      "area": "forge-hub",
+      "status": "open",
+      "priority": "low",
+      "round": "product-pass-2026-07-07",
+      "source": "m2-hub-agent",
+      "created": "2026-07-08",
+      "updated": "2026-07-08"
     }
   ]
 }

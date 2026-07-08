@@ -326,6 +326,7 @@ export class Daemon {
       );
     }
     await this.client.connect();
+    await this.warnIfAgentIdMismatchesDeviceRow();
     // task.created / task.assigned / task.requeued all funnel through
     // handleIncomingTask. The hub's claim endpoint is an atomic SQL UPDATE
     // guarded by status IN ('pending_agent', 'assigned'), so concurrent
@@ -362,6 +363,40 @@ export class Daemon {
 
     this.resetIdleTimer();
     this.logger.info('daemon started', { hubUrl: this.opts.hubUrl, workdir: this.opts.workdir });
+  }
+
+  /**
+   * Issue 47: claim eligibility is decided by the DEVICE ROW's agentId, set at
+   * registration on the hub. FORGE_DAEMON_AGENT_ID only selects the spawn
+   * personality and looks authoritative but is not. A daemon whose env agentId
+   * differs from its device row's agentId will claim (or fail to claim) tasks
+   * in a way the operator does not expect, with nothing pointing at the
+   * mismatch. Warn loudly at startup but never fail startup on this: the check
+   * is diagnostic only, and the hub route this depends on may not exist yet or
+   * may fail transiently (best-effort).
+   */
+  private async warnIfAgentIdMismatchesDeviceRow(): Promise<void> {
+    const envAgentId = this.opts.defaultAgentId;
+    // Nothing to compare against, and nothing to warn about, when the operator
+    // never set FORGE_DAEMON_AGENT_ID in the first place.
+    if (envAgentId === undefined || this.opts.defaultAgentIdWasDefaulted === true) {
+      return;
+    }
+    try {
+      const self = await this.client.getSelf();
+      if (self.agentId !== envAgentId) {
+        this.logger.error(
+          `FORGE_DAEMON_AGENT_ID ("${envAgentId}") differs from this device's registered agentId on the hub ("${self.agentId ?? 'unset'}"). The DEVICE ROW controls claim eligibility, not this env var: FORGE_DAEMON_AGENT_ID only selects the spawn personality. This daemon will claim (or fail to claim) tasks based on the device row value.`,
+          { envAgentId, deviceAgentId: self.agentId },
+        );
+      }
+    } catch (err) {
+      // Best-effort diagnostic: the hub may not expose GET /devices/me yet, or
+      // the request may fail transiently. Never block startup on this check.
+      this.logger.info('could not verify device agentId against the hub', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   async stop(): Promise<void> {

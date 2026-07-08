@@ -13,6 +13,16 @@ export interface TaskInstruction {
   createdAt: string;
 }
 
+export interface DeviceSelf {
+  id: string;
+  name: string;
+  /** The device row's own agentId, set at registration. Null when unset. This
+   * (not FORGE_DAEMON_AGENT_ID) is what the hub uses to decide claim eligibility. */
+  agentId: string | null;
+  deviceType: string;
+  status: string;
+}
+
 export interface WorkspaceContext {
   workspaceId: string;
   docs: unknown[];
@@ -244,6 +254,15 @@ export class HubClient extends EventEmitter {
       'POST',
       `/tasks/${encodeURIComponent(taskId)}/instructions/${encodeURIComponent(instrId)}/ack`,
     );
+  }
+
+  /**
+   * Fetch the device row for the token that authenticated this client (issue 47).
+   * The DEVICE ROW's agentId, not FORGE_DAEMON_AGENT_ID, is what the hub uses to
+   * decide claim eligibility; callers use this to detect a mismatch at startup.
+   */
+  getSelf(): Promise<DeviceSelf> {
+    return this.request<DeviceSelf>('GET', '/devices/me');
   }
 
   async postComment(

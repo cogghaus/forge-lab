@@ -433,6 +433,100 @@ describe('PATCH /devices/:deviceId', () => {
     });
     expect(res.statusCode).toBe(401);
   });
+
+  // Issue 47: claim eligibility (tasks.ts) reads device.agentId from the
+  // device row, which was only ever set at POST /devices registration time.
+  // PATCH silently dropped an agentId field because RenameDeviceBodySchema
+  // had no such key - Zod strips unknown keys by default, no error, no update.
+  it('updates agentId and reflects the new value in the response (issue 47)', async () => {
+    const { id } = await registerDevice(hub, cookie, 'reassign-me');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/devices/${id}`,
+      headers: { cookie },
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { agentId: string | null };
+    expect(body.agentId).toBe('architect');
+
+    const listRes = await hub.fastify.inject({ method: 'GET', url: '/devices', headers: { cookie } });
+    const list = listRes.json() as { devices: Array<{ id: string; agentId: string | null }> };
+    expect(list.devices.find((d) => d.id === id)?.agentId).toBe('architect');
+  });
+
+  it('returns a 4xx and does not update on an unknown agentId (issue 47)', async () => {
+    const { id } = await registerDevice(hub, cookie, 'reassign-bad');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/devices/${id}`,
+      headers: { cookie },
+      payload: { agentId: 'not-a-real-agent' },
+    });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.statusCode).toBeLessThan(500);
+
+    const listRes = await hub.fastify.inject({ method: 'GET', url: '/devices', headers: { cookie } });
+    const list = listRes.json() as { devices: Array<{ id: string; agentId: string | null }> };
+    expect(list.devices.find((d) => d.id === id)?.agentId).toBeNull();
+  });
+
+  it('clears agentId when explicitly set to null (issue 47)', async () => {
+    const { id } = await registerDevice(hub, cookie, 'reassign-clear', { agentId: 'architect' });
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/devices/${id}`,
+      headers: { cookie },
+      payload: { agentId: null },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { agentId: string | null };
+    expect(body.agentId).toBeNull();
+  });
+});
+
+describe('GET /devices/me', () => {
+  let hub: Hub;
+  let cookie: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  // Issue 47 (daemon side): HubClient.getSelf() calls this at startup to
+  // compare FORGE_DAEMON_AGENT_ID against the device row and warn on mismatch.
+  // The route did not exist, so that check was a silent no-op in production.
+  it('returns the authenticated device\'s own row', async () => {
+    const { id, token } = await registerDevice(hub, cookie, 'self-device', { agentId: 'architect' });
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/devices/me',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      id: string;
+      name: string;
+      agentId: string | null;
+      deviceType: string;
+      status: string;
+    };
+    expect(body.id).toBe(id);
+    expect(body.name).toBe('self-device');
+    expect(body.agentId).toBe('architect');
+    expect(body.deviceType).toBe('worker');
+    expect(body.status).toBe('active');
+  });
+
+  it('returns 401 without a device token', async () => {
+    const res = await hub.fastify.inject({ method: 'GET', url: '/devices/me' });
+    expect(res.statusCode).toBe(401);
+  });
 });
 
 describe('POST /devices/:deviceId/rotate-token', () => {

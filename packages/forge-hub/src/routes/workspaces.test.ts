@@ -127,6 +127,33 @@ describe('/workspaces routes', () => {
     expect((res.json() as { error: string }).error).toBe('slug_taken');
   });
 
+  it('POST /workspaces accepts repoUrl:null as omit (issue 29)', async () => {
+    // Many clients (dash forms, curl templates) send explicit null for "no
+    // value" rather than omitting the key. The shared CreateWorkspaceInputSchema
+    // only allows string-or-omit, so a null repoUrl used to 400 with a
+    // confusing validation error instead of creating a repo-less workspace.
+    const { cookie } = await setupAdmin(hub);
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/workspaces',
+      headers: { cookie },
+      payload: { name: 'No Repo', slug: 'no-repo', repoUrl: null, repoBranch: null, description: null },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const getRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${id}`,
+      headers: { cookie },
+    });
+    expect(getRes.statusCode).toBe(200);
+    const workspace = getRes.json() as { repoUrl: string | null; repoBranch: string | null; description: string | null };
+    expect(workspace.repoUrl).toBeNull();
+    expect(workspace.repoBranch).toBeNull();
+    expect(workspace.description).toBeNull();
+  });
+
   it('POST /workspaces - 400 for invalid slug', async () => {
     const { cookie } = await setupAdmin(hub);
     const res = await hub.fastify.inject({

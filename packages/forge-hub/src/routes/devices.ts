@@ -1,21 +1,73 @@
 import type { FastifyInstance } from 'fastify';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { RegisterDeviceInputSchema, schema } from '@forge-lab/core';
+import { loadBuiltinRegistry, type PersonalityRegistry } from '@forge-lab/agents';
 import type { Db } from '../db/index.js';
 import { requireUser, getUser, requireDevice, getDevice } from '../auth/middleware.js';
 import { generateToken, hashToken } from '../auth/tokens.js';
 import { TokenBucketStore, createTokenBucketPreHandler } from '../rate-limit/index.js';
 import { checkPolicy } from '../policy/engine.js';
 
-const RenameDeviceBodySchema = z.object({
+// name is now optional (a PATCH may update agentId only); agentId is nullable
+// (null clears the routing role) and optional (omit to leave it untouched).
+const PatchDeviceBodySchema = z.object({
   name: z
     .string()
     .min(1)
     .max(64)
-    .regex(/^[a-zA-Z0-9-]+$/, 'Name may only contain letters, numbers, and hyphens'),
+    .regex(/^[a-zA-Z0-9-]+$/, 'Name may only contain letters, numbers, and hyphens')
+    .optional(),
+  agentId: z.string().min(1).max(100).nullable().optional(),
 });
+
+// Built-in personalities load once from disk (markdown shipped in the image).
+// Mirrors the lazy singleton in agents.ts - kept local because it is small and
+// this route file should not depend on that route file's module state.
+let personalityRegistry: Promise<PersonalityRegistry> | null = null;
+function getPersonalityRegistry(): Promise<PersonalityRegistry> {
+  return (personalityRegistry ??= loadBuiltinRegistry());
+}
+
+/**
+ * Resolve an incoming device agentId to a known identifier (issue 47).
+ * Claim eligibility (tasks.ts) reads this value straight off the device row,
+ * so an unvalidated agentId silently makes the device unable to claim
+ * anything routed to it, with no error pointing at the mismatch.
+ *
+ * Valid domains, mirroring the personality-name-is-canonical rule from the
+ * assign-identifier fix (issue 45):
+ * 1. A built-in personality id (e.g. 'architect', 'forge-master').
+ * 2. A workspace-agent name in a workspace this user owns.
+ * Anything else returns null; the caller replies 422 unknown_agent.
+ */
+async function resolveDeviceAgentId(
+  db: Db,
+  userId: string,
+  agentId: string,
+): Promise<string | null> {
+  const registry = await getPersonalityRegistry();
+  if (registry.get(agentId)) return agentId;
+
+  const ownedWorkspaces = await db
+    .select({ id: schema.workspaces.id })
+    .from(schema.workspaces)
+    .where(eq(schema.workspaces.ownerUserId, userId));
+  if (ownedWorkspaces.length === 0) return null;
+
+  const match = await db
+    .select({ name: schema.agents.name })
+    .from(schema.agents)
+    .where(
+      and(
+        inArray(schema.agents.workspaceId, ownedWorkspaces.map((w) => w.id)),
+        eq(schema.agents.name, agentId),
+      ),
+    )
+    .get();
+  return match ? agentId : null;
+}
 
 export interface DeviceRouteHandles {
   /** Destroy the rotate-token rate limiter on hub close. */
@@ -109,14 +161,19 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): DeviceRo
     await reply.code(204).send();
   });
 
-  // PATCH /devices/:deviceId - rename
+  // PATCH /devices/:deviceId - rename and/or update agentId
   fastify.patch('/devices/:deviceId', { preHandler: requireUser }, async (req, reply) => {
     const user = getUser(req);
     const { deviceId } = req.params as { deviceId: string };
 
-    const parsed = RenameDeviceBodySchema.safeParse(req.body);
+    const parsed = PatchDeviceBodySchema.safeParse(req.body);
     if (!parsed.success) {
       await reply.code(400).send({ error: 'validation_error', issues: parsed.error.issues });
+      return;
+    }
+
+    if (parsed.data.name === undefined && parsed.data.agentId === undefined) {
+      await reply.code(400).send({ error: 'no_fields' });
       return;
     }
 
@@ -137,9 +194,26 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): DeviceRo
       return;
     }
 
+    const updates: { name?: string; agentId?: string | null } = {};
+    if (parsed.data.name !== undefined) {
+      updates.name = parsed.data.name;
+    }
+    if (parsed.data.agentId !== undefined) {
+      if (parsed.data.agentId === null) {
+        updates.agentId = null;
+      } else {
+        const resolved = await resolveDeviceAgentId(db, user.id, parsed.data.agentId);
+        if (resolved === null) {
+          await reply.code(422).send({ error: 'unknown_agent', agentId: parsed.data.agentId });
+          return;
+        }
+        updates.agentId = resolved;
+      }
+    }
+
     const [updated] = await db
       .update(schema.devices)
-      .set({ name: parsed.data.name })
+      .set(updates)
       .where(eq(schema.devices.id, deviceId))
       .returning({
         id: schema.devices.id,
@@ -154,6 +228,35 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): DeviceRo
       });
 
     return updated;
+  });
+
+  // GET /devices/me - the authenticated device's own row. Daemons call this at
+  // startup to compare FORGE_DAEMON_AGENT_ID against the registered agentId and
+  // warn on mismatch (issue 47). Device-token auth only; must not be shadowed
+  // by a GET /devices/:deviceId route (none exists on this method today).
+  fastify.get('/devices/me', { preHandler: requireDevice }, async (req, reply) => {
+    const device = getDevice(req);
+    const row = await db
+      .select({
+        id: schema.devices.id,
+        name: schema.devices.name,
+        hostname: schema.devices.hostname,
+        platform: schema.devices.platform,
+        deviceType: schema.devices.deviceType,
+        agentId: schema.devices.agentId,
+        lastSeen: schema.devices.lastSeen,
+        createdAt: schema.devices.createdAt,
+        status: schema.devices.status,
+      })
+      .from(schema.devices)
+      .where(eq(schema.devices.id, device.id))
+      .get();
+
+    if (!row) {
+      await reply.code(404).send({ error: 'not_found' });
+      return;
+    }
+    return row;
   });
 
   // POST /devices/:deviceId/rotate-token

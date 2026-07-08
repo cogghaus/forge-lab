@@ -18,6 +18,25 @@ const CONTEXT_DISPATCHER_LIMIT = 15;
 /** Categories Scribe writes that FM must always have. */
 const CONTEXT_DOC_CATEGORIES = ['architecture', 'adr', 'agent', 'runbook'] as const;
 
+/**
+ * Accept null as "omit" for an optional string field (issue 29). The shared
+ * CreateWorkspaceInputSchema types these fields as string-or-omit
+ * (exactOptionalPropertyTypes style); many clients (dash forms clearing a
+ * field, curl templates) send an explicit null instead of leaving the key
+ * out, which used to 400 with a confusing validation error. The public
+ * creation boundary is the right place to soften this, not the shared type
+ * that other callers (e.g. internal inserts) rely on staying strict.
+ */
+function nullishToUndefined<T extends z.ZodTypeAny>(innerSchema: T) {
+  return innerSchema.nullish().transform((value) => value ?? undefined);
+}
+
+const CreateWorkspaceBodySchema = CreateWorkspaceInputSchema.extend({
+  description: nullishToUndefined(z.string().max(500)),
+  repoUrl: nullishToUndefined(RepoUrlSchema),
+  repoBranch: nullishToUndefined(RepoBranchSchema),
+});
+
 const UpdateWorkspaceInputSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).nullable().optional(),
@@ -36,7 +55,7 @@ const AddMemberInputSchema = z.object({
 export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void {
   fastify.post('/workspaces', { preHandler: requireUser }, async (req, reply) => {
     const user = getUser(req);
-    const body = CreateWorkspaceInputSchema.parse(req.body);
+    const body = CreateWorkspaceBodySchema.parse(req.body);
     const id = nanoid();
     try {
       await db.insert(schema.workspaces).values({

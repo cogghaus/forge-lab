@@ -1,8 +1,34 @@
 # Production Deployment Runbook
 
 **Date**: 2026-05-27
-**Status**: Draft
+**Status**: SUPERSEDED (retired PM2 deployment model)
 **Maintained by**: Ember
+
+---
+
+> ## Superseded
+>
+> This runbook describes a **retired PM2-based deployment** (`ecosystem.config.cjs`,
+> per-daemon `.env.*` files, nginx at `hub.local.cogg.haus`). It is kept for
+> historical reference only and does **not** describe how forge-lab is
+> actually deployed today.
+>
+> **Current production model:** Docker Compose plus CD. The hub and daemon
+> fleet run as containers defined in `deploy/daemons.compose.yml`
+> (`ANTHROPIC_API_KEY` per-container, `FORGE_DAEMON_MODEL=claude-sonnet-4-6`
+> pinned in compose), deployed to accserver via CD on merge to `main`, and
+> served behind Traefik at `lab.local.cogg.haus` (not `hub.local.cogg.haus`,
+> which is the stale hostname used below). See `docs/handoff/HANDOFF.md` for the
+> current deployment snapshot and `context/architecture.md` /
+> `context/project-context.md` for the current architecture.
+>
+> **For local/dev boot** (not production), use **`docs/QUICKSTART.md`**
+> instead of this document: it walks a fresh clone through hub boot,
+> device registration, daemon boot, and dashboard boot with the currently
+> correct env vars and API calls.
+>
+> Nothing below this banner has been re-verified against the current
+> codebase. Do not follow it for a new deployment.
 
 ---
 

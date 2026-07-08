@@ -29,9 +29,12 @@ protocol for multi-agent sessions.
   See issues.json resolutions for locations.
 - A daemon crash mid-task orphans `in_progress` forever - no lease/heartbeat/reclaim
   (issue 1, M3). Manual cancel/retry is the only recovery.
-- Claim eligibility uses the DEVICE ROW agentId, set only at registration; PATCH
-  /devices silently drops agentId updates (issue 47, M2). FORGE_DAEMON_AGENT_ID only
-  picks the spawn personality. Register worker devices WITH the agentId.
+- Claim eligibility uses the DEVICE ROW agentId; FORGE_DAEMON_AGENT_ID only picks
+  the spawn personality. FIXED in M2 (issue 47): PATCH /devices/:id updates agentId
+  (422 on unknown ids), GET /devices/me inspects the row, and the daemon warns at
+  startup when env and row disagree. Still register worker devices WITH the agentId;
+  note FM routing is a real LLM decision, so first-run mismatch repair via PATCH is
+  normal (QUICKSTART.md step 7).
 - Dispatcher-mode daemons still run the worker claim loop (issue 11); the claim
   backoff mutes the spam but the proper skip is open.
 - Spawned agents inherit the daemon's full env including auth vars (issue 42).

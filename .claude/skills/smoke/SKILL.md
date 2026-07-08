@@ -30,7 +30,10 @@ real task through the loop. Total ~5 min plus one Sonnet agent run.
    - `POST /workspaces {"name","slug","description"}` - do NOT send `repoUrl: null`
      (422, issue 29); omit optional fields.
    - `POST /devices {"name":"smoke-fm","deviceType":"orchestrator","agentId":"forge-master"}`
-   - `POST /devices {"name":"smoke-worker","deviceType":"worker"}`
+   - `POST /devices {"name":"smoke-worker","deviceType":"worker","agentId":"architect"}`
+     The device row's agentId (set only at registration, issue 47) controls claim
+     eligibility; a worker registered without it cannot claim tasks FM routes to a
+     named agent.
    - Tokens are shown ONCE in the response; capture them.
 4. Daemons (from `packages/forge-daemon`, `node dist/bin/forge-daemon.js`):
    - FM: `FORGE_DAEMON_HUB_URL=http://localhost:3000 FORGE_DAEMON_DEVICE_TOKEN=<orch> FORGE_DAEMON_DISPATCHER_MODE=true FORGE_DAEMON_DISPATCHER_PERSONALITY=forge-master FORGE_DAEMON_WORKSPACE_ID=<ws> FORGE_DAEMON_WORKDIR=<scratch> FORGE_DAEMON_MODEL=claude-sonnet-4-6 FORGE_DAEMON_SKIP_PERMISSIONS=true`
@@ -39,13 +42,13 @@ real task through the loop. Total ~5 min plus one Sonnet agent run.
 5. Dash (from `packages/forge-dash-community`):
    `FORGE_HUB_URL=http://localhost:3000 FORGE_WORKDIR=<scratch> pnpm dev` (port 3001).
    First compile ~30s; login with the smoke user.
-6. Create a task. Two paths, currently DIFFERENT behavior (issue 2):
+6. Create a task. Two paths, intentionally different behavior:
    - Flat `POST /tasks` (device/user) -> status `pending_agent`, worker claims
      directly, FM never triages (documented automation path).
-   - FM triage path: workspace endpoint should route unassigned tasks to FM but is
-     broken (tasks.ts:1800). Workaround to force triage: create the task, then
-     `POST /workspaces/:id/tasks/:taskId/retry` after failure, or PATCH assign with
-     `{"agentId": null}` - both reset to `pending_dispatcher_action`.
+   - FM triage path (issue 2, FIXED in M1): `POST /workspaces/:id/tasks` with no
+     `assignedAgentId` -> status `pending_dispatcher_action`, FM triages and routes.
+     See the initialStatus logic in forge-hub tasks.ts around line 1932 (plain
+     non-sequenced branch of the workspace create handler). No workaround needed.
 7. Watch: task status via `GET /tasks/:id` (worker bearer token), daemon logs, agent
    log at `<scratch>/context/agent-logs/<taskId>.log`, done file at
    `<scratch>/.forge/tasks/<taskId>.done`.

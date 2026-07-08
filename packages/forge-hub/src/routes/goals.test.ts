@@ -68,6 +68,30 @@ describe('/workspaces/:workspaceId/goals', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('POST accepts description:null and parentId:null as omit (issue 29 pattern)', async () => {
+    // Same trap as issue 29 on POST /workspaces: description/parentId were
+    // typed string-or-omit, so an explicit null (a common "no value" signal
+    // from clients) used to 400 instead of creating a goal with no description.
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/goals`,
+      headers: { cookie },
+      payload: { title: 'No description', description: null, parentId: null },
+    });
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as { id: string };
+
+    const getRes = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/goals/${id}`,
+      headers: { cookie },
+    });
+    expect(getRes.statusCode).toBe(200);
+    const goal = getRes.json() as { description: string | null; parentId: string | null };
+    expect(goal.description).toBeNull();
+    expect(goal.parentId).toBeNull();
+  });
+
   it('POST creates a child goal', async () => {
     const parentId = await createGoal(hub, cookie, workspaceId, { title: 'Parent goal' });
     const res = await hub.fastify.inject({
