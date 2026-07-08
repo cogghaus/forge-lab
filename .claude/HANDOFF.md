@@ -34,8 +34,10 @@ protocol for multi-agent sessions.
   picks the spawn personality. Register worker devices WITH the agentId.
 - Dispatcher-mode daemons still run the worker claim loop (issue 11); the claim
   backoff mutes the spam but the proper skip is open.
-- Spawned agents inherit the daemon's full env including auth vars (issue 42). Pin
-  `FORGE_DAEMON_MODEL=claude-sonnet-4-6` explicitly until OPS-2 (issue 6) lands.
+- Spawned agents inherit the daemon's full env including auth vars (issue 42).
+  OPS-2 landed (PR #129): unset FORGE_DAEMON_MODEL now defaults to sonnet in code.
+  OPS-1 (#131) and OPS-3 (#130) also landed remotely on 2026-06-21 via the
+  paperclip bot; keep local main freshly fetched before starting work.
 - `projectPrefix` must be 2-6 lowercase LETTERS (no digits); task create 422s
   otherwise.
 - forge-daemon's real-git test (repo.test.ts) can flake under a parallel root

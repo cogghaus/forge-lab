@@ -63,12 +63,13 @@
       "detail": "policy-rules.ts declares ~18 VALID_ACTIONS but only task:claim, task:assign, doc:write, device:deregister, device:rotate-token have checkPolicy call sites. task:cancel/retry/complete/fail, doc:update/supersede/archive, context:read, workspace:list can be authored as rules but nothing enforces them. Wire checkPolicy at every declared action; built-in defaults must preserve current behavior. Failing-first test per action. (From HANDOFF section 3, OPS-1.)",
       "category": "security",
       "area": "forge-hub",
-      "status": "open",
+      "status": "fixed",
       "priority": "high",
       "round": "product-pass-2026-07-07",
       "source": "docs/handoff/HANDOFF.md",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "Shipped remotely as PR #131 (paperclip-scs bot, merged 2026-06-21, commit e58b9a8): checkPolicy wired for task:cancel/retry/complete/fail, task:assign, doc:update/supersede/archive, context:read, workspace:list. Product-pass reconciliation added builtin_orchestrator_task_fail_allow so the issue-44 quarantine path survives the new task:fail enforcement (policy/defaults.ts)."
     },
     {
       "id": 6,
@@ -76,12 +77,13 @@
       "detail": "claude-code.ts and background.ts omit --model when config.model is unset, letting the CLI default decide (the $95 Opus runaway failure mode). Compose pins FORGE_DAEMON_MODEL but code has no safe default. Add sonnet default in code. Failing-first test proving unset env no longer omits --model. (From HANDOFF OPS-2.)",
       "category": "security",
       "area": "forge-daemon",
-      "status": "open",
+      "status": "fixed",
       "priority": "high",
       "round": "product-pass-2026-07-07",
       "source": "docs/handoff/HANDOFF.md",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "Shipped remotely as PR #129 (paperclip-scs bot, merged 2026-06-21, commit 691c901): unset FORGE_DAEMON_MODEL now defaults to claude-sonnet-4-6 in code; --model is always passed."
     },
     {
       "id": 7,
@@ -89,12 +91,13 @@
       "detail": "daemon.ts still carries authRetryLimit / AUTH_FAILURE_RE machinery and comments describing shared OAuth token rotation. Auth model is per-container ANTHROPIC_API_KEY. Keep genuine API-key 401 retry; delete shared-home assumptions. (From HANDOFF OPS-3.)",
       "category": "cleanup",
       "area": "forge-daemon",
-      "status": "open",
+      "status": "fixed",
       "priority": "medium",
       "round": "product-pass-2026-07-07",
       "source": "docs/handoff/HANDOFF.md",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-07",
+      "resolution": "Shipped remotely as PR #130 (paperclip-scs bot, merged 2026-06-21, commit 3e585b3): shared-OAuth rotation comments and machinery removed; genuine API-key 401 retry kept."
     },
     {
       "id": 8,
