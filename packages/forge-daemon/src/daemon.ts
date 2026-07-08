@@ -221,7 +221,33 @@ function defaultRetrySleep(ms: number): Promise<void> {
 type RetryTerminalResult =
   | { outcome: 'ok' }
   | { outcome: 'client_error'; error: Error }
-  | { outcome: 'exhausted'; error: Error };
+  | { outcome: 'exhausted'; error: Error }
+  | { outcome: 'aborted'; reason: string };
+
+/** Options for {@link Daemon.retryTerminal} (issue 56). */
+interface RetryTerminalOptions {
+  /**
+   * Aborting this signal stops the chain between attempts and wakes it out of
+   * a backoff sleep. Used by the lease-loss path (heartbeatOne 409/404) to
+   * cancel a stale in-flight completion so it cannot overwrite a fresher
+   * re-run's result on the hub.
+   */
+  signal?: AbortSignal;
+  /**
+   * Re-checked immediately before EVERY attempt (including the first).
+   * Returning a string aborts the chain with that reason; returning null
+   * proceeds. handleTaskDone uses this to re-read the done file from disk so
+   * a missing or changed file (lease lost, or superseded by a newer run)
+   * stops the stale chain: freshest done file wins.
+   */
+  beforeAttempt?: () => Promise<string | null>;
+}
+
+/** Narrow an AbortSignal.reason (typed `any` in lib) to a loggable string. */
+function abortReasonOf(signal: AbortSignal): string {
+  const reason: unknown = signal.reason;
+  return typeof reason === 'string' ? reason : 'aborted';
+}
 
 export class Daemon {
   private readonly client: HubClient;
@@ -298,6 +324,14 @@ export class Daemon {
    * every tick.
    */
   private readonly completingTaskIds = new Set<string>();
+  /**
+   * Per-task AbortController for the in-flight terminal completion chain
+   * (issue 56). heartbeatOne aborts it on 409/404 BEFORE cleanupTaskFiles so
+   * a stale retry cannot silently win the race against a fresher re-run and
+   * permanently record the wrong result on the hub. At most one entry per
+   * taskId (the completingTaskIds guard serializes handleTaskDone).
+   */
+  private readonly terminalAborts = new Map<string, AbortController>();
 
   constructor(opts: DaemonOptions) {
     this.opts = opts;
@@ -458,6 +492,16 @@ export class Daemon {
           taskId,
           status: err.status,
         });
+        // Issue 56: cancel any in-flight terminal retry BEFORE deleting the
+        // done file below. Without this, a stale completion chain parked in
+        // backoff (holding run-1's result by closure) survives the cleanup,
+        // eventually lands on the hub, and permanently records the old run's
+        // output over whatever a fresher re-run produced.
+        const inflight = this.terminalAborts.get(taskId);
+        if (inflight !== undefined) {
+          inflight.abort('task lease lost');
+          this.logger.info('aborted in-flight terminal retry after lease loss', { taskId });
+        }
         const runtime = this.runtimes.get(active.runtimeId);
         try {
           await runtime.stop(active.instance);
@@ -548,11 +592,29 @@ export class Daemon {
    * Returns a discriminated result instead of throwing so each call site can
    * decide what "give up" means for it (e.g. `handleTaskDone` keeps the done
    * file and map entry on exhaustion so the poll loop can re-attempt later).
+   *
+   * Issue 56: `opts.signal` aborts the chain between attempts and wakes it
+   * out of a backoff sleep; `opts.beforeAttempt` is re-checked before every
+   * attempt (including the first) and aborts by returning a reason string.
+   * An aborted chain performs no cleanup of its own: whoever aborted it (or
+   * the newer run that superseded it) owns the state from there.
    */
-  private async retryTerminal(fn: () => Promise<void>): Promise<RetryTerminalResult> {
+  private async retryTerminal(
+    fn: () => Promise<void>,
+    opts?: RetryTerminalOptions,
+  ): Promise<RetryTerminalResult> {
     const limit = this.opts.terminalRetryLimit ?? 4;
     let lastError: Error = new Error('retryTerminal: unreachable');
     for (let attempt = 0; attempt <= limit; attempt++) {
+      if (opts?.signal?.aborted) {
+        return { outcome: 'aborted', reason: abortReasonOf(opts.signal) };
+      }
+      if (opts?.beforeAttempt) {
+        const abortReason = await opts.beforeAttempt();
+        if (abortReason !== null) {
+          return { outcome: 'aborted', reason: abortReason };
+        }
+      }
       try {
         await fn();
         return { outcome: 'ok' };
@@ -565,10 +627,35 @@ export class Daemon {
         }
         if (attempt >= limit) break;
         const delay = TERMINAL_RETRY_DELAYS_MS[Math.min(attempt, TERMINAL_RETRY_DELAYS_MS.length - 1)] ?? 60_000;
-        await this.retrySleep(delay);
+        await this.sleepUnlessAborted(delay, opts?.signal);
       }
     }
     return { outcome: 'exhausted', error: lastError };
+  }
+
+  /**
+   * Sleep that an abort signal can cut short (issue 56). Without this a
+   * lease-lost abort fired during the 60s backoff step would leave the stale
+   * chain (and the completingTaskIds guard it holds) alive for up to a full
+   * minute, delaying the fresher run's re-entry. The raced retrySleep timer
+   * resolving later is harmless.
+   */
+  private async sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal === undefined) {
+      await this.retrySleep(ms);
+      return;
+    }
+    if (signal.aborted) return;
+    let onAbort: (() => void) | undefined;
+    const abortedPromise = new Promise<void>((resolve) => {
+      onAbort = () => resolve();
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+      await Promise.race([this.retrySleep(ms), abortedPromise]);
+    } finally {
+      if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
+    }
   }
 
   private async pollForPendingTasks(): Promise<void> {
@@ -1525,9 +1612,21 @@ export class Daemon {
     // branch can both observe the same done file and race to complete it,
     // most visibly once a task is deliberately left in activeInstances after
     // retry exhaustion so the poll loop re-enters this method every tick.
-    // Let the in-flight attempt finish rather than double-fire the terminal call.
-    if (this.completingTaskIds.has(taskId)) return;
+    // Let the in-flight attempt finish rather than double-fire the terminal
+    // call. Logged (issue 56): a silent drop here hid the scenario-B race
+    // where the in-flight chain was stale and the dropped event was the
+    // fresher run's only completion signal.
+    if (this.completingTaskIds.has(taskId)) {
+      this.logger.info('completion already in flight, dropping duplicate done event', { taskId });
+      return;
+    }
     this.completingTaskIds.add(taskId);
+    // Issue 56: abort handle for this completion chain. heartbeatOne fires it
+    // on lease loss (409/404) so the chain stops before its stale result can
+    // land on the hub. Cleared in the finally alongside the guard, so a fresh
+    // done file can re-enter after an abort.
+    const abort = new AbortController();
+    this.terminalAborts.set(taskId, abort);
     try {
       // Synthetic FM tasks (prefixed with _fm_) are not tracked in the hub.
       if (taskId.startsWith('_fm_')) {
@@ -1567,7 +1666,40 @@ export class Daemon {
 
       // M3 issue 14: completeTask goes through the bounded terminal-retry
       // helper FIRST; cleanup only moves after a confirmed success (2xx).
-      const completion = await this.retryTerminal(() => this.client.completeTask(taskId, result.result));
+      // Issue 56: the chain re-reads the done file from disk before EVERY
+      // attempt and aborts if it is missing (lease-lost cleanup took it) or
+      // its content differs from what this call captured (a newer run wrote
+      // a fresh one). Freshest done file wins; the poll loop re-enters this
+      // method with the fresh content on its next tick.
+      const capturedDoneJson = JSON.stringify(result);
+      const completion = await this.retryTerminal(
+        () => this.client.completeTask(taskId, result.result),
+        {
+          signal: abort.signal,
+          beforeAttempt: async () => {
+            const onDisk = await readDoneFile(this.opts.workdir, taskId);
+            if (onDisk === null) {
+              return 'done file missing (lease lost or cleaned up)';
+            }
+            if (JSON.stringify(onDisk) !== capturedDoneJson) {
+              return 'done file changed (superseded by a newer run)';
+            }
+            return null;
+          },
+        },
+      );
+
+      if (completion.outcome === 'aborted') {
+        // We no longer own this outcome: the lease was reclaimed or a newer
+        // run superseded this result. Touch nothing (the aborter or the new
+        // run owns the files and the activeInstances entry now); the finally
+        // clears the guard so the fresh done file can re-enter.
+        this.logger.info('completion retry aborted, dropping stale result', {
+          taskId,
+          reason: completion.reason,
+        });
+        return;
+      }
 
       if (completion.outcome === 'ok') {
         await cleanupTaskFiles(this.opts.workdir, taskId);
@@ -1601,6 +1733,7 @@ export class Daemon {
       });
     } finally {
       this.completingTaskIds.delete(taskId);
+      this.terminalAborts.delete(taskId);
     }
   }
 }

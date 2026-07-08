@@ -526,3 +526,202 @@ describe('M3 issue 14: bounded terminal retry with deferred cleanup', () => {
     expect(logs.some((l) => l.level === 'error' && l.msg === 'marked dead task as failed')).toBe(true);
   });
 });
+
+describe('M3 issue 56: stale completion retry vs lease loss (scenario B)', () => {
+  let workdir: string;
+  let logs: CapturedLog[];
+  let runtime: RecordingRuntime;
+
+  beforeEach(async () => {
+    workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-scenb-'));
+    logs = [];
+    runtime = new RecordingRuntime();
+  });
+
+  afterEach(async () => {
+    await fs.rm(workdir, { recursive: true, force: true });
+  });
+
+  function makeDaemon(retrySleep: (ms: number) => Promise<void>): Daemon {
+    const runtimes = new RuntimeRegistry();
+    runtimes.register(runtime);
+    const daemon = new Daemon({
+      hubUrl: 'http://127.0.0.1:1',
+      deviceToken: 'tok',
+      workdir,
+      runtimes,
+      defaultRuntimeId: 'mock',
+      defaultAgentId: 'furnace',
+      terminalRetryLimit: 4,
+      logger: makeLogger(logs),
+      retrySleep,
+    });
+    vi.spyOn(daemon.hubClient, 'listTasks').mockResolvedValue({ tasks: [] });
+    vi.spyOn(daemon.hubClient, 'listInstructions').mockResolvedValue({ instructions: [] });
+    return daemon;
+  }
+
+  async function seedDoneFile(taskId: string, resultText: string): Promise<void> {
+    await fs.mkdir(taskDir(workdir), { recursive: true });
+    await fs.writeFile(taskFilePath(workdir, taskId), 'x', 'utf8');
+    await fs.writeFile(doneFilePath(workdir, taskId), JSON.stringify({ result: resultText }), 'utf8');
+  }
+
+  it('lease-lost abort cancels the stale run-1 chain; the hub receives the run-2 result exactly once', async () => {
+    // Deterministic interleaving of the live incident: retry chain parks in
+    // backoff on a manually-released sleep gate, lease loss fires mid-backoff,
+    // a fresh run-2 done file arrives, then the gate opens.
+    const parkedSleeps: Array<() => void> = [];
+    const daemon = makeDaemon(
+      (_ms: number) => new Promise<void>((resolve) => { parkedSleeps.push(resolve); }),
+    );
+
+    const attempted: string[] = [];
+    const succeeded: string[] = [];
+    let runOneAttempts = 0;
+    vi.spyOn(daemon.hubClient, 'completeTask').mockImplementation(async (_id: string, res?: string) => {
+      const text = res ?? '';
+      attempted.push(text);
+      if (text === 'run-1 result') {
+        runOneAttempts += 1;
+        // Hub is down for run-1's first attempt; back up afterwards. Without
+        // the abort, the stale chain's second attempt would land and the hub
+        // would permanently record run-1's text (the live incident).
+        if (runOneAttempts === 1) throw new Error('fetch failed');
+      }
+      succeeded.push(text);
+    });
+    vi.spyOn(daemon.hubClient, 'heartbeatTask').mockRejectedValue(
+      new HttpError(409, 'POST /tasks/task-b/heartbeat 409: {"error":"lease_lost"}'),
+    );
+
+    // Run 1 finishes against a dead hub; the chain enters backoff.
+    await seedDoneFile('task-b', 'run-1 result');
+    daemon['activeInstances'].set('task-b', {
+      instance: fakeInstance('furnace'),
+      runtimeId: 'mock',
+      startedAt: Date.now(),
+    });
+    const chain = daemon['handleTaskDone']('task-b', { result: 'run-1 result' });
+    await vi.waitFor(() => {
+      expect(attempted).toEqual(['run-1 result']);
+      expect(parkedSleeps).toHaveLength(1);
+    });
+
+    // Hub restarts; the sweep reclaims the lease; heartbeat gets 409. This
+    // must abort the parked run-1 chain BEFORE cleanupTaskFiles.
+    await daemon['beatActiveTasks']();
+
+    // The task re-runs (re-claimed) and run-2 finishes with a fresh done file.
+    await seedDoneFile('task-b', 'run-2 result');
+    daemon['activeInstances'].set('task-b', {
+      instance: fakeInstance('furnace'),
+      runtimeId: 'mock',
+      startedAt: Date.now(),
+    });
+    runtime.aliveResult = false;
+
+    // Open the backoff gate: a pre-fix chain would now fire its second
+    // (stale) attempt; the fixed chain has already been woken by the abort.
+    for (const release of parkedSleeps) release();
+    await chain;
+
+    // Poll tick: the finished-instance branch re-enters handleTaskDone with
+    // the run-2 done file (the guard must be clear after the abort).
+    await daemon['pollForPendingTasks']();
+
+    expect(succeeded).toEqual(['run-2 result']);
+    expect(attempted).toEqual(['run-1 result', 'run-2 result']);
+    expect(daemon['activeInstances'].has('task-b')).toBe(false);
+    await expect(fs.access(doneFilePath(workdir, 'task-b'))).rejects.toThrow();
+    expect(
+      logs.some((l) => l.level === 'info' && l.msg === 'aborted in-flight terminal retry after lease loss'),
+    ).toBe(true);
+    expect(
+      logs.some((l) => l.level === 'info' && l.msg === 'completion retry aborted, dropping stale result'),
+    ).toBe(true);
+  });
+
+  it('re-reads the done file before each attempt and aborts when the content changed', async () => {
+    // The sleep swaps the done file for run-2 content mid-backoff, simulating
+    // a newer run finishing while the stale chain waits. No abort signal
+    // fires here; the pre-attempt disk re-read alone must stop the chain.
+    const daemon = makeDaemon(async () => {
+      await fs.writeFile(
+        doneFilePath(workdir, 'task-swap'),
+        JSON.stringify({ result: 'run-2 result' }),
+        'utf8',
+      );
+    });
+    const completeTask = vi
+      .spyOn(daemon.hubClient, 'completeTask')
+      .mockRejectedValueOnce(new Error('fetch failed'))
+      .mockResolvedValue(undefined);
+    await seedDoneFile('task-swap', 'run-1 result');
+    daemon['activeInstances'].set('task-swap', {
+      instance: fakeInstance('furnace'),
+      runtimeId: 'mock',
+      startedAt: Date.now(),
+    });
+
+    await daemon['handleTaskDone']('task-swap', { result: 'run-1 result' });
+
+    expect(completeTask).toHaveBeenCalledTimes(1);
+    const abortLog = logs.find(
+      (l) => l.level === 'info' && l.msg === 'completion retry aborted, dropping stale result',
+    );
+    expect(abortLog).toBeDefined();
+    expect(abortLog!.meta).toMatchObject({ taskId: 'task-swap' });
+    expect(String(abortLog!.meta?.['reason'])).toContain('changed');
+    // An aborted chain touches nothing: the run-2 done file and the map entry survive.
+    expect(daemon['activeInstances'].has('task-swap')).toBe(true);
+    await expect(fs.access(doneFilePath(workdir, 'task-swap'))).resolves.toBeUndefined();
+  });
+
+  it('aborts before the first attempt when the done file is already missing', async () => {
+    const daemon = makeDaemon(NOOP_SLEEP);
+    const completeTask = vi.spyOn(daemon.hubClient, 'completeTask').mockResolvedValue(undefined);
+    // No done file on disk at all (lease-lost cleanup already removed it).
+
+    await daemon['handleTaskDone']('task-gone', { result: 'run-1 result' });
+
+    expect(completeTask).not.toHaveBeenCalled();
+    const abortLog = logs.find(
+      (l) => l.level === 'info' && l.msg === 'completion retry aborted, dropping stale result',
+    );
+    expect(abortLog).toBeDefined();
+    expect(abortLog!.meta).toMatchObject({ taskId: 'task-gone' });
+    expect(String(abortLog!.meta?.['reason'])).toContain('missing');
+  });
+
+  it('logs at info when the completingTaskIds guard drops a duplicate done event', async () => {
+    const daemon = makeDaemon(NOOP_SLEEP);
+    let releaseComplete!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseComplete = resolve; });
+    const completeTask = vi.spyOn(daemon.hubClient, 'completeTask').mockImplementation(() => gate);
+    await seedDoneFile('task-dup', 'r');
+    daemon['activeInstances'].set('task-dup', {
+      instance: fakeInstance('furnace'),
+      runtimeId: 'mock',
+      startedAt: Date.now(),
+    });
+
+    const first = daemon['handleTaskDone']('task-dup', { result: 'r' });
+    await vi.waitFor(() => expect(completeTask).toHaveBeenCalledTimes(1));
+
+    // Duplicate re-entry while the first is in flight: dropped, but LOUDLY.
+    await daemon['handleTaskDone']('task-dup', { result: 'r' });
+
+    const dropLogs = logs.filter(
+      (l) => l.level === 'info' && l.msg === 'completion already in flight, dropping duplicate done event',
+    );
+    expect(dropLogs).toHaveLength(1);
+    expect(dropLogs[0]!.meta).toMatchObject({ taskId: 'task-dup' });
+
+    releaseComplete();
+    await first;
+    expect(completeTask).toHaveBeenCalledTimes(1);
+    // Guard cleared after the chain finished: not stuck for future done files.
+    expect(daemon['completingTaskIds'].size).toBe(0);
+  });
+});
