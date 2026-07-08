@@ -665,12 +665,13 @@
       "detail": "CD run 28907394605 (M1 push, 2026-07-08 00:03Z): self-hosted runner on accserver died during step 4 Build and deploy all services - job marked failure with the step still in_progress and no logs uploaded. Aftermath: host pings and ports 22/443 accept TCP, but sshd banner exchange and TLS handshakes time out for 30s+ - the box is alive but crushed (or docker/sshd wedged). Production containers, the runner, and the image builds all share one host, so a heavy multi-image rebuild can take down prod AND the deploy mechanism AND remote access simultaneously. Deploy state is unknown/partial. Fix options: build images in CI (GHCR) and have accserver only pull+up; or hard resource-limit the build (nice/ionice, docker build --memory/--cpu-quota); plus a runner watchdog. Needs Adam for the immediate recovery (console access, likely reboot). UPDATE 2026-07-08: fix implemented (cd.yml build job on ubuntu-latest pushing 5 images to ghcr.io/sugar-crash-studios with :latest and :short-sha, deploy job pull-only with --no-build; compose files point at GHCR with IMAGE_TAG). Compose config validated locally; stays in-progress until the first live GHCR CD run proves auth/pull. Second wedge occurred same day (M2 push 93e1ff1): runner died mid-build again, box unreachable 30+ min.",
       "category": "reliability",
       "area": "ops",
-      "status": "in-progress",
+      "status": "fixed",
       "priority": "critical",
       "round": "product-pass-2026-07-07",
       "source": "m1-deploy",
       "created": "2026-07-08",
-      "updated": "2026-07-08"
+      "updated": "2026-07-08",
+      "resolution": "cd.yml build job on ubuntu-latest (matrix over vibe-forge-hub/dash/mcp/daemon/waker) pushes ghcr.io/sugar-crash-studios images tagged :latest and :short-sha with buildx gha caching; deploy job is ghcr login + compose pull + up -d --no-build --remove-orphans with IMAGE_TAG pinned to the sha (rollback = pin previous sha). Compose files reference GHCR images, build blocks kept for local dev; BUILD_SHA export fixed (dash footer showed dev in prod). PROVEN LIVE 2026-07-08: run 28946285018 built all 5 images on GH runners and deployed pull-only; accserver 1-min load 3.79 during deploy vs ~1700 during the two on-box build wedges (M1 and M2 pushes, both took the box down ~30-60 min)."
     },
     {
       "id": 51,
