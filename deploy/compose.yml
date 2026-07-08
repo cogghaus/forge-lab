@@ -1,6 +1,13 @@
 # forge-lab deploy compose
 #
-# Usage (from repo root on accserver):
+# Images: built in CI (.github/workflows/cd.yml) and pushed to
+#   ghcr.io/sugar-crash-studios/vibe-forge-<svc>. Production (accserver) pulls
+#   only, driven by IMAGE_TAG=<short-sha> exported by the CD deploy job:
+#     docker compose -f deploy/compose.yml pull
+#     docker compose -f deploy/compose.yml up -d --no-build --remove-orphans
+#   Rollback: IMAGE_TAG=<previous-sha> docker compose -f deploy/compose.yml up -d --no-build
+#
+# Local dev (build from source, no registry involved):
 #   docker compose -f deploy/compose.yml up -d --build
 #
 # Secrets via env file (never commit):
@@ -15,7 +22,7 @@ services:
     build:
       context: ..
       dockerfile: packages/forge-hub/Dockerfile
-    image: vibe-forge-hub:latest
+    image: ghcr.io/sugar-crash-studios/vibe-forge-hub:${IMAGE_TAG:-latest}
     container_name: forge-hub
     restart: unless-stopped
     environment:
@@ -47,7 +54,7 @@ services:
     build:
       context: ..
       dockerfile: packages/forge-dash-community/Dockerfile
-    image: vibe-forge-dash:latest
+    image: ghcr.io/sugar-crash-studios/vibe-forge-dash:${IMAGE_TAG:-latest}
     container_name: forge-dash
     restart: unless-stopped
     environment:
@@ -77,7 +84,7 @@ services:
     build:
       context: ..
       dockerfile: packages/forge-mcp/Dockerfile
-    image: vibe-forge-mcp:latest
+    image: ghcr.io/sugar-crash-studios/vibe-forge-mcp:${IMAGE_TAG:-latest}
     container_name: forge-mcp
     restart: unless-stopped
     environment:

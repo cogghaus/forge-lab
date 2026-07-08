@@ -4,12 +4,19 @@
 # scope=all mode and triages all active workspaces; workers run unscoped and
 # claim tasks across all workspaces their owning account is a member of.
 #
+# Images: built in CI (.github/workflows/cd.yml) and pushed to
+#   ghcr.io/sugar-crash-studios/vibe-forge-{daemon,waker}. Production
+#   (accserver) pulls only, driven by IMAGE_TAG=<short-sha> exported by the
+#   CD deploy job:
+#     docker compose -p forge-daemons -f deploy/daemons.compose.yml pull
+#     docker compose -p forge-daemons -f deploy/daemons.compose.yml up -d --no-build --remove-orphans
+#
 # Prereqs on accserver:
 #   1. The main stack (deploy/compose.yml, project "deploy") is up.
 #   2. deploy/.env.daemons filled with ANTHROPIC_API_KEY + 9 device tokens.
 #   3. The owning account is a member of every workspace to be served.
 #
-# Usage (from a checkout on accserver):
+# Local dev usage (build from source, from a checkout on accserver or laptop):
 #   docker compose -p forge-daemons \
 #     -f deploy/daemons.compose.yml \
 #     --env-file deploy/.env.daemons \
@@ -18,7 +25,7 @@
 # Start just one for validation:  ... up -d --build forge-fm
 
 x-daemon-common: &daemon-common
-  image: vibe-forge-daemon:latest
+  image: ghcr.io/sugar-crash-studios/vibe-forge-daemon:${IMAGE_TAG:-latest}
   build:
     context: ..
     dockerfile: packages/forge-daemon/Dockerfile
@@ -134,6 +141,7 @@ services:
       - daemon-temper-workdir:/workdir
 
   forge-waker:
+    image: ghcr.io/sugar-crash-studios/vibe-forge-waker:${IMAGE_TAG:-latest}
     build:
       context: ./waker
     container_name: forge-waker
