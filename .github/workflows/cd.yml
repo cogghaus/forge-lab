@@ -1,3 +1,23 @@
+# CD: build images in GitHub-hosted CI, push to GHCR, deploy-host only pulls.
+#
+# Issue 50 (docs/design/m3-reliability.md): the deploy-host self-hosted runner
+# used to run `docker compose up -d --build` for all five images, sharing one
+# box with the production containers and the runner itself. A build there
+# once drove load to ~1400 and wedged the host. Builds now happen on
+# ubuntu-latest with buildx + GHA layer cache; deploy-host only pulls and runs
+# `up -d --no-build`, so an accidental on-box build becomes an immediate
+# error instead of a load spike.
+#
+# One-time manual step (Adam or gh api, not automatable from this workflow):
+# after the first push, the five ghcr.io/sugar-crash-studios/vibe-forge-*
+# packages are created. If GHCR defaults them to private, the deploy-host
+# runner's GITHUB_TOKEN login (scoped to this repo via GITHUB_TOKEN
+# permissions below) is sufficient for pulls made from within this workflow's
+# own deploy job, but if anyone/anything outside this workflow ever needs to
+# pull (e.g. a manual `docker pull` on the box for debugging), grant that
+# identity read access to the packages, or make them public, via each
+# package's Settings > Manage Actions access / visibility.
+
 name: CD
 
 on:
@@ -10,29 +30,106 @@ concurrency:
   group: deploy-production
   cancel-in-progress: false
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: sugar-crash-studios
+
 jobs:
-  deploy:
+  build:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - image: vibe-forge-hub
+            context: .
+            dockerfile: packages/forge-hub/Dockerfile
+          - image: vibe-forge-dash
+            context: .
+            dockerfile: packages/forge-dash-community/Dockerfile
+          - image: vibe-forge-mcp
+            context: .
+            dockerfile: packages/forge-mcp/Dockerfile
+          - image: vibe-forge-daemon
+            context: .
+            dockerfile: packages/forge-daemon/Dockerfile
+          - image: vibe-forge-waker
+            context: deploy/waker
+            dockerfile: deploy/waker/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:${{ steps.sha.outputs.short }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  deploy:
+    needs: build
     runs-on: [self-hosted, linux, x64, deploy-host]
     steps:
       - uses: actions/checkout@v4
 
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
       - name: Pull latest code
         run: git pull origin main
 
-      - name: Build and deploy all services
+      - name: Compute image tag
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Pull and deploy all services
+        env:
+          IMAGE_TAG: ${{ steps.sha.outputs.short }}
+          BUILD_SHA: ${{ steps.sha.outputs.short }}
         run: |
           docker compose -p deploy \
             -f deploy/compose.yml \
             --env-file <config-root>/.env \
-            up -d --build --remove-orphans
+            pull
+          docker compose -p deploy \
+            -f deploy/compose.yml \
+            --env-file <config-root>/.env \
+            up -d --no-build --remove-orphans
 
-      - name: Build and deploy daemons
+      - name: Pull and deploy daemons
+        env:
+          IMAGE_TAG: ${{ steps.sha.outputs.short }}
         run: |
           docker compose -p forge-daemons \
             -f deploy/daemons.compose.yml \
             --env-file <config-root>/.env.daemons \
-            up -d --build --remove-orphans
+            pull
+          docker compose -p forge-daemons \
+            -f deploy/daemons.compose.yml \
+            --env-file <config-root>/.env.daemons \
+            up -d --no-build --remove-orphans
 
       - name: Verify health
         run: |
