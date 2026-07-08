@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "nextId": 56,
+  "nextId": 59,
   "_conventions": "One issue per finding. status: open|in-progress|fixed|deferred|wont-fix. Closing REQUIRES resolution (root cause + fix location). Flip statuses as work lands, not in an end sweep. source: where the finding came from. round: product-pass-2026-07-07 for this seeding.",
   "issues": [
     {
@@ -736,6 +736,47 @@
       "source": "m3-hub-agent",
       "created": "2026-07-08",
       "updated": "2026-07-08"
+    },
+    {
+      "id": 56,
+      "title": "Stale completion retry can overwrite a fresher re-run result; lease-lost cleanup deletes unreported done files; completingTaskIds guard silently drops fresh completions",
+      "detail": "Found by M3 scenario-B verification (hub down past lease TTL). Sequence: agent finishes against dead hub -> handleTaskDone enters retryTerminal holding the run-1 result by closure -> hub restarts, sweep reclaims, heartbeatOne gets 409 and cleanupTaskFiles deletes the unreported done file -> task re-runs, run-2 done file appears, poll re-entry into handleTaskDone is silently dropped by the per-taskId completingTaskIds guard -> stale run-1 retry finally succeeds and the hub permanently records run-1 output; run-2 result never reported. Fix direction (coordinator decision): abort in-flight retry chains on lease loss (per-task AbortController), re-read the done file from disk before each completeTask attempt and abort if missing, log when the dedup guard drops a call. Locations: daemon.ts handleTaskDone ~1523, retryTerminal ~552, heartbeatOne ~447.",
+      "category": "bug",
+      "area": "forge-daemon",
+      "status": "fixed",
+      "priority": "high",
+      "round": "product-pass-2026-07-07",
+      "source": "m3-verifier",
+      "created": "2026-07-08",
+      "updated": "2026-07-08",
+      "resolution": "Per-task AbortController on completion retry chains (daemon.ts terminalAborts): heartbeatOne 409/404 aborts the in-flight chain before cleanupTaskFiles and the abort wakes a chain parked in backoff (sleepUnlessAborted). handleTaskDone re-reads the done file from disk before each completeTask attempt via beforeAttempt and aborts on missing/changed content (freshest done file wins); completingTaskIds guard drops are logged and the guard clears on abort so a newer run re-enters. Tests: m3-reliability.test.ts issue-56 describe (4 tests, failing-first verified by surgical revert), deterministic reproduction of the verifier scenario-B interleaving asserting the hub receives the run-2 result exactly once."
+    },
+    {
+      "id": 57,
+      "title": "Unscoped GET /tasks with a device token returns [] even when the device workspace has claimable tasks; workers silently need FORGE_DAEMON_WORKSPACE_ID",
+      "detail": "M3 verification setup friction: worker with correct device agentId could not see its routed task until FORGE_DAEMON_WORKSPACE_ID was set; GET /tasks (unscoped, device auth) returns [] while GET /tasks?workspaceId=... returns the task. Prod daemons.compose.yml runs workers unscoped per ADR-004, so either prod relies on a different path (WS events) or this bites there too - investigate. Fix: hub should default an unscoped device-token list to the device owning account member workspaces, or 4xx loudly; plus smoke-skill/QUICKSTART note meanwhile.",
+      "category": "bug",
+      "area": "forge-hub,forge-daemon",
+      "status": "open",
+      "priority": "high",
+      "round": "product-pass-2026-07-07",
+      "source": "m3-verifier",
+      "created": "2026-07-08",
+      "updated": "2026-07-08"
+    },
+    {
+      "id": 58,
+      "title": "background.ts assumes detached agent survives daemon death; empirically false on Windows (piped stdio)",
+      "detail": "Scenario-A observation: SIGKILL of the worker daemon also took down the detached/unref agent subprocess on Windows, contradicting the comment at background.ts:44-49. Harmless for the lease design (reclaim covers it) but the comment and any recovery logic assuming an orphan survivor should be corrected.",
+      "category": "polish",
+      "area": "forge-daemon",
+      "status": "fixed",
+      "priority": "low",
+      "round": "product-pass-2026-07-07",
+      "source": "m3-verifier",
+      "created": "2026-07-08",
+      "updated": "2026-07-08",
+      "resolution": "background.ts spawner comment rewritten (lines ~43-56): agents do not survive daemon death (attached spawn; detached+unref also dies on Windows with piped stdio); the hub lease reclaim sweep is the recovery path."
     }
   ]
 }

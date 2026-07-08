@@ -41,15 +41,19 @@ export interface BackgroundSpawner {
 }
 
 /**
- * Real spawner: starts `claude` with piped stdio and `detached: true` so the
- * daemon process can exit without killing the agent subprocess.
+ * Real spawner: starts `claude` with piped stdio, attached to the daemon
+ * process. Agents do NOT survive daemon death (issue 58: verified on Windows
+ * that even a detached+unref child dies with the daemon when stdio is piped),
+ * so a daemon crash or SIGKILL takes in-flight agents down with it. Recovery
+ * is hub-side: the lease reclaim sweep re-queues the orphaned task (M3 issue 1).
  */
 const defaultBackgroundSpawner: BackgroundSpawner = {
   spawn(command, args, options) {
-    // Note: detached+unref() causes stdout socket to be unref'd on Windows,
-    // which stops data delivery to the piped log stream. Keep the process
-    // attached so pipes work correctly. Agents are tied to daemon lifetime;
-    // a daemon restart will kill in-flight agents (acceptable for now).
+    // detached+unref() would unref the stdout socket on Windows, which stops
+    // data delivery to the piped log stream, and it does not actually keep
+    // the child alive past daemon death with piped stdio anyway (issue 58).
+    // Keep the process attached so the pipes work; the hub lease reclaim is
+    // the recovery path for agents lost with a dead daemon.
     const child = nodeSpawn(command, args, {
       cwd: options.cwd,
       env: options.env,
