@@ -111,6 +111,15 @@ describe('checkPolicy — allow rule matches', () => {
     expect(decision.allowed).toBe(true);
     expect(decision.effect).toBe('allow');
   });
+
+  // M3 issue 1: task:heartbeat must be allowed for role:worker, matching the
+  // existing task:complete / task:fail worker allowances: a worker that can
+  // claim and complete a task must also be able to keep its lease alive.
+  it('Worker device can heartbeat tasks (role:worker allow @ 50)', async () => {
+    const decision = await checkPolicy(furnaceDevice, 'task:heartbeat', taskInWs1, {});
+    expect(decision.allowed).toBe(true);
+    expect(decision.effect).toBe('allow');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -166,6 +175,14 @@ describe('checkPolicy — default deny', () => {
     expect(decision.allowed).toBe(false);
     expect(decision.effect).toBe('deny');
     expect(decision.rule).toBeNull();
+  });
+
+  // Orchestrators route and quarantine tasks, they do not hold in_progress
+  // leases, so there is no built-in allow for task:heartbeat on that role.
+  it('Orchestrator device has no task:heartbeat allow (default deny)', async () => {
+    const decision = await checkPolicy(fmDevice, 'task:heartbeat', taskInWs1, {});
+    expect(decision.allowed).toBe(false);
+    expect(decision.effect).toBe('deny');
   });
 });
 

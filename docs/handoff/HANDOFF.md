@@ -20,7 +20,7 @@ Read this first. It is self-contained: nothing here depends on external memory
 | Package | Purpose | Tests |
 |---|---|---|
 | `forge-core` | Shared Zod types, Drizzle schema, `AgentRuntime` interface | colocated |
-| `forge-hub` | Fastify 5 API, libsql + drizzle, SSE, 18 migrations (`0000`-`0017`) | ~480 |
+| `forge-hub` | Fastify 5 API, libsql + drizzle, SSE, 19 migrations (`0000`-`0018`) | ~610 |
 | `forge-daemon` | Worker + dispatcher loops, FM circuit breaker, Scribe modes | 117 |
 | `forge-agents` | 11 agent personality files | 27 |
 | `forge-dash-community` | Next.js 15 dashboard | hub-integration |

@@ -618,11 +618,18 @@ async function unblockSequencedTask(
   }
 }
 
+export interface TaskRouteOptions {
+  /** In_progress claim lease TTL in seconds. See config.ts resolveTaskLeaseSeconds. */
+  leaseTtlSeconds: number;
+}
+
 export function registerTaskRoutes(
   fastify: FastifyInstance,
   db: Db,
   bus: EventBus,
+  routeOptions: TaskRouteOptions,
 ): void {
+  const { leaseTtlSeconds } = routeOptions;
   fastify.post('/tasks', async (req, reply) => {
     const user = req.authUser;
     const device = req.authDevice;
@@ -873,6 +880,7 @@ export function registerTaskRoutes(
         .set({
           status: 'in_progress',
           assignedDeviceId: device.id,
+          leaseExpiresAt: new Date(Date.now() + leaseTtlSeconds * 1000),
           updatedAt: new Date(),
         })
         .where(
@@ -904,6 +912,63 @@ export function registerTaskRoutes(
         payload: { taskId: id, deviceId: device.id },
       });
       await reply.send({ ok: true });
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // Heartbeat: extends the in_progress claim lease (M3 issue 1). Called
+  // periodically by the daemon while it still owns the task. No history row
+  // and no bus event per beat, too chatty; the reclaim sweep and the poll
+  // loop are the durability backstops, not this endpoint.
+  // ---------------------------------------------------------------------------
+
+  fastify.post<{ Params: { id: string } }>(
+    '/tasks/:id/heartbeat',
+    { preHandler: requireDevice },
+    async (req, reply) => {
+      const device = getDevice(req);
+      const id = TaskIdSchema.parse(req.params.id);
+
+      const principal = buildDevicePrincipal(device);
+      const decision = await checkPolicy(
+        principal,
+        'task:heartbeat',
+        { type: 'task', id },
+        { db },
+      );
+      if (!decision.allowed) {
+        await reply.code(403).send({
+          error: 'policy_denied',
+          action: 'task:heartbeat',
+          principal: decision.principal,
+        });
+        return;
+      }
+
+      const leaseExpiresAt = new Date(Date.now() + leaseTtlSeconds * 1000);
+
+      // Atomic UPDATE: only the device that currently holds the in_progress
+      // lease can extend it. 0 rows covers "task not found", "not in_progress",
+      // and "not this device" alike; the daemon's response to all of them is
+      // the same (stop working, the hub no longer considers this ours).
+      const extended = await db
+        .update(schema.tasks)
+        .set({ leaseExpiresAt })
+        .where(
+          and(
+            eq(schema.tasks.id, id),
+            eq(schema.tasks.status, 'in_progress'),
+            eq(schema.tasks.assignedDeviceId, device.id),
+          ),
+        )
+        .returning({ id: schema.tasks.id });
+
+      if (extended.length === 0) {
+        await reply.code(409).send({ error: 'lease_lost' });
+        return;
+      }
+
+      await reply.send({ ok: true, leaseExpiresAt: leaseExpiresAt.getTime() });
     },
   );
 
@@ -3085,4 +3150,156 @@ export function registerTaskRoutes(
       return { requeued };
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Reclaim sweep (M3 issue 1). Exported so app.ts can wire it to a setInterval
+// at server start and so tests can call it directly instead of waiting on a
+// timer. Every in_progress task whose lease has expired is either requeued
+// (reclaim_count still under the cap) or failed permanently (over the cap).
+// Each task is processed with its own optimistic-locked UPDATE rather than a
+// single batch transaction, matching the per-row locking style used by claim,
+// complete, and fail elsewhere in this file.
+// ---------------------------------------------------------------------------
+
+export interface ReclaimSweepOptions {
+  /** Max times a task may be reclaimed before it is failed permanently. */
+  maxReclaims: number;
+}
+
+export interface ReclaimSweepResult {
+  requeued: number;
+  failed: number;
+}
+
+export async function sweepExpiredLeases(
+  db: Db,
+  bus: EventBus,
+  opts: ReclaimSweepOptions,
+): Promise<ReclaimSweepResult> {
+  const now = new Date();
+
+  const expired = await db
+    .select({
+      id: schema.tasks.id,
+      assignedAgentId: schema.tasks.assignedAgentId,
+      reclaimCount: schema.tasks.reclaimCount,
+      workspaceId: schema.tasks.workspaceId,
+      phaseIndex: schema.tasks.phaseIndex,
+      parentId: schema.tasks.parentId,
+    })
+    .from(schema.tasks)
+    .where(
+      and(
+        eq(schema.tasks.status, 'in_progress'),
+        isNotNull(schema.tasks.leaseExpiresAt),
+        lt(schema.tasks.leaseExpiresAt, now),
+      ),
+    );
+
+  let requeued = 0;
+  let failed = 0;
+
+  for (const task of expired) {
+    const nextReclaimCount = task.reclaimCount + 1;
+    const isPhaseTask = task.phaseIndex !== null && task.phaseIndex !== undefined && task.parentId !== null;
+
+    if (nextReclaimCount <= opts.maxReclaims) {
+      // Under the cap: requeue. A routed task (phase tasks always are) goes to
+      // 'assigned' so the same routed worker re-claims it; an unrouted task
+      // goes back to 'pending_agent' for any eligible worker.
+      const nextStatus = task.assignedAgentId !== null ? 'assigned' : 'pending_agent';
+      const rows = await db
+        .update(schema.tasks)
+        .set({
+          status: nextStatus,
+          assignedDeviceId: null,
+          leaseExpiresAt: null,
+          reclaimCount: nextReclaimCount,
+          updatedAt: now,
+        })
+        .where(and(eq(schema.tasks.id, task.id), eq(schema.tasks.status, 'in_progress')))
+        .returning({ id: schema.tasks.id });
+      if (rows.length === 0) continue; // raced with another writer this pass; leave it for the next one
+
+      requeued++;
+      await db.insert(schema.taskHistory).values({
+        id: nanoid(),
+        taskId: task.id,
+        eventName: 'task.lease_reclaimed',
+        source: 'system',
+        payload: { reclaimCount: nextReclaimCount },
+        workspaceId: task.workspaceId,
+      });
+      bus.emit({
+        id: nanoid(),
+        name: 'task.lease_reclaimed',
+        occurredAt: new Date(),
+        source: 'system',
+        payload: { taskId: task.id, reclaimCount: nextReclaimCount, workspaceId: task.workspaceId ?? null },
+      });
+      continue;
+    }
+
+    // Over the cap: fail permanently. Caps crash-loop tasks instead of
+    // reclaiming them forever.
+    const rows = await db
+      .update(schema.tasks)
+      .set({
+        status: 'failed',
+        assignedDeviceId: null,
+        leaseExpiresAt: null,
+        reclaimCount: nextReclaimCount,
+        updatedAt: now,
+      })
+      .where(and(eq(schema.tasks.id, task.id), eq(schema.tasks.status, 'in_progress')))
+      .returning({ id: schema.tasks.id });
+    if (rows.length === 0) continue;
+
+    failed++;
+    await db.insert(schema.taskHistory).values({
+      id: nanoid(),
+      taskId: task.id,
+      eventName: 'task.failed',
+      source: 'system',
+      payload: { reason: 'lease_expired_max_reclaims', reclaimCount: nextReclaimCount },
+      workspaceId: task.workspaceId,
+    });
+    bus.emit({
+      id: nanoid(),
+      name: 'task.failed',
+      occurredAt: new Date(),
+      source: 'system',
+      payload: { taskId: task.id, workspaceId: task.workspaceId ?? null },
+    });
+
+    // Phase tasks: route the over-cap failure through the same blocked-root
+    // bookkeeping the stale-phase requeue and the device fail endpoint use, so
+    // the sequence does not silently strand; the root task gets a visible
+    // blockedReason and a task.phase_blocked history event.
+    if (isPhaseTask) {
+      const parentId = task.parentId as string;
+      const phaseIndex = task.phaseIndex as number;
+      await db
+        .update(schema.tasks)
+        .set({ blockedReason: `phase_failed:${phaseIndex}`, updatedAt: now })
+        .where(eq(schema.tasks.id, parentId));
+      if (task.workspaceId) {
+        await db.insert(schema.taskHistory).values({
+          id: nanoid(),
+          taskId: parentId,
+          eventName: 'task.phase_blocked',
+          source: 'system',
+          payload: { phase: phaseIndex, reason: `phase_failed:${phaseIndex}` },
+          workspaceId: task.workspaceId,
+        });
+      }
+    }
+
+    if (task.workspaceId) {
+      await runDepUnblockingPass(db, task.workspaceId);
+    }
+  }
+
+  return { requeued, failed };
 }

@@ -14,6 +14,11 @@ export const TEST_HUB_CONFIG = {
   bcryptCost: 10,
   cookieSecure: false,
   appBaseUrl: 'http://localhost:3001',
+  // Reclaim sweep interval defaults to 60s (see config.ts); tests that don't
+  // exercise the lease sweep should not have a background timer running.
+  // Tests covering the sweep itself call sweepExpiredLeases directly instead
+  // of relying on the interval.
+  reclaimSweepSeconds: 0,
 } as const;
 
 /** Register the first (admin) user and log in. Returns session cookie. */

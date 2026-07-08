@@ -79,6 +79,19 @@ const ConfigSchema = z.object({
   // 'all': enumerate all active workspaces the device's owning account is a member of
   //        and triage each inbox in sequence. workspaceId is optional in this mode.
   dispatcherWorkspaceMode: z.enum(['single', 'all']).default('single'),
+  // How often the heartbeat loop extends the lease on every active real task
+  // (M3 issue 1). Must be well under the hub's lease TTL (default 30 min) so
+  // a beat or two can be missed without losing the task. 0 disables the loop
+  // entirely (not recommended once the hub reclaim sweep is live). Default: 60000.
+  heartbeatMs: z.coerce.number().int().min(0).optional(),
+  // Wall-clock backstop for a hung-but-alive agent (M3 issue 4). isAlive() is
+  // file/pid-based and never expires on its own. 0 disables the check.
+  // Default: 3600000 (60 min).
+  maxTaskRuntimeMs: z.coerce.number().int().min(0).optional(),
+  // Bounded retry limit for terminal hub calls (completeTask/failTask) on
+  // network errors, 429, and 5xx (M3 issue 14). 4xx stops retrying immediately
+  // regardless of this limit. Default: 4.
+  terminalRetryLimit: z.coerce.number().int().min(0).optional(),
 });
 
 export type DaemonConfig = z.infer<typeof ConfigSchema> & {
@@ -114,6 +127,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     fmCooldownMs: env['FORGE_DAEMON_FM_COOLDOWN_MS'],
     model: env['FORGE_DAEMON_MODEL'],
     idleShutdownMs: env['FORGE_DAEMON_IDLE_SHUTDOWN_MS'],
+    heartbeatMs: env['FORGE_DAEMON_HEARTBEAT_MS'],
+    maxTaskRuntimeMs: env['FORGE_DAEMON_MAX_TASK_RUNTIME_MS'],
+    terminalRetryLimit: env['FORGE_DAEMON_TERMINAL_RETRY_LIMIT'],
   });
   return {
     ...parsed,

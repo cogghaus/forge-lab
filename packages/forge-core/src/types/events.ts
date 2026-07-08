@@ -10,6 +10,7 @@ export const TaskEventNameSchema = z.enum([
   'task.failed',
   'task.cancelled',
   'task.requeued',
+  'task.lease_reclaimed',
 ]);
 export type TaskEventName = z.infer<typeof TaskEventNameSchema>;
 

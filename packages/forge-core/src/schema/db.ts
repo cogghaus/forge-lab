@@ -141,6 +141,10 @@ export const tasks = sqliteTable(
     blockedReason: text('blocked_reason'),
     /** SHA-256 of sequence_spec JSON, used for idempotent re-plan detection. */
     sequenceSpecHash: text('sequence_spec_hash'),
+    /** Epoch ms when the in_progress claim lease expires. NULL when not leased (M3 issue 1). */
+    leaseExpiresAt: timestampMs('lease_expires_at'),
+    /** Number of times the reclaim sweep has taken this task back from a crashed daemon. */
+    reclaimCount: integer('reclaim_count').notNull().default(0),
   },
   (t) => ({
     statusIdx: index('tasks_status_idx').on(t.status),
@@ -151,6 +155,8 @@ export const tasks = sqliteTable(
     parentPhaseIdx: uniqueIndex('tasks_parent_phase_idx')
       .on(t.parentId, t.phaseIndex)
       .where(sql`${t.phaseIndex} IS NOT NULL`),
+    /** Used by the reclaim sweep to find expired in_progress leases. */
+    leaseIdx: index('tasks_lease_idx').on(t.status, t.leaseExpiresAt),
   }),
 );
 

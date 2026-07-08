@@ -1,10 +1,35 @@
 import { describe, it, expect } from 'vitest';
-import { createClient } from '@libsql/client';
-import { runMigrations } from './migrate.js';
+import { createClient, type Client } from '@libsql/client';
+import { runMigrations, MIGRATIONS } from './migrate.js';
 
 async function freshDb() {
   const client = createClient({ url: ':memory:' });
   await runMigrations(client);
+  return client;
+}
+
+/**
+ * Apply every migration up to (but excluding) `stopBeforeName`, mirroring
+ * runMigrations' own statement-splitting so the resulting db is in the exact
+ * pre-migration state a real deploy would be in. Used to test 0018's backfill
+ * against pre-existing in_progress rows that predate the lease columns.
+ */
+async function dbBeforeMigration(stopBeforeName: string): Promise<Client> {
+  const client = createClient({ url: ':memory:' });
+  await client.execute('PRAGMA foreign_keys = ON');
+  await client.execute(
+    `CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)`,
+  );
+  for (const m of MIGRATIONS) {
+    if (m.name === stopBeforeName) break;
+    for (const stmt of m.sql.split(';').map((s) => s.trim()).filter((s) => s.length > 0)) {
+      await client.execute({ sql: stmt, args: [] });
+    }
+    await client.execute({
+      sql: 'INSERT INTO _migrations (name, applied_at) VALUES (?, ?)',
+      args: [m.name, Date.now()],
+    });
+  }
   return client;
 }
 
@@ -342,6 +367,99 @@ describe('runMigrations', () => {
     expect(idxNames).toContain('workspace_docs_active_idx');
     expect(idxNames).toContain('workspace_docs_category_idx');
     expect(idxNames).toContain('workspace_docs_key_idx');
+    client.close();
+  });
+
+  // ---------------------------------------------------------------------------
+  // 0018_task_lease (M3 issue 1)
+  // ---------------------------------------------------------------------------
+
+  it('migration 0018_task_lease is recorded', async () => {
+    const client = await freshDb();
+    const res = await client.execute('SELECT name FROM _migrations ORDER BY name');
+    const names = res.rows.map((r) => r['name'] as string);
+    expect(names).toContain('0018_task_lease');
+    client.close();
+  });
+
+  it('tasks table has lease_expires_at and reclaim_count columns', async () => {
+    const client = await freshDb();
+    const res = await client.execute('PRAGMA table_info(tasks)');
+    const cols = res.rows.map((r) => r['name'] as string);
+    expect(cols).toContain('lease_expires_at');
+    expect(cols).toContain('reclaim_count');
+    client.close();
+  });
+
+  it('reclaim_count defaults to 0', async () => {
+    const client = await freshDb();
+    await client.execute(
+      `INSERT INTO tasks (id, project_prefix, title, status, priority, created_by)
+       VALUES ('fl-001', 'fl', 'Test', 'pending_agent', 'normal', 'u1')`,
+    );
+    const res = await client.execute(`SELECT reclaim_count FROM tasks WHERE id = 'fl-001'`);
+    expect(res.rows[0]?.['reclaim_count']).toBe(0);
+    client.close();
+  });
+
+  it('tasks_lease_idx index exists', async () => {
+    const client = await freshDb();
+    const indexRes = await client.execute(
+      `SELECT name FROM sqlite_master WHERE type='index' AND name = 'tasks_lease_idx'`,
+    );
+    expect(indexRes.rows).toHaveLength(1);
+    client.close();
+  });
+
+  it('backfills lease_expires_at for pre-existing in_progress rows', async () => {
+    // Set up a db at the exact state a real deploy would be in just before
+    // 0018 runs: an in_progress task from before the lease columns existed.
+    const client = await dbBeforeMigration('0018_task_lease');
+    await client.execute(
+      `INSERT INTO tasks (id, project_prefix, title, status, priority, created_by)
+       VALUES ('fl-001', 'fl', 'Legacy in-flight task', 'in_progress', 'normal', 'u1')`,
+    );
+    await client.execute(
+      `INSERT INTO tasks (id, project_prefix, title, status, priority, created_by)
+       VALUES ('fl-002', 'fl', 'Legacy pending task', 'pending_agent', 'normal', 'u1')`,
+    );
+
+    const before = Date.now();
+    await runMigrations(client); // applies 0018_task_lease and its backfill
+
+    const res = await client.execute(
+      `SELECT id, status, lease_expires_at FROM tasks ORDER BY id`,
+    );
+    const rows = res.rows as unknown as Array<{ id: string; status: string; lease_expires_at: number | null }>;
+
+    const inProgressRow = rows.find((r) => r.id === 'fl-001');
+    expect(inProgressRow?.status).toBe('in_progress');
+    // Backfilled to now + 1800s (the default TTL), so it must land comfortably
+    // in the future relative to the migration run, not be left NULL.
+    expect(inProgressRow?.lease_expires_at).not.toBeNull();
+    expect(inProgressRow!.lease_expires_at as number).toBeGreaterThan(before + 1_000_000);
+
+    // A pending_agent row was never leased and must NOT be backfilled.
+    const pendingRow = rows.find((r) => r.id === 'fl-002');
+    expect(pendingRow?.lease_expires_at).toBeNull();
+
+    client.close();
+  });
+
+  it('is idempotent for 0018 - running migrations twice does not re-backfill or error', async () => {
+    const client = await dbBeforeMigration('0018_task_lease');
+    await client.execute(
+      `INSERT INTO tasks (id, project_prefix, title, status, priority, created_by)
+       VALUES ('fl-001', 'fl', 'Legacy in-flight task', 'in_progress', 'normal', 'u1')`,
+    );
+    await runMigrations(client);
+    const firstRes = await client.execute(`SELECT lease_expires_at FROM tasks WHERE id = 'fl-001'`);
+    const firstLease = firstRes.rows[0]?.['lease_expires_at'];
+
+    await expect(runMigrations(client)).resolves.not.toThrow();
+    const secondRes = await client.execute(`SELECT lease_expires_at FROM tasks WHERE id = 'fl-001'`);
+    expect(secondRes.rows[0]?.['lease_expires_at']).toBe(firstLease);
+
     client.close();
   });
 });

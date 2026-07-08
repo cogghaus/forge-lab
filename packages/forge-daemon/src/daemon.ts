@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { EventEnvelope, RuntimeInstance, Task } from '@forge-lab/core';
 import { composeSystemPrompt } from '@forge-lab/agents';
 import type { PersonalityRegistry } from '@forge-lab/agents';
-import { HubClient, type TaskInstruction } from './hub-client.js';
+import { HubClient, HttpError, type TaskInstruction } from './hub-client.js';
 import { ReviewRunner } from './review-runner.js';
 import { RuntimeRegistry } from './runtime/registry.js';
 import {
@@ -164,6 +164,33 @@ export interface DaemonOptions {
   reviewDefaultRepoPath?: string;
   /** Base branch for branch-type diff resolution. Defaults to 'main'. */
   reviewDefaultBaseBranch?: string;
+  /**
+   * How often the heartbeat loop extends the hub lease on every active REAL
+   * task (M3 issue 1). `_fm_` synthetic tasks are skipped: they are not hub
+   * tasks and have no lease. Must be well under the hub's lease TTL (default
+   * 30 min) so a beat or two can be missed without losing the task.
+   * 0 disables the loop. Default: 60000 (1 minute).
+   */
+  heartbeatMs?: number;
+  /**
+   * Wall-clock backstop for a hung-but-alive agent (M3 issue 4). `isAlive()`
+   * is file/pid-based and never expires on its own, so a hung process holds
+   * its slot forever without this. Checked once per poll tick, not a
+   * per-task timer. 0 disables the check. Default: 3600000 (60 minutes).
+   */
+  maxTaskRuntimeMs?: number;
+  /**
+   * Bounded retry limit for terminal hub calls (completeTask/failTask) on
+   * network errors, 429, and 5xx (M3 issue 14). A 4xx response stops
+   * retrying immediately regardless of this limit: the hub already decided
+   * we do not own the outcome. Default: 4.
+   */
+  terminalRetryLimit?: number;
+  /**
+   * Injectable delay function for the terminal-retry backoff (tests).
+   * Defaults to a real `setTimeout`-based sleep.
+   */
+  retrySleep?: (ms: number) => Promise<void>;
 }
 
 export interface DaemonLogger {
@@ -179,7 +206,22 @@ const noopLogger: DaemonLogger = {
 interface ActiveInstance {
   instance: RuntimeInstance;
   runtimeId: string;
+  /** ms since epoch when this instance was spawned (M3 issue 4 wall-clock timeout). */
+  startedAt: number;
 }
+
+/** Delays (ms) between terminal-call retry attempts (M3 issue 14). */
+const TERMINAL_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000];
+
+function defaultRetrySleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Outcome of {@link Daemon.retryTerminal}. */
+type RetryTerminalResult =
+  | { outcome: 'ok' }
+  | { outcome: 'client_error'; error: Error }
+  | { outcome: 'exhausted'; error: Error };
 
 export class Daemon {
   private readonly client: HubClient;
@@ -243,6 +285,19 @@ export class Daemon {
   private readonly gitOps: GitOps;
   private readonly reviewRunner: ReviewRunner | null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Heartbeat interval handle (M3 issue 1). Null when heartbeatMs is 0. */
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  /** Injectable delay for the terminal-retry backoff (tests). */
+  private readonly retrySleep: (ms: number) => Promise<void>;
+  /**
+   * Task IDs currently inside a `handleTaskDone` call (M3 issue 14). Guards
+   * against a race between the done-file FS watcher and the poll loop's
+   * finished-instance branch, which can both observe the same done file and
+   * try to complete it concurrently, most visibly once a task is left in
+   * this map on retry exhaustion so the poll loop re-enters `handleTaskDone`
+   * every tick.
+   */
+  private readonly completingTaskIds = new Set<string>();
 
   constructor(opts: DaemonOptions) {
     this.opts = opts;
@@ -250,6 +305,7 @@ export class Daemon {
     this.logger = opts.logger ?? noopLogger;
     this.gitOps = opts.gitOps ?? defaultGitOps;
     this.now = opts.now ?? Date.now;
+    this.retrySleep = opts.retrySleep ?? defaultRetrySleep;
     // A repo-bound daemon reuses a single ${workdir}/repo checkout, so it MUST
     // run one task at a time — concurrent agents would corrupt the shared tree.
     if (opts.repoUrl && (opts.maxConcurrentTasks ?? Infinity) !== 1) {
@@ -362,7 +418,68 @@ export class Daemon {
     });
 
     this.resetIdleTimer();
+
+    // M3 issue 1: heartbeat loop. One interval beats every active REAL task
+    // (skipping `_fm_` synthetics, which have no hub lease). 0 disables it.
+    const heartbeatMs = this.opts.heartbeatMs ?? 60_000;
+    if (heartbeatMs > 0) {
+      this.heartbeatTimer = setInterval(() => {
+        void this.beatActiveTasks();
+      }, heartbeatMs);
+    }
+
     this.logger.info('daemon started', { hubUrl: this.opts.hubUrl, workdir: this.opts.workdir });
+  }
+
+  /**
+   * Beat every active real task's lease on the hub (M3 issue 1). `_fm_`
+   * synthetic tasks are not hub tasks and are skipped. Snapshots the map
+   * first: a lease-lost kill mutates `activeInstances`, which must not
+   * perturb this iteration.
+   */
+  private async beatActiveTasks(): Promise<void> {
+    for (const [taskId] of [...this.activeInstances]) {
+      if (taskId.startsWith('_fm_')) continue;
+      await this.heartbeatOne(taskId);
+    }
+  }
+
+  private async heartbeatOne(taskId: string): Promise<void> {
+    const active = this.activeInstances.get(taskId);
+    if (!active) return; // completed between the snapshot and now
+    try {
+      await this.client.heartbeatTask(taskId);
+    } catch (err) {
+      if (err instanceof HttpError && (err.status === 409 || err.status === 404)) {
+        // The hub took the task back (lease expired and was reclaimed, or the
+        // task no longer exists). We no longer own it: kill the local agent
+        // but do NOT failTask: that would fight whatever now owns the task.
+        this.logger.error('task lease lost, killed local agent', {
+          taskId,
+          status: err.status,
+        });
+        const runtime = this.runtimes.get(active.runtimeId);
+        try {
+          await runtime.stop(active.instance);
+        } catch (stopErr) {
+          this.logger.error('failed to stop runtime instance after lease loss', {
+            taskId,
+            error: stopErr instanceof Error ? stopErr.message : String(stopErr),
+          });
+        }
+        await cleanupTaskFiles(this.opts.workdir, taskId).catch(() => {});
+        this.activeInstances.delete(taskId);
+        this.taskRetries.delete(taskId);
+        return;
+      }
+      // Network error (or any non-lease-loss failure): keep going, the next
+      // beat retries. Missing several beats is exactly what the hub's lease
+      // TTL is sized to absorb.
+      this.logger.info('heartbeat failed, will retry next interval', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -404,6 +521,10 @@ export class Daemon {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     this.running = false;
     this.loopController?.abort();
     this.loopController = null;
@@ -417,6 +538,39 @@ export class Daemon {
     this.logger.info('daemon stopped');
   }
 
+  /**
+   * Runs a terminal hub call (`completeTask`/`failTask`) with bounded
+   * exponential backoff (M3 issue 14). Retries only on network errors, 429,
+   * and 5xx: those are the "our call may not have landed" cases. A 4xx
+   * response (403/404/409) means the hub already decided we do not own this
+   * outcome (already terminal, lease lost, etc.): stop retrying immediately.
+   *
+   * Returns a discriminated result instead of throwing so each call site can
+   * decide what "give up" means for it (e.g. `handleTaskDone` keeps the done
+   * file and map entry on exhaustion so the poll loop can re-attempt later).
+   */
+  private async retryTerminal(fn: () => Promise<void>): Promise<RetryTerminalResult> {
+    const limit = this.opts.terminalRetryLimit ?? 4;
+    let lastError: Error = new Error('retryTerminal: unreachable');
+    for (let attempt = 0; attempt <= limit; attempt++) {
+      try {
+        await fn();
+        return { outcome: 'ok' };
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const isClientError =
+          err instanceof HttpError && err.status >= 400 && err.status < 500 && err.status !== 429;
+        if (isClientError) {
+          return { outcome: 'client_error', error: lastError };
+        }
+        if (attempt >= limit) break;
+        const delay = TERMINAL_RETRY_DELAYS_MS[Math.min(attempt, TERMINAL_RETRY_DELAYS_MS.length - 1)] ?? 60_000;
+        await this.retrySleep(delay);
+      }
+    }
+    return { outcome: 'exhausted', error: lastError };
+  }
+
   private async pollForPendingTasks(): Promise<void> {
     // Snapshot: the worker self-heal path below may re-spawn a task (mutating
     // activeInstances), which must not perturb this iteration.
@@ -428,16 +582,40 @@ export class Daemon {
         if (wasKilled) continue;
       }
 
+      // M3 issue 4: wall-clock backstop. isAlive() is file/pid-based and never
+      // expires on its own, so a hung-but-alive process would otherwise hold its
+      // slot forever. Checked before isAlive, once per poll tick (a backstop,
+      // not scheduling, no per-task timers). A task that finished right at
+      // the boundary is left to the isAlive/done-file path below instead of
+      // being timed out from under a completed agent.
+      const maxTaskRuntimeMs = this.opts.maxTaskRuntimeMs ?? 3_600_000;
+      if (maxTaskRuntimeMs > 0 && this.now() - active.startedAt > maxTaskRuntimeMs) {
+        const alreadyDone = (await readDoneFile(this.opts.workdir, taskId)) !== null;
+        if (!alreadyDone) {
+          await this.handleRuntimeTimeout(taskId, active, maxTaskRuntimeMs);
+          continue;
+        }
+      }
+
       const runtime = this.runtimes.get(active.runtimeId);
       const alive = await runtime.isAlive(active.instance);
       if (alive) continue;
 
       // isAlive() is false for two very different reasons: the agent finished
-      // (its done file is present — the done-watcher will handle completion and
-      // reset fmRunning), or it genuinely died. Only the latter is an error.
-      const finished = (await readDoneFile(this.opts.workdir, taskId)) !== null;
+      // (its done file is present) or it genuinely died. Only the latter is an
+      // error. A finished instance re-enters handleTaskDone rather than being
+      // dropped here: on a prior tick completeTask's retry chain may have
+      // exhausted (M3 issue 14), deliberately leaving the done file and this
+      // map entry in place so completion is re-attempted every poll tick until
+      // the hub confirms or the lease reclaims the task. handleTaskDone's own
+      // dedup guard makes this safe even if the FS watcher already fired (or is
+      // about to) for the same done file.
+      const doneResult = await readDoneFile(this.opts.workdir, taskId);
+      if (doneResult !== null) {
+        await this.handleTaskDone(taskId, doneResult);
+        continue;
+      }
       this.activeInstances.delete(taskId);
-      if (finished) continue;
 
       this.logger.error('agent instance appears dead', {
         taskId,
@@ -501,6 +679,69 @@ export class Daemon {
     }
   }
 
+  /**
+   * A real task (or `_fm_` synthetic) that has run longer than
+   * `maxTaskRuntimeMs` (M3 issue 4). Stops the runtime instance, then for a
+   * real task fails it through the terminal-retry helper (issue 14) and
+   * cleans up local state unconditionally: a hung task has no done file
+   * worth preserving, and the hub's lease reclaim sweep (issue 1) is the
+   * safety net if the fail call itself never lands. For an `_fm_` synthetic
+   * (not a hub task) resets `fmRunning` and the per-workspace cooldown
+   * exactly like the dead-FM path, with no hub call.
+   */
+  private async handleRuntimeTimeout(
+    taskId: string,
+    active: ActiveInstance,
+    maxTaskRuntimeMs: number,
+  ): Promise<void> {
+    const minutes = Math.round(maxTaskRuntimeMs / 60_000);
+    this.logger.error('task exceeded max runtime, stopping', {
+      taskId,
+      maxTaskRuntimeMs,
+    });
+    const runtime = this.runtimes.get(active.runtimeId);
+    try {
+      await runtime.stop(active.instance);
+    } catch (err) {
+      this.logger.error('failed to stop runtime instance after max runtime exceeded', {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    if (taskId.startsWith('_fm_')) {
+      const wsId = this.fmTaskWorkspace.get(taskId);
+      if (wsId) {
+        this.lastFmSpawnAt.delete(wsId);
+        this.fmTaskWorkspace.delete(taskId);
+      }
+      this.fmRunning = false;
+      await cleanupTaskFiles(this.opts.workdir, taskId).catch(() => {});
+      this.activeInstances.delete(taskId);
+      return;
+    }
+
+    const result = await this.retryTerminal(() =>
+      this.client.failTask(taskId, `max runtime exceeded (${minutes}m)`),
+    );
+    if (result.outcome === 'exhausted') {
+      this.logger.error('failTask retries exhausted after max runtime exceeded', {
+        taskId,
+        error: result.error.message,
+      });
+    } else if (result.outcome === 'client_error') {
+      this.logger.info('failTask returned a 4xx after max runtime exceeded, hub already owns recovery', {
+        taskId,
+        error: result.error.message,
+      });
+    } else {
+      this.logger.error('marked timed-out task as failed', { taskId, minutes });
+    }
+    await cleanupTaskFiles(this.opts.workdir, taskId).catch(() => {});
+    this.activeInstances.delete(taskId);
+    this.taskRetries.delete(taskId);
+  }
+
   // Anchored on the claude CLI's own auth prompts ("... Please run /login")
   // and API key rejection messages. Phrases unlikely to appear in normal task
   // output, preventing misclassification of real crashes that mention auth.
@@ -556,14 +797,19 @@ export class Daemon {
     // not left stuck in_progress (also covers non-auth agent crashes).
     this.taskRetries.delete(taskId);
     const reason = authFailed ? 'auth failure (retries exhausted)' : 'agent exited without completing';
-    try {
-      await this.client.failTask(taskId, reason);
-      this.logger.error('marked dead task as failed', { taskId, reason });
-    } catch (err) {
-      this.logger.error('failed to mark dead task as failed', {
+    const result = await this.retryTerminal(() => this.client.failTask(taskId, reason));
+    if (result.outcome === 'exhausted') {
+      this.logger.error('failTask retries exhausted for dead task', {
         taskId,
-        error: err instanceof Error ? err.message : String(err),
+        error: result.error.message,
       });
+    } else if (result.outcome === 'client_error') {
+      this.logger.info('failTask returned a 4xx for a dead task, hub already owns recovery', {
+        taskId,
+        error: result.error.message,
+      });
+    } else {
+      this.logger.error('marked dead task as failed', { taskId, reason });
     }
   }
 
@@ -850,7 +1096,11 @@ export class Daemon {
         },
         initialPrompt,
       );
-      this.activeInstances.set(syntheticTaskId, { instance, runtimeId: this.opts.defaultRuntimeId });
+      this.activeInstances.set(syntheticTaskId, {
+        instance,
+        runtimeId: this.opts.defaultRuntimeId,
+        startedAt: this.now(),
+      });
       this.fmTaskWorkspace.set(syntheticTaskId, workspaceId);
       this.resetIdleTimer();
       this.logger.info('fm agent spawned', { workspaceId, syntheticTaskId, fmAgentId });
@@ -1104,20 +1354,29 @@ export class Daemon {
         },
         initialPrompt,
       );
-      this.activeInstances.set(claimed.id, { instance, runtimeId: this.opts.defaultRuntimeId });
+      this.activeInstances.set(claimed.id, {
+        instance,
+        runtimeId: this.opts.defaultRuntimeId,
+        startedAt: this.now(),
+      });
       this.logger.info('task spawned', { taskId: claimed.id, runtime: this.opts.defaultRuntimeId });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       this.logger.error('task claimed but spawn failed', { taskId, error: reason });
-      // Best-effort: mark the task as failed so it is not stuck in_progress
-      // indefinitely. If failTask itself fails the task remains in_progress;
-      // the stale-assigned requeue mechanism does not cover in_progress tasks.
-      try {
-        await this.client.failTask(taskId, `spawn failed: ${reason}`);
-      } catch (failErr) {
-        this.logger.error('failed to mark task as failed after spawn error', {
+      // Mark the task as failed (through the bounded terminal-retry helper,
+      // M3 issue 14) so it is not stuck in_progress indefinitely. On 4xx or
+      // retry exhaustion the hub's lease reclaim sweep (issue 1) is the
+      // remaining safety net.
+      const result = await this.retryTerminal(() => this.client.failTask(taskId, `spawn failed: ${reason}`));
+      if (result.outcome === 'exhausted') {
+        this.logger.error('failTask retries exhausted after spawn failure', {
           taskId,
-          error: failErr instanceof Error ? failErr.message : String(failErr),
+          error: result.error.message,
+        });
+      } else if (result.outcome === 'client_error') {
+        this.logger.info('failTask returned a 4xx after spawn failure, hub already owns recovery', {
+          taskId,
+          error: result.error.message,
         });
       }
       // Task is now terminal — drop any retry counter so it can't leak.
@@ -1262,54 +1521,86 @@ export class Daemon {
   }
 
   private async handleTaskDone(taskId: string, result: DoneResult): Promise<void> {
-    // Synthetic FM tasks (prefixed with _fm_) are not tracked in the hub.
-    if (taskId.startsWith('_fm_')) {
-      try {
-        await cleanupTaskFiles(this.opts.workdir, taskId);
-      } catch (err) {
-        this.logger.error('failed to cleanup FM task files', {
-          taskId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-      this.activeInstances.delete(taskId);
-      this.fmTaskWorkspace.delete(taskId);
-      this.fmRunning = false;
-      this.resetIdleTimer();
-      this.logger.info('fm agent completed', { taskId, result: result.result });
-      return;
-    }
-
-    // R10: save memory before completeTask so a daemon crash between save and
-    // complete leaves the task retryable with valid memory context.
-    const memContent = await readMemoryFile(this.opts.workdir, taskId);
-    if (memContent && memContent.trim().length > 0) {
-      // Best-effort secret scan before persisting.
-      if (/sk-ant-|ghp_|gho_|AKIA[A-Z0-9]{16}|-----BEGIN/.test(memContent)) {
-        this.logger.info('agent memory skipped — potential secret detected', { taskId });
-      } else {
-        await this.client.putAgentMemory(taskId, memContent.slice(0, 1500)).catch((err) => {
-          this.logger.error('failed to save agent memory', {
+    // M3 issue 14: the FS watcher and the poll loop's finished-instance
+    // branch can both observe the same done file and race to complete it,
+    // most visibly once a task is deliberately left in activeInstances after
+    // retry exhaustion so the poll loop re-enters this method every tick.
+    // Let the in-flight attempt finish rather than double-fire the terminal call.
+    if (this.completingTaskIds.has(taskId)) return;
+    this.completingTaskIds.add(taskId);
+    try {
+      // Synthetic FM tasks (prefixed with _fm_) are not tracked in the hub.
+      if (taskId.startsWith('_fm_')) {
+        try {
+          await cleanupTaskFiles(this.opts.workdir, taskId);
+        } catch (err) {
+          this.logger.error('failed to cleanup FM task files', {
             taskId,
             error: err instanceof Error ? err.message : String(err),
           });
-        });
-        this.logger.info('agent memory saved', { taskId, chars: Math.min(memContent.length, 1500) });
+        }
+        this.activeInstances.delete(taskId);
+        this.fmTaskWorkspace.delete(taskId);
+        this.fmRunning = false;
+        this.resetIdleTimer();
+        this.logger.info('fm agent completed', { taskId, result: result.result });
+        return;
       }
-    }
 
-    try {
-      await this.client.completeTask(taskId, result.result);
-      await cleanupTaskFiles(this.opts.workdir, taskId);
-      this.activeInstances.delete(taskId);
-      this.taskRetries.delete(taskId);
-      this.logger.info('task completed', { taskId });
-      this.resetIdleTimer();
-    } catch (err) {
-      this.logger.error('failed to complete task', {
+      // R10: save memory before completeTask so a daemon crash between save and
+      // complete leaves the task retryable with valid memory context.
+      const memContent = await readMemoryFile(this.opts.workdir, taskId);
+      if (memContent && memContent.trim().length > 0) {
+        // Best-effort secret scan before persisting.
+        if (/sk-ant-|ghp_|gho_|AKIA[A-Z0-9]{16}|-----BEGIN/.test(memContent)) {
+          this.logger.info('agent memory skipped — potential secret detected', { taskId });
+        } else {
+          await this.client.putAgentMemory(taskId, memContent.slice(0, 1500)).catch((err) => {
+            this.logger.error('failed to save agent memory', {
+              taskId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+          this.logger.info('agent memory saved', { taskId, chars: Math.min(memContent.length, 1500) });
+        }
+      }
+
+      // M3 issue 14: completeTask goes through the bounded terminal-retry
+      // helper FIRST; cleanup only moves after a confirmed success (2xx).
+      const completion = await this.retryTerminal(() => this.client.completeTask(taskId, result.result));
+
+      if (completion.outcome === 'ok') {
+        await cleanupTaskFiles(this.opts.workdir, taskId);
+        this.activeInstances.delete(taskId);
+        this.taskRetries.delete(taskId);
+        this.logger.info('task completed', { taskId });
+        this.resetIdleTimer();
+        return;
+      }
+
+      if (completion.outcome === 'client_error') {
+        // The hub already decided we do not own this outcome (already
+        // terminal, lease lost, etc). Clean up local state without
+        // pretending we completed it: the lease system owns recovery.
+        this.logger.info('completeTask returned a 4xx, hub already owns this task, cleaning up locally', {
+          taskId,
+          error: completion.error.message,
+        });
+        await cleanupTaskFiles(this.opts.workdir, taskId).catch(() => {});
+        this.activeInstances.delete(taskId);
+        this.taskRetries.delete(taskId);
+        return;
+      }
+
+      // Retries exhausted: keep the done file and the activeInstances entry
+      // on purpose. The poll loop's finished-instance branch re-enters this
+      // method every tick until the hub confirms or the lease reclaims the task.
+      this.logger.error('completion unconfirmed, will re-attempt via poll', {
         taskId,
-        error: err instanceof Error ? err.message : String(err),
+        error: completion.error.message,
       });
+    } finally {
+      this.completingTaskIds.delete(taskId);
     }
   }
 }

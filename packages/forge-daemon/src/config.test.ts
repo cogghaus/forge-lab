@@ -145,6 +145,58 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_FM_COOLDOWN_MS: '-1' })).toThrow();
   });
 
+  it('heartbeatMs is undefined when not set', () => {
+    const cfg = loadConfig(REQUIRED);
+    expect(cfg.heartbeatMs).toBeUndefined();
+  });
+
+  it('FORGE_DAEMON_HEARTBEAT_MS sets heartbeatMs', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_HEARTBEAT_MS: '15000' });
+    expect(cfg.heartbeatMs).toBe(15000);
+  });
+
+  it('FORGE_DAEMON_HEARTBEAT_MS=0 is valid (disables the heartbeat loop)', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_HEARTBEAT_MS: '0' });
+    expect(cfg.heartbeatMs).toBe(0);
+  });
+
+  it('FORGE_DAEMON_HEARTBEAT_MS=-1 throws (min 0)', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_HEARTBEAT_MS: '-1' })).toThrow();
+  });
+
+  it('maxTaskRuntimeMs is undefined when not set', () => {
+    const cfg = loadConfig(REQUIRED);
+    expect(cfg.maxTaskRuntimeMs).toBeUndefined();
+  });
+
+  it('FORGE_DAEMON_MAX_TASK_RUNTIME_MS sets maxTaskRuntimeMs', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_MAX_TASK_RUNTIME_MS: '1800000' });
+    expect(cfg.maxTaskRuntimeMs).toBe(1800000);
+  });
+
+  it('FORGE_DAEMON_MAX_TASK_RUNTIME_MS=0 is valid (disables the timeout)', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_MAX_TASK_RUNTIME_MS: '0' });
+    expect(cfg.maxTaskRuntimeMs).toBe(0);
+  });
+
+  it('FORGE_DAEMON_MAX_TASK_RUNTIME_MS=-1 throws (min 0)', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_MAX_TASK_RUNTIME_MS: '-1' })).toThrow();
+  });
+
+  it('terminalRetryLimit is undefined when not set', () => {
+    const cfg = loadConfig(REQUIRED);
+    expect(cfg.terminalRetryLimit).toBeUndefined();
+  });
+
+  it('FORGE_DAEMON_TERMINAL_RETRY_LIMIT sets terminalRetryLimit', () => {
+    const cfg = loadConfig({ ...REQUIRED, FORGE_DAEMON_TERMINAL_RETRY_LIMIT: '2' });
+    expect(cfg.terminalRetryLimit).toBe(2);
+  });
+
+  it('FORGE_DAEMON_TERMINAL_RETRY_LIMIT=-1 throws (min 0)', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_TERMINAL_RETRY_LIMIT: '-1' })).toThrow();
+  });
+
   it('throws on missing required fields', () => {
     expect(() => loadConfig({})).toThrow();
   });

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "nextId": 53,
+  "nextId": 56,
   "_conventions": "One issue per finding. status: open|in-progress|fixed|deferred|wont-fix. Closing REQUIRES resolution (root cause + fix location). Flip statuses as work lands, not in an end sweep. source: where the finding came from. round: product-pass-2026-07-07 for this seeding.",
   "issues": [
     {
@@ -9,12 +9,13 @@
       "detail": "Stale-requeue sweeps only cover status 'assigned' (tasks.ts:2715,2753) and stale-phase (tasks.ts:2837); nothing reclaims 'in_progress'. /tasks/:id/fail requires the original claiming device. Daemon dead-worker detection lives in the in-memory activeInstances map, lost on restart; pollForPendingTasks only re-claims pending_agent/assigned (daemon.ts:410-414). No heartbeat, lease, or server-side in_progress timeout exists. Task is stuck until a human cancels/retries.",
       "category": "reliability",
       "area": "forge-hub,forge-daemon",
-      "status": "open",
+      "status": "fixed",
       "priority": "critical",
       "round": "product-pass-2026-07-07",
       "source": "reliability-audit",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-08",
+      "resolution": "Lease/heartbeat/reclaim per docs/design/m3-reliability.md. Hub: migration 0018_task_lease (lease_expires_at, reclaim_count, tasks_lease_idx, backfill), claim sets lease atomically, POST /tasks/:id/heartbeat (policy task:heartbeat, 409 lease_lost), exported sweepExpiredLeases + setInterval wiring (FORGE_HUB_RECLAIM_SWEEP_SECONDS, 0 disables) requeuing expired in_progress to assigned/pending_agent, failing over FORGE_HUB_TASK_MAX_RECLAIMS with lease_expired_max_reclaims, phase tasks route through blocked-root bookkeeping. Daemon: heartbeat interval (FORGE_DAEMON_HEARTBEAT_MS) beats active real tasks, on 409/404 kills local instance without failTask. Tests: tasks.test.ts heartbeat + sweepExpiredLeases suites, migrate.test.ts 0018 suite, m3-reliability.test.ts heartbeat suite."
     },
     {
       "id": 2,
@@ -50,12 +51,13 @@
       "detail": "isAlive is purely file-based (background.ts:266-294); the done-file watcher (sync/task-file.ts:158-182) has no timer; there is no per-task max runtime. A hung-but-alive process yields isAlive()=true forever and the task never fails. Only manual stop instructions kill it. Fix: record startedAt per active instance and kill/fail tasks exceeding a configurable max runtime.",
       "category": "reliability",
       "area": "forge-daemon",
-      "status": "open",
+      "status": "fixed",
       "priority": "high",
       "round": "product-pass-2026-07-07",
       "source": "reliability-audit",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-08",
+      "resolution": "ActiveInstance.startedAt + FORGE_DAEMON_MAX_TASK_RUNTIME_MS (default 60min, 0 disables) checked in pollForPendingTasks before isAlive; handleRuntimeTimeout stops the runtime, fails real tasks through the bounded retry helper, resets fmRunning/cooldown for FM synthetics; done-file-at-boundary race guarded (completed task not killed). Tests: m3-reliability.test.ts timeout suite."
     },
     {
       "id": 5,
@@ -184,12 +186,13 @@
       "detail": "completeTask/failTask failures are logged and dropped (daemon.ts:1186-1191, :993-1000); local files already cleaned. A transient 5xx at completion strands the task in_progress with the work done. Add bounded retry with backoff and defer local cleanup until hub confirms.",
       "category": "reliability",
       "area": "forge-daemon",
-      "status": "open",
+      "status": "fixed",
       "priority": "medium",
       "round": "product-pass-2026-07-07",
       "source": "reliability-audit",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-08",
+      "resolution": "retryTerminal helper in daemon.ts: bounded exponential backoff (1s/5s/15s/60s, FORGE_DAEMON_TERMINAL_RETRY_LIMIT default 4), retries only network/429/5xx via new HttpError; 4xx stops retries and cleans local state. handleTaskDone completes first, cleanupTaskFiles/map-delete only after confirmed 2xx; exhaustion keeps done file and poll loop re-enters handleTaskDone each tick (completingTaskIds dedup guard prevents watcher/poll double-fire). Hub idempotency verified by tests: complete-on-completed / fail-on-failed benign non-5xx, no duplicate history. Tests: m3-reliability.test.ts retry suite, tasks.test.ts idempotency suite."
     },
     {
       "id": 15,
@@ -197,12 +200,13 @@
       "detail": "config.ts:7 defaults databaseUrl to ':memory:'. Fail fast (or warn loudly) when running with an in-memory DB outside tests. Also document: EventBus is in-process only, events in flight during restart are dropped, poll loop is the durability backstop.",
       "category": "reliability",
       "area": "forge-hub",
-      "status": "open",
+      "status": "fixed",
       "priority": "medium",
       "round": "product-pass-2026-07-07",
       "source": "reliability-audit",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-08",
+      "resolution": "assertDatabaseSafety in app.ts createHub: throws in NODE_ENV=production when databaseUrl is :memory: unless FORGE_HUB_ALLOW_MEMORY_DB=1; loud fastify.log warning outside production. Tests: app.test.ts issue-15 suite (4 tests)."
     },
     {
       "id": 16,
@@ -645,7 +649,7 @@
     {
       "id": 49,
       "title": "repo.test.ts real-git checkout test flakes under parallel turbo run (5s timeout + Windows EBUSY cleanup)",
-      "detail": "forge-daemon src/git/repo.test.ts (defaultGitOps.checkout, does NOT persist the token) timed out at 5000ms during a root pnpm test (all packages parallel) then EBUSY on temp-dir rmdir; passes in isolation (172/172 twice). Real git under contention needs a longer per-test timeout and retry-tolerant temp cleanup on Windows.",
+      "detail": "forge-daemon src/git/repo.test.ts (defaultGitOps.checkout, does NOT persist the token) timed out at 5000ms during a root pnpm test (all packages parallel) then EBUSY on temp-dir rmdir; passes in isolation (172/172 twice). Real git under contention needs a longer per-test timeout and retry-tolerant temp cleanup on Windows. UPDATE 2026-07-08: worker-loop/loop.test.ts (applies exponential backoff on poll errors) also failed once under parallel root pnpm test and passed twice in isolation; the flake family is parallel-load timing, not just real-git EBUSY.",
       "category": "maintenance",
       "area": "forge-daemon",
       "status": "open",
@@ -653,15 +657,15 @@
       "round": "product-pass-2026-07-07",
       "source": "m1-integration",
       "created": "2026-07-07",
-      "updated": "2026-07-07"
+      "updated": "2026-07-08"
     },
     {
       "id": 50,
       "title": "CD builds docker images ON the production host; M1 deploy build wedged accserver (services unresponsive, runner died mid-job)",
-      "detail": "CD run 28907394605 (M1 push, 2026-07-08 00:03Z): self-hosted runner on accserver died during step 4 Build and deploy all services - job marked failure with the step still in_progress and no logs uploaded. Aftermath: host pings and ports 22/443 accept TCP, but sshd banner exchange and TLS handshakes time out for 30s+ - the box is alive but crushed (or docker/sshd wedged). Production containers, the runner, and the image builds all share one host, so a heavy multi-image rebuild can take down prod AND the deploy mechanism AND remote access simultaneously. Deploy state is unknown/partial. Fix options: build images in CI (GHCR) and have accserver only pull+up; or hard resource-limit the build (nice/ionice, docker build --memory/--cpu-quota); plus a runner watchdog. Needs Adam for the immediate recovery (console access, likely reboot).",
+      "detail": "CD run 28907394605 (M1 push, 2026-07-08 00:03Z): self-hosted runner on accserver died during step 4 Build and deploy all services - job marked failure with the step still in_progress and no logs uploaded. Aftermath: host pings and ports 22/443 accept TCP, but sshd banner exchange and TLS handshakes time out for 30s+ - the box is alive but crushed (or docker/sshd wedged). Production containers, the runner, and the image builds all share one host, so a heavy multi-image rebuild can take down prod AND the deploy mechanism AND remote access simultaneously. Deploy state is unknown/partial. Fix options: build images in CI (GHCR) and have accserver only pull+up; or hard resource-limit the build (nice/ionice, docker build --memory/--cpu-quota); plus a runner watchdog. Needs Adam for the immediate recovery (console access, likely reboot). UPDATE 2026-07-08: fix implemented (cd.yml build job on ubuntu-latest pushing 5 images to ghcr.io/sugar-crash-studios with :latest and :short-sha, deploy job pull-only with --no-build; compose files point at GHCR with IMAGE_TAG). Compose config validated locally; stays in-progress until the first live GHCR CD run proves auth/pull. Second wedge occurred same day (M2 push 93e1ff1): runner died mid-build again, box unreachable 30+ min.",
       "category": "reliability",
       "area": "ops",
-      "status": "open",
+      "status": "in-progress",
       "priority": "critical",
       "round": "product-pass-2026-07-07",
       "source": "m1-deploy",
@@ -691,6 +695,45 @@
       "priority": "low",
       "round": "product-pass-2026-07-07",
       "source": "m2-hub-agent",
+      "created": "2026-07-08",
+      "updated": "2026-07-08"
+    },
+    {
+      "id": 53,
+      "title": "GitHub reports 18 dependabot vulnerabilities on main (6 critical, 2 high, 9 moderate, 1 low)",
+      "detail": "Surfaced in the push output for the M2 push (93e1ff1, 2026-07-08). Triage at https://github.com/sugar-crash-studios/forge-lab/security/dependabot. Needs an audit pass: which are runtime deps in shipped images vs dev-only, then targeted bumps. Fits M5 security scope.",
+      "category": "security",
+      "area": "ops",
+      "status": "open",
+      "priority": "high",
+      "round": "product-pass-2026-07-07",
+      "source": "m2-push",
+      "created": "2026-07-08",
+      "updated": "2026-07-08"
+    },
+    {
+      "id": 54,
+      "title": "Live-looking ANTHROPIC_API_KEY set in the dev shell ambient environment; leaked once into a session transcript via docker compose config interpolation",
+      "detail": "Found 2026-07-08 during M3 infra work: docker compose gives shell env precedence over --env-file, so the ambient key was substituted into compose config output in an agent transcript. Action: verify whether the key is live, rotate if so, and remove the global export from the dev shell profile (scope it to the process that needs it). Related to the standing key-hygiene items (disabled forge-lab-workers key, gho_ token).",
+      "category": "security",
+      "area": "ops",
+      "status": "open",
+      "priority": "high",
+      "round": "product-pass-2026-07-07",
+      "source": "m3-infra-agent",
+      "created": "2026-07-08",
+      "updated": "2026-07-08"
+    },
+    {
+      "id": 55,
+      "title": "migrate.ts splitStatements naively splits on semicolons inside SQL comments; comment-only fragments crash libsql",
+      "detail": "Found during M3 (0018_task_lease): a semicolon inside a -- comment produced a comment-only statement fragment that crashed the migration runner with SQLITE_UNKNOWN_0. Worked around by rewording the comment. Latent trap for every future migration author. Fix: strip comments before splitting or use a real SQL statement splitter, with a failing-first test using a semicolon-in-comment migration.",
+      "category": "bug",
+      "area": "forge-hub",
+      "status": "open",
+      "priority": "medium",
+      "round": "product-pass-2026-07-07",
+      "source": "m3-hub-agent",
       "created": "2026-07-08",
       "updated": "2026-07-08"
     }

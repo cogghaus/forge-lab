@@ -27,8 +27,14 @@ protocol for multi-agent sessions.
   unseeded workspace agents (43), quarantine 409 limbo (44), assign identifier
   validation (45), claim retry spam (46), silent architect default now warns (12).
   See issues.json resolutions for locations.
-- A daemon crash mid-task orphans `in_progress` forever - no lease/heartbeat/reclaim
-  (issue 1, M3). Manual cancel/retry is the only recovery.
+- FIXED in M3 (issue 1): in_progress tasks now carry a lease; daemons heartbeat
+  (FORGE_DAEMON_HEARTBEAT_MS) and the hub reclaim sweep requeues expired leases,
+  failing tasks over the reclaim cap. A daemon crash mid-task self-heals at lease
+  expiry (default 30 min). See docs/design/m3-reliability.md for semantics.
+- Build-freshness trap: forge-core and forge-hub are consumed via compiled dist/.
+  If one is rebuilt and the other is stale, forge-daemon integration.test.ts fails
+  with spurious DB TypeErrors. Run a root `pnpm build` before trusting an
+  integration-test failure after touching core or hub.
 - Claim eligibility uses the DEVICE ROW agentId; FORGE_DAEMON_AGENT_ID only picks
   the spawn personality. FIXED in M2 (issue 47): PATCH /devices/:id updates agentId
   (422 on unknown ids), GET /devices/me inspects the row, and the daemon warns at
