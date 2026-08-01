@@ -18,10 +18,10 @@ Idempotent terminal transitions on the hub are the safety net for the retry path
    inert but shipping the reclaim sweep without daemon heartbeats would reclaim
    live work; see Compatibility).
 
-## Issue 50: build images in CI, push to GHCR, deploy-host only pulls
+## Issue 50: build images in CI, push to GHCR, the deploy host only pulls
 
 Today `cd.yml` runs `docker compose up -d --build` for 4 images (hub, dash, mcp,
-daemon) plus the waker on the deploy-host self-hosted runner. The builds crushed
+daemon) plus the waker on the the deploy host self-hosted runner. The builds crushed
 the host (prod containers, runner, and builds share one box).
 
 Changes:
@@ -33,7 +33,7 @@ Changes:
   `ghcr.io/cogghaus/<image>` tagged `:latest` and `:<short-sha>`.
   Workflow `permissions: packages: write, contents: read`. Waker context is
   `deploy/waker`; the rest use their existing Dockerfiles with repo-root context.
-- The `deploy` job (self-hosted, deploy-host) `needs: build` and shrinks to:
+- The `deploy` job (self-hosted, the deploy host) `needs: build` and shrinks to:
   `docker login ghcr.io` with `GITHUB_TOKEN`, `git pull`, then
   `docker compose ... pull` followed by `docker compose ... up -d --no-build
   --remove-orphans` for both compose files. `--no-build` is a hard guard: an
@@ -45,10 +45,10 @@ Changes:
 - `BUILD_SHA` for the dash footer keeps working: deploy job passes
   `BUILD_SHA=$(git rev-parse --short HEAD)` as today.
 - Registry hygiene: images are org-internal packages; first push must be
-  followed by (manual, Adam or gh api) granting the deploy-host runner read
+  followed by (manual, Adam or gh api) granting the the deploy host runner read
   access if the packages default to private. Document in the workflow header.
 
-Non-goals: no runner watchdog, no multi-arch (deploy-host is linux/amd64 only).
+Non-goals: no runner watchdog, no multi-arch (the deploy host is linux/amd64 only).
 
 ## Issue 1: in_progress lease + heartbeat + reclaim sweep
 
@@ -108,7 +108,7 @@ Daemon:
 - Network errors on heartbeat: log at info and keep going; the next beat
   retries. Missing several beats is exactly what the lease TTL absorbs.
 
-Compatibility: hub and daemons deploy together on deploy-host (single compose
+Compatibility: hub and daemons deploy together on the deploy host (single compose
 fleet), so the sweep and the heartbeat arrive at once. The backfill plus a
 30-minute default TTL gives old-style daemons (none in prod after the deploy)
 one lease window before their work is reclaimed.

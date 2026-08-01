@@ -42,12 +42,12 @@ If you cannot complete the task (blocked, ambiguous, out of scope), write the do
 - **Name:** forge-lab
 - **Description:** Open-core multi-agent orchestration for AI-assisted development. The next evolution of vibe-forge itself. We are dogfooding vibe-forge to build forge-lab.
 - **Repository:** https://github.com/cogghaus/forge-lab (public, MIT)
-- **Private companion:** https://github.com/sugar-crash-studios/forge-dash-pro (dashboard + marketing site, proprietary, personal use only — Magic UI Pro is NOT redistributable)
-- **Deployment configs:** `homelab-docs` repo
+- **Private companion:** a private companion repo (dashboard + marketing site, proprietary, personal use only — Magic UI Pro is NOT redistributable)
+- **Deployment configs:** a private homelab repo
 - **Developer:** Adam (sole developer)
 - **Current state:** Deployed and operational, not a Phase 1 vertical slice. 9 agent
-  daemons run in production on deploy-host (<deploy-host>), dashboard live at
-  `https://forge.example.com`, hub is on migration `0017` (18 hand-written
+  daemons run in production on a self-hosted Linux box, dashboard live at
+  `https://<your-dashboard-host>`, hub is on migration `0017` (18 hand-written
   migrations total). Test counts by package, counted directly from `*.test.ts`
   files in this repo on 2026-07-08: forge-core ~50, forge-hub ~570,
   forge-daemon ~175, forge-agents ~25, forge-dash-community ~20, forge-mcp 0
@@ -86,7 +86,7 @@ If you cannot complete the task (blocked, ambiguous, out of scope), write the do
 - **Component library:** HeroUI v3 (community dashboard, free to bundle)
 - **Visual library:** Magic UI Pro (forge-dash-pro ONLY, proprietary, never in public repo)
 - **Motion:** Framer Motion
-- Live in production at `https://forge.example.com`; boots locally with `pnpm dev` (port 3001). Not future work.
+- Live in production at `https://<your-dashboard-host>`; boots locally with `pnpm dev` (port 3001). Not future work.
 
 ### CLI (future, Phase 4)
 - **Prompts:** `@clack/prompts`
@@ -117,7 +117,7 @@ forge-lab/
 │   └── daemons.compose.yml    # Daemon fleet compose stack (current production deployment model)
 ├── .github/workflows/
 │   ├── ci.yml             # lint / typecheck / build / test / license scanner
-│   └── cd.yml             # deploy to deploy-host on merge to main
+│   └── cd.yml             # deploy to the deploy host on merge to main
 ├── context/               # Project brief for vibe-forge agents (this file lives here)
 ├── docs/                  # Handoffs, ADRs, runbooks, design docs, QUICKSTART.md
 ├── issues/                # issues.json, the findings/backlog source of truth
@@ -157,7 +157,7 @@ forge-lab/
 - **No tsconfig relaxation.** `strict`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`, `verbatimModuleSyntax` stay on.
 
 ### Bug fix rule (non-negotiable, global)
-Every bug fix ships with a failing-first test. Write the test that reproduces the bug, watch it fail against the buggy code, apply the fix, watch the test pass. No bug fix is complete without a regression test. This is a global rule from `<user-home>\.claude\CLAUDE.md`.
+Every bug fix ships with a failing-first test. Write the test that reproduces the bug, watch it fail against the buggy code, apply the fix, watch the test pass. No bug fix is complete without a regression test. This is a global rule from the operator's global Claude Code rules.
 
 ---
 
@@ -261,7 +261,7 @@ keeping ported content in sync with the vibe-forge source at
 Comes in when dashboard or UI work is active. HeroUI for the community dashboard, Magic UI Pro for forge-dash-pro only (never in the public repo). Pixel follows the Pixel Design Vision note in notez for color, layout, and forge temperature.
 
 ### Ember (⚙️)
-Comes in when actual deployment happens. The forge-lab compose stack at `homelab-docs/servers/deploy-host/stacks/forge-lab.yml` deploys the hub to deploy-host via Traefik. Ember owns the Dockerfile (not yet written), GHCR publish workflow, and the deploy-host deployment flow.
+Comes in when actual deployment happens. The forge-lab compose stack at a private homelab stack file deploys the hub to the deploy host via Traefik. Ember owns the Dockerfile (not yet written), GHCR publish workflow, and the deploy host deployment flow.
 
 ### Anvil (🔨)
 Comes in when heavy scaffolding or infrastructure code is needed. Not active in early Phase 2.
@@ -273,6 +273,6 @@ Comes in when heavy scaffolding or infrastructure code is needed. Not active in 
 - **Source of truth for architecture:** notez folder `forge-lab` (especially "Architecture Decisions (SETTLED)", "Ready to Build", "Project Conventions")
 - **Vibe-forge reference repo:** `G:\dev\vibe-forge` (for personality ports and spawn logic reference)
 - **Public repo:** https://github.com/cogghaus/forge-lab
-- **Private dashboard repo:** https://github.com/sugar-crash-studios/forge-dash-pro
-- **Deployment configs:** `homelab-docs/servers/deploy-host/stacks/forge-lab.yml`
-- **Adam's global rules:** `<user-home>\.claude\CLAUDE.md`
+- **Private dashboard repo:** a private companion repo
+- **Deployment configs:** a private homelab stack file
+- **Adam's global rules:** the operator's global Claude Code rules

@@ -9,7 +9,11 @@ export function createEmailService(apiKey: string): EmailService {
   return {
     async sendEmailVerification({ to, verifyUrl, currentEmail }) {
       await resend.emails.send({
-        from: 'Forge Lab <noreply@example.com>',
+        // Configurable: an open-core project must not hardcode the maintainer's
+        // own sending domain, and a deployer needs their own verified sender.
+        // Bracket access is required: strict tsconfig sets
+        // noPropertyAccessFromIndexSignature, so process.env.X does not compile.
+        from: process.env['FORGE_HUB_MAIL_FROM'] ?? 'Forge Lab <noreply@example.com>',
         to,
         subject: 'Confirm your email change',
         html: `
