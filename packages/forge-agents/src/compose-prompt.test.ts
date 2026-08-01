@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { composeSystemPrompt } from './compose-prompt.js';
 import type { AgentPersonality } from './personality.js';
 import { loadBuiltinRegistry } from './load-builtin.js';
@@ -219,20 +218,20 @@ describe('composeSystemPrompt', () => {
     expect(charlieIdx).toBeGreaterThan(bravoIdx);
   });
 
-  it('end-to-end: loadBuiltinRegistry + compose with real project context', async () => {
+  it('end-to-end: loadBuiltinRegistry + compose with a project context file', async () => {
     const registry = await loadBuiltinRegistry();
     const architect = registry.get('architect');
     expect(architect).not.toBeNull();
 
-    // Point at the real project context file
-    const here = fileURLToPath(import.meta.url);
-    const projectContextPath = path.resolve(
-      path.dirname(here),
-      '..',
-      '..',
-      '..',
-      'context',
-      'project-context.md',
+    // Use a fixture rather than this repo's own context/project-context.md.
+    // A consumer supplies their own project context; forge-lab's happens to be
+    // private, and a test that reads a live maintainer document is brittle
+    // besides. This exercises the same composition path.
+    const projectContextPath = path.join(tmpDir, 'e2e-project-context.md');
+    await fs.writeFile(
+      projectContextPath,
+      '# Project Context\n\nforge-lab: multi-agent orchestration for AI-assisted development.\n',
+      'utf8',
     );
 
     const result = await composeSystemPrompt({
