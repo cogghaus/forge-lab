@@ -84,7 +84,7 @@ where claude        # Windows
 ### 2.1 Clone and install
 
 ```bash
-git clone https://github.com/sugar-crash-studios/forge-lab.git
+git clone https://github.com/cogghaus/forge-lab.git
 cd forge-lab
 pnpm install
 ```

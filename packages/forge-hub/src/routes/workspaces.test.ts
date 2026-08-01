@@ -174,7 +174,7 @@ describe('/workspaces routes', () => {
       payload: {
         name: 'HAL',
         slug: 'hal',
-        repoUrl: 'https://github.com/sugar-crash-studios/hal.git',
+        repoUrl: 'https://github.com/example-org/hal.git',
         repoBranch: 'main',
       },
     });
@@ -182,7 +182,7 @@ describe('/workspaces routes', () => {
     const { id } = res.json() as { id: string };
     const getRes = await hub.fastify.inject({ method: 'GET', url: `/workspaces/${id}`, headers: { cookie } });
     const ws = getRes.json() as { repoUrl: string; repoBranch: string };
-    expect(ws.repoUrl).toBe('https://github.com/sugar-crash-studios/hal.git');
+    expect(ws.repoUrl).toBe('https://github.com/example-org/hal.git');
     expect(ws.repoBranch).toBe('main');
   });
 
@@ -192,7 +192,7 @@ describe('/workspaces routes', () => {
       method: 'POST',
       url: '/workspaces',
       headers: { cookie },
-      payload: { name: 'HAL', slug: 'hal', repoUrl: 'git@github.com:sugar-crash-studios/hal.git' },
+      payload: { name: 'HAL', slug: 'hal', repoUrl: 'git@github.com:example-org/hal.git' },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -204,11 +204,11 @@ describe('/workspaces routes', () => {
       method: 'PATCH',
       url: `/workspaces/${wsId}`,
       headers: { cookie },
-      payload: { repoUrl: 'https://github.com/sugar-crash-studios/hal', repoBranch: 'dev' },
+      payload: { repoUrl: 'https://github.com/example-org/hal', repoBranch: 'dev' },
     });
     expect(patch.statusCode).toBe(200);
     let ws = (await hub.fastify.inject({ method: 'GET', url: `/workspaces/${wsId}`, headers: { cookie } })).json() as { repoUrl: string | null };
-    expect(ws.repoUrl).toBe('https://github.com/sugar-crash-studios/hal');
+    expect(ws.repoUrl).toBe('https://github.com/example-org/hal');
 
     const clear = await hub.fastify.inject({
       method: 'PATCH',

@@ -41,7 +41,7 @@ If you cannot complete the task (blocked, ambiguous, out of scope), write the do
 
 - **Name:** forge-lab
 - **Description:** Open-core multi-agent orchestration for AI-assisted development. The next evolution of vibe-forge itself. We are dogfooding vibe-forge to build forge-lab.
-- **Repository:** https://github.com/sugar-crash-studios/forge-lab (public, MIT)
+- **Repository:** https://github.com/cogghaus/forge-lab (public, MIT)
 - **Private companion:** https://github.com/sugar-crash-studios/forge-dash-pro (dashboard + marketing site, proprietary, personal use only — Magic UI Pro is NOT redistributable)
 - **Deployment configs:** `homelab-docs` repo
 - **Developer:** Adam (sole developer)
@@ -272,7 +272,7 @@ Comes in when heavy scaffolding or infrastructure code is needed. Not active in 
 
 - **Source of truth for architecture:** notez folder `forge-lab` (especially "Architecture Decisions (SETTLED)", "Ready to Build", "Project Conventions")
 - **Vibe-forge reference repo:** `G:\dev\vibe-forge` (for personality ports and spawn logic reference)
-- **Public repo:** https://github.com/sugar-crash-studios/forge-lab
+- **Public repo:** https://github.com/cogghaus/forge-lab
 - **Private dashboard repo:** https://github.com/sugar-crash-studios/forge-dash-pro
 - **Deployment configs:** `homelab-docs/servers/accserver/stacks/forge-lab.yml`
 - **Adam's global rules:** `C:\Users\acogg\.claude\CLAUDE.md`

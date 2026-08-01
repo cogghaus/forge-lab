@@ -9,7 +9,7 @@
 # error instead of a load spike.
 #
 # One-time manual step (Adam or gh api, not automatable from this workflow):
-# after the first push, the five ghcr.io/sugar-crash-studios/vibe-forge-*
+# after the first push, the five ghcr.io/cogghaus/forge-lab-*
 # packages are created. If GHCR defaults them to private, the accserver
 # runner's GITHUB_TOKEN login (scoped to this repo via GITHUB_TOKEN
 # permissions below) is sufficient for pulls made from within this workflow's
@@ -32,7 +32,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAMESPACE: sugar-crash-studios
+  IMAGE_NAMESPACE: cogghaus
 
 jobs:
   build:
@@ -44,19 +44,19 @@ jobs:
     strategy:
       matrix:
         include:
-          - image: vibe-forge-hub
+          - image: forge-lab-hub
             context: .
             dockerfile: packages/forge-hub/Dockerfile
-          - image: vibe-forge-dash
+          - image: forge-lab-dash
             context: .
             dockerfile: packages/forge-dash-community/Dockerfile
-          - image: vibe-forge-mcp
+          - image: forge-lab-mcp
             context: .
             dockerfile: packages/forge-mcp/Dockerfile
-          - image: vibe-forge-daemon
+          - image: forge-lab-daemon
             context: .
             dockerfile: packages/forge-daemon/Dockerfile
-          - image: vibe-forge-waker
+          - image: forge-lab-waker
             context: deploy/waker
             dockerfile: deploy/waker/Dockerfile
     steps:
