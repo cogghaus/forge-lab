@@ -3400,7 +3400,7 @@ describe('integration: repo-bound worker (dev-capability)', () => {
       defaultRuntimeId: 'prompt-spy', defaultAgentId: 'furnace', workspaceId,
       pollIntervalMs: 150,
       maxConcurrentTasks: 1,
-      repoUrl: 'https://github.com/sugar-crash-studios/hal.git',
+      repoUrl: 'https://github.com/example-org/hal.git',
       repoBranch: 'main',
       gitToken: 'ghp_test',
       gitUserName: 'forge-lab[bot]',
@@ -3420,7 +3420,7 @@ describe('integration: repo-bound worker (dev-capability)', () => {
     // Checkout happened with the configured repo/branch/token/identity.
     expect(gitOps.requests).toHaveLength(1);
     const req = gitOps.requests[0]!;
-    expect(req.repoUrl).toBe('https://github.com/sugar-crash-studios/hal.git');
+    expect(req.repoUrl).toBe('https://github.com/example-org/hal.git');
     expect(req.baseBranch).toBe('main');
     expect(req.token).toBe('ghp_test');
     expect(req.userName).toBe('forge-lab[bot]');
@@ -3440,7 +3440,7 @@ describe('integration: repo-bound worker (dev-capability)', () => {
       hubUrl, deviceToken: workerToken, workdir, runtimes,
       defaultRuntimeId: 'prompt-spy', defaultAgentId: 'furnace', workspaceId,
       maxConcurrentTasks: 3,
-      repoUrl: 'https://github.com/sugar-crash-studios/hal.git',
+      repoUrl: 'https://github.com/example-org/hal.git',
       gitToken: 'ghp_test',
       gitOps: new FakeGitOps(),
     })).toThrow(/maxConcurrentTasks=1/);

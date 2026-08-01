@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sugar-crash-studios/forge-lab.git"
+    "url": "https://github.com/cogghaus/forge-lab.git"
   },
   "packageManager": "pnpm@10.28.1",
   "engines": {
