@@ -1,10 +1,10 @@
-# CD: build images in GitHub-hosted CI, push to GHCR, deploy-host only pulls.
+# CD: build images in GitHub-hosted CI, push to GHCR, the deploy host only pulls.
 #
-# Issue 50 (docs/design/m3-reliability.md): the deploy-host self-hosted runner
+# Issue 50 (docs/design/m3-reliability.md): the self-hosted runner
 # used to run `docker compose up -d --build` for all five images, sharing one
 # box with the production containers and the runner itself. A build there
 # once drove load to ~1400 and wedged the host. Builds now happen on
-# ubuntu-latest with buildx + GHA layer cache; deploy-host only pulls and runs
+# ubuntu-latest with buildx + GHA layer cache; the deploy host only pulls and runs
 # `up -d --no-build`, so an accidental on-box build becomes an immediate
 # error instead of a load spike.
 #
@@ -90,7 +90,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: [self-hosted, linux, x64, deploy-host]
+    runs-on: [self-hosted, linux, x64, forge-deploy]
     steps:
       - uses: actions/checkout@v4
 
@@ -111,11 +111,11 @@ jobs:
         run: |
           docker compose -p deploy \
             -f deploy/compose.yml \
-            --env-file <config-root>/.env \
+            --env-file ${{ vars.DEPLOY_ENV_FILE }} \
             pull
           docker compose -p deploy \
             -f deploy/compose.yml \
-            --env-file <config-root>/.env \
+            --env-file ${{ vars.DEPLOY_ENV_FILE }} \
             up -d --no-build --remove-orphans
 
       - name: Pull and deploy daemons
@@ -124,11 +124,11 @@ jobs:
         run: |
           docker compose -p forge-daemons \
             -f deploy/daemons.compose.yml \
-            --env-file <config-root>/.env.daemons \
+            --env-file ${{ vars.DEPLOY_ENV_FILE_DAEMONS }} \
             pull
           docker compose -p forge-daemons \
             -f deploy/daemons.compose.yml \
-            --env-file <config-root>/.env.daemons \
+            --env-file ${{ vars.DEPLOY_ENV_FILE_DAEMONS }} \
             up -d --no-build --remove-orphans
 
       - name: Verify health
