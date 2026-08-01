@@ -1,5 +1,12 @@
 # Paperclip GitHub App (git auth for the autonomous agent)
 
+> **Status 2026-08-01: historical.** forge-lab moved from the `sugar-crash-studios` org to the
+> personal `cogghaus` account, and the `paperclip-scs` App is installed nowhere (the org reports a
+> single installation, `cloudflare-workers-and-pages`). The App itself still exists under the org,
+> so the org URLs below remain correct for where it was created. Re-installing it against
+> `cogghaus/forge-lab` would mean a user-account install, not an org install, so steps 2 and 3 need
+> rewriting before this runbook is followed again.
+
 Replaces the personal PAT for the paperclip instance with a GitHub App:
 separate bot identity, short-lived (~1h) installation tokens, per-repo install,
 revoke by uninstall. The only durable secret on the paperclip box is the App

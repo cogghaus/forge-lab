@@ -1,11 +1,11 @@
 # forge-lab agent daemons — single shared fleet (ADR-004).
 #
-# One image (vibe-forge-daemon), nine agent identities. The FM runs in
+# One image (forge-lab-daemon), nine agent identities. The FM runs in
 # scope=all mode and triages all active workspaces; workers run unscoped and
 # claim tasks across all workspaces their owning account is a member of.
 #
 # Images: built in CI (.github/workflows/cd.yml) and pushed to
-#   ghcr.io/sugar-crash-studios/vibe-forge-{daemon,waker}. Production
+#   ghcr.io/cogghaus/forge-lab-{daemon,waker}. Production
 #   (accserver) pulls only, driven by IMAGE_TAG=<short-sha> exported by the
 #   CD deploy job:
 #     docker compose -p forge-daemons -f deploy/daemons.compose.yml pull
@@ -25,7 +25,7 @@
 # Start just one for validation:  ... up -d --build forge-fm
 
 x-daemon-common: &daemon-common
-  image: ghcr.io/sugar-crash-studios/vibe-forge-daemon:${IMAGE_TAG:-latest}
+  image: ghcr.io/cogghaus/forge-lab-daemon:${IMAGE_TAG:-latest}
   build:
     context: ..
     dockerfile: packages/forge-daemon/Dockerfile
@@ -141,7 +141,7 @@ services:
       - daemon-temper-workdir:/workdir
 
   forge-waker:
-    image: ghcr.io/sugar-crash-studios/vibe-forge-waker:${IMAGE_TAG:-latest}
+    image: ghcr.io/cogghaus/forge-lab-waker:${IMAGE_TAG:-latest}
     build:
       context: ./waker
     container_name: forge-waker

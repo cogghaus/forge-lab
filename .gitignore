@@ -30,3 +30,8 @@ deploy/secrets/*
 cookies.txt
 .claude/worktrees/
 graphify-out/
+
+# Session cookie jars: never commit, never read
+cookies.txt
+*.cookies
+cookie-jar*

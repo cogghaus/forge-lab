@@ -30,7 +30,7 @@ Changes:
   success exactly as today. Matrix over the five images:
   `vibe-forge-{hub,dash,mcp,daemon,waker}` built with `docker/build-push-action`
   (buildx, `cache-from/to: type=gha`), pushed to
-  `ghcr.io/sugar-crash-studios/<image>` tagged `:latest` and `:<short-sha>`.
+  `ghcr.io/cogghaus/<image>` tagged `:latest` and `:<short-sha>`.
   Workflow `permissions: packages: write, contents: read`. Waker context is
   `deploy/waker`; the rest use their existing Dockerfiles with repo-root context.
 - The `deploy` job (self-hosted, accserver) `needs: build` and shrinks to:
@@ -38,7 +38,7 @@ Changes:
   `docker compose ... pull` followed by `docker compose ... up -d --no-build
   --remove-orphans` for both compose files. `--no-build` is a hard guard: an
   accidental build on the box becomes an error, not a load spike.
-- Compose files: `image:` becomes `ghcr.io/sugar-crash-studios/vibe-forge-<svc>:${IMAGE_TAG:-latest}`.
+- Compose files: `image:` becomes `ghcr.io/cogghaus/forge-lab-<svc>:${IMAGE_TAG:-latest}`.
   Keep the `build:` blocks so local dev `up --build` still works. The deploy job
   exports `IMAGE_TAG=<short-sha>` so prod runs the exact CI-built image and
   rollback is `IMAGE_TAG=<previous-sha> docker compose up -d --no-build`.

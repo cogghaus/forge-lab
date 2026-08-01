@@ -1,7 +1,7 @@
 # forge-lab deploy compose
 #
 # Images: built in CI (.github/workflows/cd.yml) and pushed to
-#   ghcr.io/sugar-crash-studios/vibe-forge-<svc>. Production (accserver) pulls
+#   ghcr.io/cogghaus/forge-lab-<svc>. Production (accserver) pulls
 #   only, driven by IMAGE_TAG=<short-sha> exported by the CD deploy job:
 #     docker compose -f deploy/compose.yml pull
 #     docker compose -f deploy/compose.yml up -d --no-build --remove-orphans
@@ -22,7 +22,7 @@ services:
     build:
       context: ..
       dockerfile: packages/forge-hub/Dockerfile
-    image: ghcr.io/sugar-crash-studios/vibe-forge-hub:${IMAGE_TAG:-latest}
+    image: ghcr.io/cogghaus/forge-lab-hub:${IMAGE_TAG:-latest}
     container_name: forge-hub
     restart: unless-stopped
     environment:
@@ -54,7 +54,7 @@ services:
     build:
       context: ..
       dockerfile: packages/forge-dash-community/Dockerfile
-    image: ghcr.io/sugar-crash-studios/vibe-forge-dash:${IMAGE_TAG:-latest}
+    image: ghcr.io/cogghaus/forge-lab-dash:${IMAGE_TAG:-latest}
     container_name: forge-dash
     restart: unless-stopped
     environment:
@@ -84,7 +84,7 @@ services:
     build:
       context: ..
       dockerfile: packages/forge-mcp/Dockerfile
-    image: ghcr.io/sugar-crash-studios/vibe-forge-mcp:${IMAGE_TAG:-latest}
+    image: ghcr.io/cogghaus/forge-lab-mcp:${IMAGE_TAG:-latest}
     container_name: forge-mcp
     restart: unless-stopped
     environment:

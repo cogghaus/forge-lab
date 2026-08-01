@@ -120,7 +120,7 @@ describe('CreateWorkspaceInputSchema', () => {
       CreateWorkspaceInputSchema.parse({
         name: 'HAL',
         slug: 'hal',
-        repoUrl: 'https://github.com/sugar-crash-studios/hal.git',
+        repoUrl: 'https://github.com/example-org/hal.git',
         repoBranch: 'main',
       }),
     ).not.toThrow();
@@ -131,7 +131,7 @@ describe('CreateWorkspaceInputSchema', () => {
       CreateWorkspaceInputSchema.parse({
         name: 'HAL',
         slug: 'hal',
-        repoUrl: 'git@github.com:sugar-crash-studios/hal.git',
+        repoUrl: 'git@github.com:example-org/hal.git',
       }),
     ).toThrow();
   });
@@ -141,7 +141,7 @@ describe('CreateWorkspaceInputSchema', () => {
       CreateWorkspaceInputSchema.parse({
         name: 'HAL',
         slug: 'hal',
-        repoUrl: 'https://github.com/sugar-crash-studios/hal',
+        repoUrl: 'https://github.com/example-org/hal',
         repoBranch: 'bad branch',
       }),
     ).toThrow();

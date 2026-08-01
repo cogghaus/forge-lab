@@ -2,15 +2,21 @@
 
 Open-core multi-agent AI orchestration for software development workflows.
 
-Hub server + local daemons + per-agent personalities + cross-device dashboard. The next evolution of [vibe-forge](https://github.com/sugar-crash-studios/vibe-forge).
+Hub server + local daemons + per-agent personalities + cross-device dashboard. It grew out of vibe-forge, an earlier private prototype that ran the same idea as Claude Code hooks; forge-lab moves the orchestration into a runtime-agnostic daemon.
 
 ## Status
 
 **Active development. All core systems operational.** Not yet recommended for production without reading the deployment runbook.
 
-- forge-hub: ~480 tests passing
-- forge-daemon: 117 tests passing
-- forge-agents: 27 tests passing
+**915 tests passing** across the workspace (`pnpm test`, 2026-08-01):
+
+| Package | Tests |
+|---|---|
+| `forge-hub` | 610 |
+| `forge-daemon` | 210 |
+| `forge-core` | 50 |
+| `forge-agents` | 25 |
+| `forge-dash-community` | 20 |
 
 See [docs/handoff/HANDOFF.md](docs/handoff/HANDOFF.md) for the authoritative current
 status and open work. (`docs/roadmap/current-state.md` is historical / superseded.)

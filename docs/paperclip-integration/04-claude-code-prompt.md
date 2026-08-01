@@ -11,7 +11,7 @@ Drop this into a Claude Code session at the root of the forge-lab repo. Use it a
 
 ## OPENING PROMPT (copy from here to end)
 
-You are working in the `forge-lab` repository (https://github.com/sugar-crash-studios/forge-lab). Phase 1 is complete. We are starting Phase 2. This session implements **P2.0.1 only**: the Workspaces and Workspace Members tables, with full test coverage. Do not start P2.0.2 or anything else. Stop and ask me when P2.0.1 is done.
+You are working in the `forge-lab` repository (https://github.com/cogghaus/forge-lab). Phase 1 is complete. We are starting Phase 2. This session implements **P2.0.1 only**: the Workspaces and Workspace Members tables, with full test coverage. Do not start P2.0.2 or anything else. Stop and ask me when P2.0.1 is done.
 
 ### Required reading (in order)
 

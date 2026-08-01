@@ -9,7 +9,7 @@
 
 ## What Changed From v1
 
-v1 was built from memory context and made several wrong assumptions. v2 reads the actual code at `sugar-crash-studios/forge-lab` and corrects them. Major corrections:
+v1 was built from memory context and made several wrong assumptions. v2 reads the actual code at `cogghaus/forge-lab` and corrects them. Major corrections:
 
 | v1 assumption | v2 reality |
 |---|---|
