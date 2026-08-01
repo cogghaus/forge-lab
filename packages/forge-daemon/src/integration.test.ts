@@ -3404,7 +3404,7 @@ describe('integration: repo-bound worker (dev-capability)', () => {
       repoBranch: 'main',
       gitToken: 'ghp_test',
       gitUserName: 'forge-lab[bot]',
-      gitUserEmail: 'forge-lab@cogg.haus',
+      gitUserEmail: 'forge-lab@example.com',
       gitOps,
     });
     await daemon.start();

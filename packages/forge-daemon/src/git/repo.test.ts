@@ -46,7 +46,7 @@ describe('defaultGitOps.checkout (real git)', () => {
     taskId,
     token: 'x',
     userName: 'forge-lab[bot]',
-    userEmail: 'forge-lab@cogg.haus',
+    userEmail: 'forge-lab@example.com',
   });
 
   it('clones onto a fresh per-task branch with the base content', async () => {
