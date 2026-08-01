@@ -5,18 +5,17 @@
 # claim tasks across all workspaces their owning account is a member of.
 #
 # Images: built in CI (.github/workflows/cd.yml) and pushed to
-#   ghcr.io/cogghaus/forge-lab-{daemon,waker}. Production
-#   (accserver) pulls only, driven by IMAGE_TAG=<short-sha> exported by the
-#   CD deploy job:
+#   ghcr.io/cogghaus/forge-lab-{daemon,waker}. Production pulls only, driven by
+#   IMAGE_TAG=<short-sha> exported by the CD deploy job:
 #     docker compose -p forge-daemons -f deploy/daemons.compose.yml pull
 #     docker compose -p forge-daemons -f deploy/daemons.compose.yml up -d --no-build --remove-orphans
 #
-# Prereqs on accserver:
+# Prereqs on the deploy host:
 #   1. The main stack (deploy/compose.yml, project "deploy") is up.
-#   2. deploy/.env.daemons filled with ANTHROPIC_API_KEY + 9 device tokens.
+#   2. A daemons env file filled with ANTHROPIC_API_KEY + 9 device tokens.
 #   3. The owning account is a member of every workspace to be served.
 #
-# Local dev usage (build from source, from a checkout on accserver or laptop):
+# Local dev usage (build from source, from a checkout anywhere):
 #   docker compose -p forge-daemons \
 #     -f deploy/daemons.compose.yml \
 #     --env-file deploy/.env.daemons \

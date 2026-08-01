@@ -1,8 +1,8 @@
 # forge-lab deploy compose
 #
 # Images: built in CI (.github/workflows/cd.yml) and pushed to
-#   ghcr.io/cogghaus/forge-lab-<svc>. Production (accserver) pulls
-#   only, driven by IMAGE_TAG=<short-sha> exported by the CD deploy job:
+#   ghcr.io/cogghaus/forge-lab-<svc>. Production pulls only, driven by
+#   IMAGE_TAG=<short-sha> exported by the CD deploy job:
 #     docker compose -f deploy/compose.yml pull
 #     docker compose -f deploy/compose.yml up -d --no-build --remove-orphans
 #   Rollback: IMAGE_TAG=<previous-sha> docker compose -f deploy/compose.yml up -d --no-build
@@ -11,11 +11,17 @@
 #   docker compose -f deploy/compose.yml up -d --build
 #
 # Secrets via env file (never commit):
-#   Copy deploy/.env.example → /datapool/docker/vibe-forge/.env, fill it in, then:
-#   docker compose -f deploy/compose.yml --env-file /datapool/docker/vibe-forge/.env up -d --build
+#   Copy deploy/.env.example to your own env file, fill it in, then:
+#   docker compose -f deploy/compose.yml --env-file <your-env-file> up -d --build
 #
-# Data volume:   /datapool/docker/vibe-forge/data/   (SQLite DB)
-# Workdir volume: /datapool/docker/vibe-forge/workdir/ (agent logs, future daemon use)
+# Deployment-specific values are interpolated, never hardcoded, so this file
+# carries no operator's hostnames or filesystem layout:
+#   FORGE_DATA_ROOT  host directory holding data/ and workdir/  (default /srv/forge-lab)
+#   FORGE_DASH_HOST  public hostname for the dashboard router
+#   FORGE_MCP_HOST   public hostname for the MCP router
+#   APP_BASE_URL     external URL the hub emits in links and emails
+# The defaults below are deliberately generic examples. Set real values in your
+# env file; nothing here should need editing to deploy elsewhere.
 
 services:
   forge-hub:
@@ -36,11 +42,11 @@ services:
       FORGE_HUB_BCRYPT_COST: "12"
       FORGE_SEQUENCES_ENABLED: "1"  # gate for new sequenced-task creation (POST sequenceSpec); ongoing phase execution runs regardless
       RESEND_API_KEY: "${RESEND_API_KEY}"
-      APP_BASE_URL: "${APP_BASE_URL:-https://lab.local.cogg.haus}"
+      APP_BASE_URL: "${APP_BASE_URL:-https://forge.example.com}"
     volumes:
-      - /datapool/docker/vibe-forge/data:/data
+      - ${FORGE_DATA_ROOT:-/srv/forge-lab}/data:/data
     ports:
-      - "127.0.0.1:3000:3000"  # localhost-only; enables bootstrap curl from accserver host
+      - "127.0.0.1:3000:3000"  # localhost-only; enables bootstrap curl from the deploy host
     networks:
       - vibe-forge-internal
     healthcheck:
@@ -65,7 +71,7 @@ services:
       # command: BUILD_SHA=$(git rev-parse --short HEAD) docker compose up -d ...
       BUILD_SHA: "${BUILD_SHA:-dev}"
     volumes:
-      - /datapool/docker/vibe-forge/workdir:/workdir:ro
+      - ${FORGE_DATA_ROOT:-/srv/forge-lab}/workdir:/workdir:ro
     depends_on:
       forge-hub:
         condition: service_healthy
@@ -74,7 +80,7 @@ services:
       - apps-internal
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.lab.rule=Host(`lab.local.cogg.haus`)"
+      - "traefik.http.routers.lab.rule=Host(`${FORGE_DASH_HOST:-forge.example.com}`)"
       - "traefik.http.routers.lab.entrypoints=websecure"
       - "traefik.http.routers.lab.tls=true"
       - "traefik.http.services.lab.loadbalancer.server.port=3001"
@@ -102,7 +108,7 @@ services:
       - apps-internal
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.forge-mcp.rule=Host(`mcp.lab.local.cogg.haus`)"
+      - "traefik.http.routers.forge-mcp.rule=Host(`${FORGE_MCP_HOST:-mcp.forge.example.com}`)"
       - "traefik.http.routers.forge-mcp.entrypoints=websecure"
       - "traefik.http.routers.forge-mcp.tls=true"
       - "traefik.http.services.forge-mcp.loadbalancer.server.port=4000"
@@ -115,4 +121,4 @@ networks:
       config:
         - subnet: 10.10.100.0/24
   apps-internal:
-    external: true  # Traefik's discovery network — must exist on accserver
+    external: true  # Traefik's discovery network - must already exist on the deploy host
