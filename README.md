@@ -65,7 +65,7 @@ Design docs:
 - [M3 reliability](docs/design/m3-reliability.md) — the lease/reclaim design and its failure modes
 - [FM architecture reference](docs/architecture/forge-master-system.md)
 
-Getting it running: [QUICKSTART](docs/QUICKSTART.md).
+Getting it running: [QUICKSTART](docs/QUICKSTART.md). Deploying it: [DEPLOYMENT](docs/DEPLOYMENT.md).
 
 ## Development
 

@@ -1,22 +1,23 @@
-# CD: build images in GitHub-hosted CI, push to GHCR, the deploy host only pulls.
+# CD: build images on GitHub-hosted runners and push to GHCR. Nothing here
+# reaches any private infrastructure.
 #
-# Issue 50 (docs/design/m3-reliability.md): the self-hosted runner
-# used to run `docker compose up -d --build` for all five images, sharing one
-# box with the production containers and the runner itself. A build there
-# once drove load to ~1400 and wedged the host. Builds now happen on
-# ubuntu-latest with buildx + GHA layer cache; the deploy host only pulls and runs
-# `up -d --no-build`, so an accidental on-box build becomes an immediate
-# error instead of a load spike.
+# This repo is PUBLIC and deliberately has NO self-hosted runner. It used to end
+# with a deploy job running on a box on a private LAN with the docker socket
+# mounted, which is root-equivalent on that host. That is an unusual amount of
+# trust to place in a public repo's workflow surface, so the trust direction is
+# inverted: the deploy host now POLLS this registry and pulls by digest. Nothing
+# calls inward.
 #
-# One-time manual step (Adam or gh api, not automatable from this workflow):
-# after the first push, the five ghcr.io/cogghaus/forge-lab-*
-# packages are created. If GHCR defaults them to private, the deploy-host
-# runner's GITHUB_TOKEN login (scoped to this repo via GITHUB_TOKEN
-# permissions below) is sufficient for pulls made from within this workflow's
-# own deploy job, but if anyone/anything outside this workflow ever needs to
-# pull (e.g. a manual `docker pull` on the box for debugging), grant that
-# identity read access to the packages, or make them public, via each
-# package's Settings > Manage Actions access / visibility.
+# Deployment therefore lives on the deploy host, not in this file. See
+# docs/DEPLOYMENT.md.
+#
+# Issue 50 (docs/design/m3-reliability.md): builds used to run on the deploy box
+# itself and once drove load to ~1400, wedging the host. They run on
+# ubuntu-latest with buildx + GHA layer cache now, and the host only ever pulls.
+#
+# The five ghcr.io/cogghaus/forge-lab-* packages are created on first push and
+# default to private. Grant read access to whatever identity pulls them, or make
+# them public, via each package's Settings.
 
 name: CD
 
@@ -88,50 +89,3 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
-  deploy:
-    needs: build
-    runs-on: [self-hosted, linux, x64, forge-deploy]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-      - name: Pull latest code
-        run: git pull origin main
-
-      - name: Compute image tag
-        id: sha
-        run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Pull and deploy all services
-        env:
-          IMAGE_TAG: ${{ steps.sha.outputs.short }}
-          BUILD_SHA: ${{ steps.sha.outputs.short }}
-        run: |
-          docker compose -p deploy \
-            -f deploy/compose.yml \
-            --env-file ${{ vars.DEPLOY_ENV_FILE }} \
-            pull
-          docker compose -p deploy \
-            -f deploy/compose.yml \
-            --env-file ${{ vars.DEPLOY_ENV_FILE }} \
-            up -d --no-build --remove-orphans
-
-      - name: Pull and deploy daemons
-        env:
-          IMAGE_TAG: ${{ steps.sha.outputs.short }}
-        run: |
-          docker compose -p forge-daemons \
-            -f deploy/daemons.compose.yml \
-            --env-file ${{ vars.DEPLOY_ENV_FILE_DAEMONS }} \
-            pull
-          docker compose -p forge-daemons \
-            -f deploy/daemons.compose.yml \
-            --env-file ${{ vars.DEPLOY_ENV_FILE_DAEMONS }} \
-            up -d --no-build --remove-orphans
-
-      - name: Verify health
-        run: |
-          sleep 15
-          docker inspect --format='{{.Name}} {{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' forge-hub forge-dash forge-mcp
