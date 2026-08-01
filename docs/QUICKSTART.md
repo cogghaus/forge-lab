@@ -4,7 +4,7 @@ Boots the full forge-lab stack (hub, FM dispatcher daemon, one worker daemon,
 dashboard) on a single machine and walks a task from creation through FM
 triage to a completed done-file. Everything below is the local/dev boot
 path. For the production deployment model (Docker Compose + CD to
-accserver), see `docs/runbooks/production-deployment.md`'s superseded
+the deploy host), see `docs/runbooks/production-deployment.md`'s superseded
 banner, and `deploy/daemons.compose.yml` in the repo root.
 
 Total time: about 10-15 minutes plus one agent run (a few minutes, depending

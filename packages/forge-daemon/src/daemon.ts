@@ -1391,7 +1391,7 @@ export class Daemon {
           taskId: claimed.id,
           token: this.opts.gitToken,
           userName: this.opts.gitUserName || 'forge-lab[bot]',
-          userEmail: this.opts.gitUserEmail || 'forge-lab@cogg.haus',
+          userEmail: this.opts.gitUserEmail || 'forge-lab@example.com',
         });
         repoAddendum =
           `\n\n---\nA git checkout of ${this.opts.repoUrl} is at the absolute path ` +

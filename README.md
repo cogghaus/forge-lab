@@ -6,7 +6,7 @@ Hub server + local daemons + per-agent personalities + cross-device dashboard. I
 
 ## Status
 
-**Active development. All core systems operational.** Not yet recommended for production without reading the deployment runbook.
+**Active development. All core systems operational.** Not yet recommended for production without reading the deployment docs.
 
 **915 tests passing** across the workspace (`pnpm test`, 2026-08-01):
 
@@ -18,8 +18,8 @@ Hub server + local daemons + per-agent personalities + cross-device dashboard. I
 | `forge-agents` | 25 |
 | `forge-dash-community` | 20 |
 
-See [docs/handoff/HANDOFF.md](docs/handoff/HANDOFF.md) for the authoritative current
-status and open work. (`docs/roadmap/current-state.md` is historical / superseded.)
+Design docs in [`docs/design/`](docs/design/) are the source of record for how the
+system behaves; the ADRs record why it is shaped that way.
 
 ## Packages
 
@@ -49,11 +49,23 @@ Forge Master (FM) orchestrates work: it triages tasks, routes them to specialize
 
 ## Documentation
 
-- [Current state and gap analysis](docs/roadmap/current-state.md)
-- [FM architecture reference](docs/architecture/forge-master-system.md)
-- [Production deployment runbook](docs/runbooks/production-deployment.md)
+Decision records:
+
 - [ADR-001: Forge Master Orchestrator](docs/adr/ADR-001-forge-master-orchestrator.md)
 - [ADR-002: Workspace Knowledge Base](docs/adr/ADR-002-workspace-knowledge-base.md)
+- [ADR-003: Inter-agent Coordination](docs/adr/ADR-003-inter-agent-coordination.md)
+- [ADR-004: Single Fleet, Multi Workspace](docs/adr/ADR-004-single-fleet-multi-workspace.md)
+
+Design docs:
+
+- [Task sequencing](docs/design/task-sequencing.md) — how multi-phase work is planned and ordered
+- [Task lifecycle management](docs/design/task-lifecycle-management.md) — leases, heartbeats, reclaim
+- [Heimdall policy engine](docs/design/heimdall-policy-engine.md) — what agents are permitted to do
+- [Device management](docs/design/device-management.md)
+- [M3 reliability](docs/design/m3-reliability.md) — the lease/reclaim design and its failure modes
+- [FM architecture reference](docs/architecture/forge-master-system.md)
+
+Getting it running: [QUICKSTART](docs/QUICKSTART.md).
 
 ## Development
 

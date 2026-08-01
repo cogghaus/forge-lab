@@ -35,3 +35,22 @@ graphify-out/
 cookies.txt
 *.cookies
 cookie-jar*
+
+# Internal agent-workflow and session material. Kept on disk, never published:
+# it is process exhaust rather than product, and the runbooks in it name the
+# private deploy host, its LAN address and its filesystem paths.
+.claude/
+docs/handoff/
+docs/qa/
+docs/paperclip-integration/
+docs/agents-once-over-*.md
+docs/runbooks/paperclip-github-app.md
+docs/runbooks/daemon-deployment-accserver.md
+docs/roadmap/current-state.md
+issues/
+notes/
+mockups/
+docs/roadmap/
+docs/runbooks/
+docs/forge-dash/
+docs/forge-dash-community/
