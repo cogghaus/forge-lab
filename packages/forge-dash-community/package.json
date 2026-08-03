@@ -13,7 +13,7 @@
     "@forge-lab/core": "workspace:*",
     "@heroui/react": "^2.8.10",
     "framer-motion": "^11.18.2",
-    "next": "^15.5.18",
+    "next": "^15.5.21",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "sonner": "^2.0.7"
