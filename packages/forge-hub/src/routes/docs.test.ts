@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { schema } from '@forge-lab/core';
 import { createHub, type Hub } from '../app.js';
-import { TEST_HUB_CONFIG, setupAdmin, createWorkspace } from '../test-utils.js';
+import { TEST_HUB_CONFIG, setupAdmin, setupUser, createWorkspace } from '../test-utils.js';
 
 
 async function registerOrchestrator(hub: Hub, cookie: string): Promise<string> {
@@ -658,5 +658,106 @@ describe('/workspaces/:workspaceId/docs', () => {
       payload: { content: 'Updated by orchestrator.' },
     });
     expect(res.statusCode).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security finding 1 (NEXT-UP.md): IDOR on workspace docs reads. Both GETs
+// must enforce workspace membership, for users directly and for orchestrator
+// devices via the device's owning user (any user can register an orchestrator
+// device, so the device path is not a trust boundary on its own).
+// ---------------------------------------------------------------------------
+
+describe('docs GET workspace isolation (finding 1, IDOR)', () => {
+  let hub: Hub;
+  let adminCookie: string;
+  let workspaceId: string;
+  let fmToken: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
+    ({ cookie: adminCookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, adminCookie, { slug: 'idor-ws' });
+    fmToken = await registerOrchestrator(hub, adminCookie);
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { key: 'private-doc', title: 'Private', content: 'TOP-SECRET-CONTENT', category: 'adr' },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('non-member user gets 403 on GET list and the doc content is not returned', async () => {
+    const { cookie: outsider } = await setupUser(hub, adminCookie, { email: 'outsider@example.com' });
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { cookie: outsider },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).not.toContain('TOP-SECRET-CONTENT');
+  });
+
+  it('non-member user gets 403 on GET /:key and the doc content is not returned', async () => {
+    const { cookie: outsider } = await setupUser(hub, adminCookie, { email: 'outsider@example.com' });
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/docs/private-doc`,
+      headers: { cookie: outsider },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).not.toContain('TOP-SECRET-CONTENT');
+  });
+
+  it('orchestrator device owned by a non-member gets 403 on both GETs', async () => {
+    const { cookie: outsider } = await setupUser(hub, adminCookie, { email: 'outsider@example.com' });
+    const outsiderFm = await registerOrchestrator(hub, outsider);
+    for (const url of [`/workspaces/${workspaceId}/docs`, `/workspaces/${workspaceId}/docs/private-doc`]) {
+      const res = await hub.fastify.inject({
+        method: 'GET',
+        url,
+        headers: { authorization: `Bearer ${outsiderFm}` },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.body).not.toContain('TOP-SECRET-CONTENT');
+    }
+  });
+
+  it('member user (viewer) can read both GETs (positive control)', async () => {
+    const { cookie: member } = await setupUser(hub, adminCookie, {
+      email: 'member@example.com',
+      workspaceId,
+      workspaceRole: 'viewer',
+    });
+    const list = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { cookie: member },
+    });
+    expect(list.statusCode).toBe(200);
+    expect((list.json() as { docs: unknown[] }).docs).toHaveLength(1);
+    const one = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${workspaceId}/docs/private-doc`,
+      headers: { cookie: member },
+    });
+    expect(one.statusCode).toBe(200);
+    expect((one.json() as { content: string }).content).toBe('TOP-SECRET-CONTENT');
+  });
+
+  it('GETs on a deleted workspace return 404 for a member', async () => {
+    await hub.db
+      .update(schema.workspaces)
+      .set({ status: 'deleted' })
+      .where(eq(schema.workspaces.id, workspaceId));
+    for (const url of [`/workspaces/${workspaceId}/docs`, `/workspaces/${workspaceId}/docs/private-doc`]) {
+      const res = await hub.fastify.inject({ method: 'GET', url, headers: { cookie: adminCookie } });
+      expect(res.statusCode).toBe(404);
+    }
   });
 });

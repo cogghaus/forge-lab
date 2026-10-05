@@ -5,6 +5,7 @@ import { schema } from '@forge-lab/core';
 import { createHub, type Hub } from '../app.js';
 import { TEST_HUB_CONFIG, setupAdmin } from '../test-utils.js';
 import { createSession, listSessions } from '../auth/sessions.js';
+import bcrypt from 'bcryptjs';
 
 
 describe('POST /auth/register', () => {
@@ -646,5 +647,64 @@ describe('Session management (/auth/sessions)', () => {
     expect(rows.some((r) => r.userAgent === 'stale')).toBe(false);
     expect(rows.some((r) => r.userAgent === 'fresh')).toBe(true);
     expect(fresh.token).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security finding 6 (NEXT-UP.md): login user-enumeration timing oracle and
+// verbose validation errors. An unknown email must still pay for one bcrypt
+// compare at the configured cost, and 400s must not echo Zod issues.
+// ---------------------------------------------------------------------------
+
+describe('login timing oracle + validation error verbosity (finding 6)', () => {
+  let hub: Hub;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    await setupAdmin(hub);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await hub.close();
+  });
+
+  function bcryptCostOf(hash: string): number {
+    return Number(hash.split('$')[2]);
+  }
+
+  it('unknown email runs one bcrypt compare at the configured cost, same as a known email', async () => {
+    const spy = vi.spyOn(bcrypt, 'compare');
+
+    const unknown = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'nobody@example.com', password: 'password123' },
+    });
+    expect(unknown.statusCode).toBe(401);
+    expect((unknown.json() as { error: string }).error).toBe('invalid_credentials');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(bcryptCostOf(spy.mock.calls[0]![1] as string)).toBe(TEST_HUB_CONFIG.bcryptCost);
+
+    spy.mockClear();
+    const known = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'admin@example.com', password: 'wrong-password' },
+    });
+    expect(known.statusCode).toBe(401);
+    expect((known.json() as { error: string }).error).toBe('invalid_credentials');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(bcryptCostOf(spy.mock.calls[0]![1] as string)).toBe(TEST_HUB_CONFIG.bcryptCost);
+  });
+
+  it('global error handler returns generic invalid_input without the Zod issues array', async () => {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: 'not-an-email', password: 'x' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_input' });
   });
 });

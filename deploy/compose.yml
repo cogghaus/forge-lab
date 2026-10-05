@@ -37,6 +37,8 @@ services:
       FORGE_HUB_HOST: "0.0.0.0"
       FORGE_HUB_DATABASE_URL: "file:/data/forge-hub.db"
       FORGE_HUB_SESSION_SECRET: "${FORGE_HUB_SESSION_SECRET:?Set FORGE_HUB_SESSION_SECRET in env file}"
+      # Required in production: the hub refuses to boot without it (waker endpoint fails closed).
+      FORGE_HUB_WAKER_TOKEN: "${FORGE_HUB_WAKER_TOKEN:?Set FORGE_HUB_WAKER_TOKEN in env file}"
       FORGE_HUB_COOKIE_SECURE: "true"
       FORGE_HUB_SESSION_TTL_HOURS: "336"
       FORGE_HUB_BCRYPT_COST: "12"

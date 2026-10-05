@@ -1,6 +1,24 @@
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 
+/**
+ * Strict boolean env var (security finding 5). z.coerce.boolean() is NOT used:
+ * it is Boolean(value), so 'false' and '0' coerce to true. Accepts only
+ * '1'/'true' (true) and '0'/'false' (false); unset or empty takes the default.
+ * Anything else is rejected at boot rather than guessed, so a typo cannot
+ * silently flip a security flag. Real booleans pass through for callers that
+ * build config objects directly.
+ */
+function envBoolean(defaultValue: boolean) {
+  return z.preprocess(
+    (val) => (val === undefined || val === '' ? defaultValue : val),
+    z.union([
+      z.boolean(),
+      z.enum(['1', 'true', '0', 'false']).transform((v) => v === '1' || v === 'true'),
+    ]),
+  );
+}
+
 const ConfigSchema = z.object({
   port: z.coerce.number().int().min(0).max(65535).default(3000),
   host: z.string().default('127.0.0.1'),
@@ -8,7 +26,11 @@ const ConfigSchema = z.object({
   sessionSecret: z.string().min(32),
   sessionTtlHours: z.coerce.number().int().positive().default(24 * 14),
   bcryptCost: z.coerce.number().int().min(10).max(15).default(12),
-  cookieSecure: z.coerce.boolean().default(false),
+  /**
+   * Secure flag on the session cookie. Defaults to true (security finding 5);
+   * set FORGE_HUB_COOKIE_SECURE=false only for plain-HTTP local development.
+   */
+  cookieSecure: envBoolean(true),
   resendApiKey: z.string().optional(),
   appBaseUrl: z.string().default('http://localhost:3001'),
   /** Shared secret for the internal /waker/has-work endpoint. */

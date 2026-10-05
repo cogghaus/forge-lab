@@ -17,6 +17,9 @@ const testConfig: HubConfig = {
   reclaimSweepSeconds: 0,
 };
 
+// Test fixture only, not a real credential.
+const TEST_WAKER_TOKEN = 'waker-test-token-0123456789abcdef';
+
 describe('forge-hub smoke', () => {
   let hub: Hub;
 
@@ -162,7 +165,10 @@ describe('createHub - database safety guard (issue 15)', () => {
   it('does not throw when FORGE_HUB_ALLOW_MEMORY_DB=1 even in production', async () => {
     process.env['NODE_ENV'] = 'production';
     process.env['FORGE_HUB_ALLOW_MEMORY_DB'] = '1';
-    hub = await createHub({ config: { ...testConfig, databaseUrl: ':memory:' } });
+    // Production also requires a waker token (security finding 4).
+    hub = await createHub({
+      config: { ...testConfig, databaseUrl: ':memory:', wakerToken: TEST_WAKER_TOKEN },
+    });
     // Reaching here without a throw is the assertion; also sanity-check the
     // hub actually came up and can serve a request.
     const res = await hub.fastify.inject({ method: 'GET', url: '/healthz' });
@@ -174,7 +180,9 @@ describe('createHub - database safety guard (issue 15)', () => {
     delete process.env['FORGE_HUB_ALLOW_MEMORY_DB'];
     tmpDir = mkdtempSync(join(tmpdir(), 'forge-hub-issue15-'));
     const dbPath = join(tmpDir, 'hub.db');
-    hub = await createHub({ config: { ...testConfig, databaseUrl: `file:${dbPath}` } });
+    hub = await createHub({
+      config: { ...testConfig, databaseUrl: `file:${dbPath}`, wakerToken: TEST_WAKER_TOKEN },
+    });
     const res = await hub.fastify.inject({ method: 'GET', url: '/healthz' });
     expect(res.statusCode).toBe(200);
   });
@@ -183,6 +191,61 @@ describe('createHub - database safety guard (issue 15)', () => {
     delete process.env['NODE_ENV'];
     delete process.env['FORGE_HUB_ALLOW_MEMORY_DB'];
     hub = await createHub({ config: { ...testConfig, databaseUrl: ':memory:' } });
+    const res = await hub.fastify.inject({ method: 'GET', url: '/healthz' });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security finding 4 (NEXT-UP.md): the waker endpoint must not silently go
+// public when FORGE_HUB_WAKER_TOKEN is omitted. Production refuses to boot,
+// mirroring the issue 15 in-memory DB guard above.
+// ---------------------------------------------------------------------------
+
+describe('createHub - waker token guard (finding 4)', () => {
+  const originalNodeEnv = process.env['NODE_ENV'];
+  const originalAllow = process.env['FORGE_HUB_ALLOW_MEMORY_DB'];
+  let hub: Hub | undefined;
+
+  afterEach(async () => {
+    if (hub) {
+      await hub.close();
+      hub = undefined;
+    }
+    if (originalNodeEnv === undefined) delete process.env['NODE_ENV'];
+    else process.env['NODE_ENV'] = originalNodeEnv;
+    if (originalAllow === undefined) delete process.env['FORGE_HUB_ALLOW_MEMORY_DB'];
+    else process.env['FORGE_HUB_ALLOW_MEMORY_DB'] = originalAllow;
+  });
+
+  // Resolve to the rejection message, or to 'booted' (keeping the hub for
+  // afterEach cleanup) so a regression reads as a plain assertion failure.
+  async function bootOutcome(config: HubConfig): Promise<string> {
+    return createHub({ config }).then(
+      (h) => {
+        hub = h;
+        return 'booted';
+      },
+      (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    );
+  }
+
+  it('throws in production when wakerToken is unset', async () => {
+    process.env['NODE_ENV'] = 'production';
+    process.env['FORGE_HUB_ALLOW_MEMORY_DB'] = '1';
+    expect(await bootOutcome({ ...testConfig })).toMatch(/FORGE_HUB_WAKER_TOKEN/);
+  });
+
+  it('throws in production when wakerToken is an empty string', async () => {
+    process.env['NODE_ENV'] = 'production';
+    process.env['FORGE_HUB_ALLOW_MEMORY_DB'] = '1';
+    expect(await bootOutcome({ ...testConfig, wakerToken: '' })).toMatch(/FORGE_HUB_WAKER_TOKEN/);
+  });
+
+  it('boots in production when wakerToken is set', async () => {
+    process.env['NODE_ENV'] = 'production';
+    process.env['FORGE_HUB_ALLOW_MEMORY_DB'] = '1';
+    hub = await createHub({ config: { ...testConfig, wakerToken: TEST_WAKER_TOKEN } });
     const res = await hub.fastify.inject({ method: 'GET', url: '/healthz' });
     expect(res.statusCode).toBe(200);
   });
