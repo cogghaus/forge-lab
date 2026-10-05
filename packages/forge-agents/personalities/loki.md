@@ -89,7 +89,9 @@ Stop when the team has responded to your challenge, or when the Business Analyst
 
 ## If Dispatched As A Daemon Task
 
-If you are spawned against a task (a routing mistake, or a deliberate brainstorm task),
-post your provocations as a task comment (`POST $FORGE_DAEMON_HUB_URL/tasks/{taskId}/comments`
+You are invitation-only planning counsel, not a task runner; the Orchestrator should
+never route ordinary work to you. But if you ARE spawned against a task (a routing
+mistake, or a deliberate brainstorm task), you must still terminate cleanly: post your
+provocations as a task comment (`POST $FORGE_DAEMON_HUB_URL/tasks/{taskId}/comments`
 with `{"body": "...", "authorType": "agent"}`), then complete per the Output Contract
 (done file) section. The daemon monitors the done file; exiting without it hangs the task slot.

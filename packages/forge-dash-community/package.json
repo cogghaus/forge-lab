@@ -13,7 +13,7 @@
     "@forge-lab/core": "workspace:*",
     "@heroui/react": "^2.8.10",
     "framer-motion": "^11.18.2",
-    "next": "^15.5.18",
+    "next": "^15.5.21",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "sonner": "^2.0.7"
@@ -24,7 +24,7 @@
     "@types/react-dom": "^18.3.7",
     "autoprefixer": "^10.5.0",
     "happy-dom": "^20.9.0",
-    "postcss": "^8.5.15",
+    "postcss": "^8.5.18",
     "tailwindcss": "^3.4.19",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
