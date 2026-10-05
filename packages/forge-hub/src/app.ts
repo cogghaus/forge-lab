@@ -34,6 +34,7 @@ import { registerPolicyRuleRoutes } from './routes/policy-rules.js';
 import { registerWorkspaceContextRoutes } from './routes/workspace-context.js';
 import { registerWakerRoutes } from './routes/waker.js';
 import { EventBus } from './events/bus.js';
+import { summarizeZodIssues } from './utils/validation.js';
 
 export interface Hub {
   fastify: FastifyInstance;
@@ -77,6 +78,23 @@ function assertDatabaseSafety(config: HubConfig, fastify: FastifyInstance): void
   );
 }
 
+/**
+ * Security finding 4a: /waker/has-work used to be unauthenticated whenever
+ * FORGE_HUB_WAKER_TOKEN was omitted, so a config omission silently made it
+ * public. Production now refuses to boot without a token, the same fail-fast
+ * stance as assertDatabaseSafety. Outside production the route stays
+ * registered but answers 503 until a token is set (see routes/waker.ts).
+ */
+function assertWakerTokenConfigured(config: HubConfig): void {
+  if (process.env['NODE_ENV'] !== 'production') return;
+  if (config.wakerToken) return;
+  throw new Error(
+    'FORGE_HUB_WAKER_TOKEN is unset in production. The /waker/has-work endpoint ' +
+      'requires a shared bearer token; set FORGE_HUB_WAKER_TOKEN on the hub and ' +
+      'the same value as WAKER_TOKEN on forge-waker.',
+  );
+}
+
 export async function createHub(options: { config: HubConfig }): Promise<Hub> {
   const { config } = options;
   const emailService: EmailService | undefined = config.resendApiKey
@@ -94,15 +112,19 @@ export async function createHub(options: { config: HubConfig }): Promise<Hub> {
   });
 
   assertDatabaseSafety(config, fastify);
+  assertWakerTokenConfigured(config);
 
   const handle: DbHandle = openDatabase(config.databaseUrl);
   await runMigrations(handle.raw);
 
   const bus = new EventBus();
 
-  fastify.setErrorHandler((error, _req, reply) => {
+  fastify.setErrorHandler((error, req, reply) => {
     if (error instanceof ZodError) {
-      return reply.code(400).send({ error: 'invalid_input', issues: error.issues });
+      // Security finding 6: issue detail stays server-side; clients get a
+      // generic code so the response does not describe the input schema.
+      req.log.info({ issues: summarizeZodIssues(error) }, 'request validation failed');
+      return reply.code(400).send({ error: 'invalid_input' });
     }
     fastify.log.error(error);
     return reply.code(500).send({ error: 'internal_server_error' });

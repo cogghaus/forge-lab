@@ -5,10 +5,17 @@ import { z } from 'zod';
 import { RegisterDeviceInputSchema, schema } from '@forge-lab/core';
 import { loadBuiltinRegistry, type PersonalityRegistry } from '@forge-lab/agents';
 import type { Db } from '../db/index.js';
-import { requireUser, getUser, requireDevice, getDevice } from '../auth/middleware.js';
+import {
+  requireUser,
+  getUser,
+  requireDevice,
+  getDevice,
+  findWorkspaceMembership,
+} from '../auth/middleware.js';
 import { generateToken, hashToken } from '../auth/tokens.js';
 import { TokenBucketStore, createTokenBucketPreHandler } from '../rate-limit/index.js';
 import { checkPolicy } from '../policy/engine.js';
+import { summarizeZodIssues } from '../utils/validation.js';
 
 // name is now optional (a PATCH may update agentId only); agentId is nullable
 // (null clears the routing role) and optional (omit to leave it untouched).
@@ -67,6 +74,33 @@ async function resolveDeviceAgentId(
     )
     .get();
   return match ? agentId : null;
+}
+
+/**
+ * Resolve the workspace partition for an agent-memory read/write and authorize
+ * it (security finding 3). The device's agentId is often a shared built-in
+ * role, so it is not an authorization boundary: the device's owning user must
+ * be a member of the task's workspace. Unscoped tasks (workspaceId NULL) map to
+ * the '' partition and have no workspace to check, matching how unscoped tasks
+ * are visible to every device via GET /tasks.
+ */
+async function authorizeMemoryAccess(
+  db: Db,
+  device: { userId: string },
+  taskId: string,
+): Promise<{ ok: true; workspaceId: string } | { ok: false; code: number; error: string }> {
+  const task = await db
+    .select({ workspaceId: schema.tasks.workspaceId })
+    .from(schema.tasks)
+    .where(eq(schema.tasks.id, taskId))
+    .get();
+  if (!task) return { ok: false, code: 404, error: 'task_not_found' };
+  if (task.workspaceId === null) return { ok: true, workspaceId: '' };
+
+  const membership = await findWorkspaceMembership(db, task.workspaceId, device.userId);
+  if (!membership) return { ok: false, code: 403, error: 'forbidden' };
+  if (membership.workspaceStatus === 'deleted') return { ok: false, code: 404, error: 'task_not_found' };
+  return { ok: true, workspaceId: task.workspaceId };
 }
 
 export interface DeviceRouteHandles {
@@ -168,7 +202,9 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): DeviceRo
 
     const parsed = PatchDeviceBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      await reply.code(400).send({ error: 'validation_error', issues: parsed.error.issues });
+      // Security finding 6: generic code to the client, detail to the log only.
+      req.log.info({ issues: summarizeZodIssues(parsed.error) }, 'request validation failed');
+      await reply.code(400).send({ error: 'invalid_input' });
       return;
     }
 
@@ -322,17 +358,14 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): DeviceRo
       const { taskId } = req.params;
       const body = z.object({ content: z.string().max(1500) }).parse(req.body);
 
-      // Resolve workspaceId from the task row (needed for the composite PK).
-      const task = await db
-        .select({ workspaceId: schema.tasks.workspaceId })
-        .from(schema.tasks)
-        .where(eq(schema.tasks.id, taskId))
-        .get();
-      if (!task) {
-        await reply.code(404).send({ error: 'task_not_found' });
+      // Resolve workspaceId from the task row (needed for the composite PK)
+      // and verify the device owner is a member of that workspace.
+      const access = await authorizeMemoryAccess(db, device, taskId);
+      if (!access.ok) {
+        await reply.code(access.code).send({ error: access.error });
         return;
       }
-      const workspaceId = task.workspaceId ?? '';
+      const { workspaceId } = access;
 
       await db
         .insert(schema.agentMemory)
@@ -364,16 +397,12 @@ export function registerDeviceRoutes(fastify: FastifyInstance, db: Db): DeviceRo
       }
       const { taskId } = req.params;
 
-      const task = await db
-        .select({ workspaceId: schema.tasks.workspaceId })
-        .from(schema.tasks)
-        .where(eq(schema.tasks.id, taskId))
-        .get();
-      if (!task) {
-        await reply.code(404).send({ error: 'task_not_found' });
+      const access = await authorizeMemoryAccess(db, device, taskId);
+      if (!access.ok) {
+        await reply.code(access.code).send({ error: access.error });
         return;
       }
-      const workspaceId = task.workspaceId ?? '';
+      const { workspaceId } = access;
 
       const row = await db
         .select({ content: schema.agentMemory.content })

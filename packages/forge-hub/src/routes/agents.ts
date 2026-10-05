@@ -2,10 +2,17 @@ import type { FastifyInstance } from 'fastify';
 import { and, count, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { schema } from '@forge-lab/core';
+import { rankAtLeast, schema } from '@forge-lab/core';
 import { loadBuiltinRegistry, type PersonalityRegistry } from '@forge-lab/agents';
 import type { Db } from '../db/index.js';
-import { requireUser, requireWorkspaceMember, getWorkspace, getUser } from '../auth/middleware.js';
+import {
+  requireUser,
+  requireWorkspaceMember,
+  getWorkspace,
+  getUser,
+  findWorkspaceMembership,
+  type AuthUser,
+} from '../auth/middleware.js';
 import { parseDateRange } from '../utils/date-range.js';
 
 // Built-in personalities load once from disk (markdown shipped in the image).
@@ -27,6 +34,29 @@ const UpdateAgentInputSchema = z.object({
   runtimeId: z.string().min(1).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
 });
+
+/**
+ * Authorize a mutation (PATCH/DELETE) on an agent row reached via /agents/:id
+ * (security finding 2). Global agents (workspaceId IS NULL) are shared across
+ * every workspace and their personality becomes a system prompt, so only hub
+ * admins may change them. Workspace-scoped agents require collaborator rank in
+ * the owning workspace, matching POST /workspaces/:workspaceId/agents.
+ * Returns the error reply to send, or null when allowed.
+ */
+async function authorizeAgentMutation(
+  db: Db,
+  user: AuthUser,
+  agent: { workspaceId: string | null },
+): Promise<{ code: number; error: string } | null> {
+  if (agent.workspaceId === null) {
+    return user.role === 'admin' ? null : { code: 403, error: 'forbidden' };
+  }
+  const membership = await findWorkspaceMembership(db, agent.workspaceId, user.id);
+  if (!membership) return { code: 403, error: 'forbidden' };
+  if (membership.workspaceStatus === 'deleted') return { code: 404, error: 'not_found' };
+  if (!rankAtLeast(membership.role, 'collaborator')) return { code: 403, error: 'insufficient_role' };
+  return null;
+}
 
 export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
   fastify.get('/agents', { preHandler: requireUser }, async () => {
@@ -54,7 +84,13 @@ export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
     },
   );
 
+  // Creates a global agent (workspaceId NULL), shared by every workspace: admin only.
   fastify.post('/agents', { preHandler: requireUser }, async (req, reply) => {
+    const actor = getUser(req);
+    if (actor.role !== 'admin') {
+      await reply.code(403).send({ error: 'forbidden' });
+      return;
+    }
     const body = CreateAgentInputSchema.parse(req.body);
     const id = nanoid();
     await db.insert(schema.agents).values({
@@ -97,6 +133,11 @@ export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
         await reply.code(404).send({ error: 'not_found' });
         return;
       }
+      const denied = await authorizeAgentMutation(db, getUser(req), agent);
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
       const body = UpdateAgentInputSchema.parse(req.body);
       const updates = {
         ...(body.name !== undefined && { name: body.name }),
@@ -124,6 +165,11 @@ export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
         .get();
       if (!agent) {
         await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+      const denied = await authorizeAgentMutation(db, getUser(req), agent);
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
         return;
       }
       await db.delete(schema.agents).where(eq(schema.agents.id, req.params.id));

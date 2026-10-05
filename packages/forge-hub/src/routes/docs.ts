@@ -1,11 +1,11 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { and, desc, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { hasUniqueConstraint } from '../db/errors.js';
-import { getDevice } from '../auth/middleware.js';
+import { findWorkspaceMembership, getDevice } from '../auth/middleware.js';
 import { checkPolicy } from '../policy/engine.js';
 import type { PolicyPrincipal } from '../policy/engine.js';
 import { buildDevicePrincipal } from '../policy/principals.js';
@@ -46,6 +46,49 @@ const ListDocsQuerySchema = z.object({
   // When omitted, defaults to 'active'. Pass status=all to return docs of any status.
   status: z.enum([...DOC_STATUSES, 'all'] as const).optional().default('active'),
 });
+
+// ---------------------------------------------------------------------------
+// Read authorization
+// ---------------------------------------------------------------------------
+
+/**
+ * Authorize a docs read (security finding 1, IDOR). Callers must be either a
+ * workspace member (user session) or an orchestrator device whose owning user
+ * is a workspace member. The device path checks the owner because any user
+ * can register an orchestrator device, so device type alone is not an
+ * authorization boundary. Sends the error reply and returns false on denial.
+ */
+async function authorizeDocsRead(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  db: Db,
+  workspaceId: string,
+): Promise<boolean> {
+  let userId: string;
+  if (req.authDevice) {
+    if (req.authDevice.deviceType !== 'orchestrator') {
+      await reply.code(403).send({ error: 'orchestrator_required' });
+      return false;
+    }
+    userId = req.authDevice.userId;
+  } else if (req.authUser) {
+    userId = req.authUser.id;
+  } else {
+    await reply.code(401).send({ error: 'unauthorized' });
+    return false;
+  }
+
+  const membership = await findWorkspaceMembership(db, workspaceId, userId);
+  if (!membership) {
+    await reply.code(403).send({ error: 'forbidden' });
+    return false;
+  }
+  if (membership.workspaceStatus === 'deleted') {
+    await reply.code(404).send({ error: 'not_found' });
+    return false;
+  }
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // Route registration
@@ -130,14 +173,7 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
     async (req, reply) => {
       const workspaceId = req.params.workspaceId;
 
-      if (!req.authDevice && !req.authUser) {
-        await reply.code(401).send({ error: 'unauthorized' });
-        return;
-      }
-      if (req.authDevice && req.authDevice.deviceType !== 'orchestrator') {
-        await reply.code(403).send({ error: 'orchestrator_required' });
-        return;
-      }
+      if (!(await authorizeDocsRead(req, reply, db, workspaceId))) return;
 
       const query = ListDocsQuerySchema.parse(req.query);
 
@@ -168,14 +204,7 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
     async (req, reply) => {
       const { workspaceId, key } = req.params;
 
-      if (!req.authDevice && !req.authUser) {
-        await reply.code(401).send({ error: 'unauthorized' });
-        return;
-      }
-      if (req.authDevice && req.authDevice.deviceType !== 'orchestrator') {
-        await reply.code(403).send({ error: 'orchestrator_required' });
-        return;
-      }
+      if (!(await authorizeDocsRead(req, reply, db, workspaceId))) return;
 
       const doc = await db
         .select()

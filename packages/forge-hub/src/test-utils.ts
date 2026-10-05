@@ -43,6 +43,42 @@ export async function setupAdmin(
   return { cookie, id };
 }
 
+/**
+ * Create a non-admin user via an admin invite and log them in. Pass
+ * `workspaceId` (+ optional `workspaceRole`, default 'viewer') to make the user
+ * a member of that workspace on accept; omit it for a user with no workspace
+ * memberships.
+ */
+export async function setupUser(
+  hub: Hub,
+  adminCookie: string,
+  opts: {
+    email?: string;
+    workspaceId?: string;
+    workspaceRole?: 'owner' | 'admin' | 'collaborator' | 'viewer';
+  } = {},
+): Promise<{ cookie: string; id: string }> {
+  const inviteRes = await hub.fastify.inject({
+    method: 'POST',
+    url: '/admin/invites',
+    headers: { cookie: adminCookie },
+    payload:
+      opts.workspaceId !== undefined
+        ? { workspaceId: opts.workspaceId, workspaceRole: opts.workspaceRole ?? 'viewer' }
+        : {},
+  });
+  const { token } = inviteRes.json() as { token: string };
+  const acceptRes = await hub.fastify.inject({
+    method: 'POST',
+    url: `/invites/${token}/accept`,
+    payload: { email: opts.email ?? 'user@example.com', password: 'password456' },
+  });
+  const { id } = acceptRes.json() as { id: string };
+  const setCookie = acceptRes.headers['set-cookie'];
+  const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!;
+  return { cookie, id };
+}
+
 /** Register a device and return its id + token. */
 export async function registerDevice(
   hub: Hub,

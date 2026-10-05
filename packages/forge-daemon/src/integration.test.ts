@@ -1505,7 +1505,7 @@ describe('integration: dispatcher mode — personality registry', () => {
     expect(capturedPersonalities.length).toBeGreaterThan(0);
     // The FM personality loaded from the registry should contain the FM identity marker
     const fmPersonality = capturedPersonalities[0] ?? '';
-    expect(fmPersonality).toContain('Forge Master');
+    expect(fmPersonality).toContain('Orchestrator');
     // Should contain FM-specific content from the personality file
     expect(fmPersonality).toContain('orchestrator');
   });

@@ -124,6 +124,33 @@ export function getDevice(req: { authDevice?: AuthDevice }): AuthDevice {
   return req.authDevice;
 }
 
+/**
+ * Look up a user's membership in a workspace, joined with the workspace status.
+ * Returns undefined when the user is not a member. Shared by
+ * requireWorkspaceMember and handlers that must authorize a device by its
+ * owning user (devices are not workspace members themselves).
+ */
+export async function findWorkspaceMembership(
+  db: Db,
+  workspaceId: string,
+  userId: string,
+): Promise<{ role: WorkspaceRole; workspaceStatus: string } | undefined> {
+  return db
+    .select({
+      role: schema.workspaceMembers.role,
+      workspaceStatus: schema.workspaces.status,
+    })
+    .from(schema.workspaceMembers)
+    .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.workspaceMembers.workspaceId))
+    .where(
+      and(
+        eq(schema.workspaceMembers.workspaceId, workspaceId),
+        eq(schema.workspaceMembers.userId, userId),
+      ),
+    )
+    .get();
+}
+
 export function requireWorkspaceMember(db: Db, role?: WorkspaceRole): preHandlerHookHandler {
   return async (req, reply) => {
     if (!req.authUser) {
@@ -136,20 +163,7 @@ export function requireWorkspaceMember(db: Db, role?: WorkspaceRole): preHandler
       await reply.code(400).send({ error: 'missing_workspace_id' });
       return;
     }
-    const result = await db
-      .select({
-        role: schema.workspaceMembers.role,
-        workspaceStatus: schema.workspaces.status,
-      })
-      .from(schema.workspaceMembers)
-      .innerJoin(schema.workspaces, eq(schema.workspaces.id, schema.workspaceMembers.workspaceId))
-      .where(
-        and(
-          eq(schema.workspaceMembers.workspaceId, workspaceId),
-          eq(schema.workspaceMembers.userId, req.authUser.id),
-        ),
-      )
-      .get();
+    const result = await findWorkspaceMembership(db, workspaceId, req.authUser.id);
     if (!result) {
       await reply.code(403).send({ error: 'forbidden' });
       return;

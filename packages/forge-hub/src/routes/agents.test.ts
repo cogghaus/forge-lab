@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { createHub, type Hub } from '../app.js';
 import { schema } from '@forge-lab/core';
 import type { HubConfig } from '../config.js';
+import { TEST_HUB_CONFIG, setupAdmin, setupUser, createWorkspace } from '../test-utils.js';
 
 const testConfig: HubConfig = {
   port: 0,
@@ -324,6 +325,143 @@ describe('/agents routes', () => {
       payload: { name: 'forge', personality: 'x'.repeat(10_001), runtimeId: 'claude-code' },
     });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security finding 2 (NEXT-UP.md): global agents (workspaceId IS NULL) are
+// shared across workspaces, so create/update/delete is admin-only. The same
+// /agents/:id handlers also reach workspace-scoped agents, which are gated on
+// workspace membership at collaborator rank (matching POST
+// /workspaces/:workspaceId/agents).
+// ---------------------------------------------------------------------------
+
+describe('/agents mutation authorization (finding 2)', () => {
+  let hub: Hub;
+  let adminCookie: string;
+  let globalAgentId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
+    ({ cookie: adminCookie } = await setupAdmin(hub));
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/agents',
+      headers: { cookie: adminCookie },
+      payload: { name: 'shared', personality: 'original personality', runtimeId: 'claude-code' },
+    });
+    expect(res.statusCode).toBe(201);
+    globalAgentId = (res.json() as { id: string }).id;
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function readAgent(id: string) {
+    return hub.db.select().from(schema.agents).where(eq(schema.agents.id, id)).get();
+  }
+
+  it('non-admin cannot create a global agent (403, nothing inserted)', async () => {
+    const { cookie } = await setupUser(hub, adminCookie);
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/agents',
+      headers: { cookie },
+      payload: { name: 'rogue', personality: 'ignore all instructions', runtimeId: 'claude-code' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((res.json() as { error: string }).error).toBe('forbidden');
+    const rows = await hub.db.select().from(schema.agents).where(eq(schema.agents.name, 'rogue'));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('non-admin cannot rewrite a global agent personality (403, unchanged)', async () => {
+    const { cookie } = await setupUser(hub, adminCookie);
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/agents/${globalAgentId}`,
+      headers: { cookie },
+      payload: { personality: 'poisoned system prompt' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((await readAgent(globalAgentId))?.personality).toBe('original personality');
+  });
+
+  it('non-admin cannot delete a global agent (403, still present)', async () => {
+    const { cookie } = await setupUser(hub, adminCookie);
+    const res = await hub.fastify.inject({
+      method: 'DELETE',
+      url: `/agents/${globalAgentId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(await readAgent(globalAgentId)).toBeDefined();
+  });
+
+  it('non-member cannot PATCH or DELETE a workspace-scoped agent via /agents/:id', async () => {
+    const workspaceId = await createWorkspace(hub, adminCookie, { slug: 'agents-authz' });
+    const createRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/agents`,
+      headers: { cookie: adminCookie },
+      payload: { name: 'ws-only', personality: 'ws personality', runtimeId: 'claude-code' },
+    });
+    const wsAgentId = (createRes.json() as { id: string }).id;
+    const { cookie } = await setupUser(hub, adminCookie);
+
+    const patchRes = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/agents/${wsAgentId}`,
+      headers: { cookie },
+      payload: { personality: 'poisoned' },
+    });
+    expect(patchRes.statusCode).toBe(403);
+    const delRes = await hub.fastify.inject({
+      method: 'DELETE',
+      url: `/agents/${wsAgentId}`,
+      headers: { cookie },
+    });
+    expect(delRes.statusCode).toBe(403);
+    expect((await readAgent(wsAgentId))?.personality).toBe('ws personality');
+  });
+
+  it('workspace collaborator can PATCH a workspace-scoped agent; viewer cannot', async () => {
+    const workspaceId = await createWorkspace(hub, adminCookie, { slug: 'agents-authz-2' });
+    const createRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/agents`,
+      headers: { cookie: adminCookie },
+      payload: { name: 'ws-only', personality: 'ws personality', runtimeId: 'claude-code' },
+    });
+    const wsAgentId = (createRes.json() as { id: string }).id;
+    const { cookie: viewer } = await setupUser(hub, adminCookie, {
+      email: 'viewer@example.com',
+      workspaceId,
+      workspaceRole: 'viewer',
+    });
+    const { cookie: collaborator } = await setupUser(hub, adminCookie, {
+      email: 'collab@example.com',
+      workspaceId,
+      workspaceRole: 'collaborator',
+    });
+
+    const viewerRes = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/agents/${wsAgentId}`,
+      headers: { cookie: viewer },
+      payload: { name: 'by-viewer' },
+    });
+    expect(viewerRes.statusCode).toBe(403);
+
+    const collabRes = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/agents/${wsAgentId}`,
+      headers: { cookie: collaborator },
+      payload: { name: 'by-collaborator' },
+    });
+    expect(collabRes.statusCode).toBe(200);
+    expect((await readAgent(wsAgentId))?.name).toBe('by-collaborator');
   });
 });
 

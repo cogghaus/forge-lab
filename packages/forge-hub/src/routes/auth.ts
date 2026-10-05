@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { LoginInputSchema, schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import type { HubConfig } from '../config.js';
-import { hashPassword, verifyPassword } from '../auth/password.js';
+import { dummyPasswordHash, hashPassword, verifyPassword } from '../auth/password.js';
 import {
   createSession,
   deleteSession,
@@ -73,6 +73,10 @@ export function registerAuthRoutes(
       .where(eq(schema.users.email, body.email))
       .get();
     if (!user) {
+      // Burn one bcrypt compare at the configured cost so an unknown email
+      // takes as long as a wrong password for a known one (security finding 6:
+      // the early return was a user-enumeration timing oracle).
+      await verifyPassword(body.password, dummyPasswordHash(config.bcryptCost));
       await reply.code(401).send({ error: 'invalid_credentials' });
       return;
     }

@@ -1,6 +1,20 @@
 import type { FastifyInstance } from 'fastify';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
+
+/**
+ * Constant-time check of an Authorization header against the expected bearer
+ * token (security finding 4b). Both sides are reduced to SHA-256 digests first,
+ * so timingSafeEqual always sees two 32-byte buffers: a length mismatch neither
+ * throws nor exits early, and the comparison time does not depend on how many
+ * leading characters of the presented token are correct.
+ */
+function bearerMatches(header: string | undefined, token: string): boolean {
+  const presented = createHash('sha256').update(header ?? '').digest();
+  const expected = createHash('sha256').update(`Bearer ${token}`).digest();
+  return timingSafeEqual(presented, expected);
+}
 
 /**
  * Waker endpoint used by the forge-waker service to decide which daemon
@@ -9,6 +23,11 @@ import type { Db } from '../db/index.js';
  *
  * Auth: static bearer token (FORGE_HUB_WAKER_TOKEN). Internal network only;
  * not exposed on any public-facing Traefik rule.
+ *
+ * Fails closed (security finding 4a): with no token configured the endpoint
+ * answers 503 rather than serving unauthenticated requests. In production the
+ * hub refuses to boot without a token at all (see assertWakerTokenConfigured
+ * in app.ts), so the 503 path only exists in dev and test.
  */
 export function registerWakerRoutes(
   fastify: FastifyInstance,
@@ -16,15 +35,14 @@ export function registerWakerRoutes(
   wakerToken: string | undefined,
 ): void {
   fastify.get('/waker/has-work', async (req, reply) => {
-    // Validate waker token when configured. If no token is set the endpoint
-    // remains open — acceptable for single-host deployments where the port is
-    // not publicly exposed.
-    if (wakerToken) {
-      const auth = req.headers['authorization'];
-      if (typeof auth !== 'string' || auth !== `Bearer ${wakerToken}`) {
-        await reply.code(401).send({ error: 'unauthorized' });
-        return;
-      }
+    if (!wakerToken) {
+      await reply.code(503).send({ error: 'waker_token_not_configured' });
+      return;
+    }
+    const auth = req.headers['authorization'];
+    if (!bearerMatches(typeof auth === 'string' ? auth : undefined, wakerToken)) {
+      await reply.code(401).send({ error: 'unauthorized' });
+      return;
     }
 
     // Count pending tasks grouped by assigned_agent_id.

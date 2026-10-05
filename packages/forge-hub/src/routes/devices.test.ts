@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 import { schema } from '@forge-lab/core';
 import { createSession } from '../auth/sessions.js';
 import { hashPassword } from '../auth/password.js';
-import { TEST_HUB_CONFIG, setupAdmin, registerDevice } from '../test-utils.js';
+import { TEST_HUB_CONFIG, setupAdmin, setupUser, registerDevice, createWorkspace } from '../test-utils.js';
 
 
 describe('POST /devices', () => {
@@ -640,5 +640,114 @@ describe('POST /devices/:deviceId/rotate-token', () => {
     expect(r2.statusCode).toBe(200);
     // Original token must be invalid after either rotation
     expect(await probeDeviceAuth(hub, originalToken)).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security finding 3 (NEXT-UP.md): cross-workspace agent memory. agentId is
+// often a shared built-in role (e.g. 'architect'), so (agentId, workspaceId)
+// is a partition key, not an authorization boundary. The device's owning user
+// must be a member of the task's workspace before agentMemory is touched.
+// ---------------------------------------------------------------------------
+
+describe('/devices/me/memory/:taskId workspace isolation (finding 3)', () => {
+  let hub: Hub;
+  let adminCookie: string;
+  let taskId: string;
+  let ownerDeviceToken: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie: adminCookie } = await setupAdmin(hub));
+    const workspaceId = await createWorkspace(hub, adminCookie, { slug: 'memory-ws' });
+    const taskRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie: adminCookie },
+      payload: { projectPrefix: 'mem', title: 'Memory task', workspaceId },
+    });
+    expect(taskRes.statusCode).toBe(201);
+    taskId = (taskRes.json() as { id: string }).id;
+    ({ token: ownerDeviceToken } = await registerDevice(hub, adminCookie, 'owner-architect', {
+      agentId: 'architect',
+    }));
+    const putRes = await hub.fastify.inject({
+      method: 'PUT',
+      url: `/devices/me/memory/${taskId}`,
+      headers: { authorization: `Bearer ${ownerDeviceToken}` },
+      payload: { content: 'PRIVATE-WORKSPACE-MEMORY' },
+    });
+    expect(putRes.statusCode).toBe(204);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function outsiderArchitectToken(): Promise<string> {
+    const { cookie } = await setupUser(hub, adminCookie, { email: 'outsider@example.com' });
+    const { token } = await registerDevice(hub, cookie, 'outsider-architect', { agentId: 'architect' });
+    return token;
+  }
+
+  it('device owned by a non-member cannot read another workspace\'s agent memory (403)', async () => {
+    const token = await outsiderArchitectToken();
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/devices/me/memory/${taskId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).not.toContain('PRIVATE-WORKSPACE-MEMORY');
+  });
+
+  it('device owned by a non-member cannot overwrite another workspace\'s agent memory (403)', async () => {
+    const token = await outsiderArchitectToken();
+    const res = await hub.fastify.inject({
+      method: 'PUT',
+      url: `/devices/me/memory/${taskId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { content: 'POISONED' },
+    });
+    expect(res.statusCode).toBe(403);
+    const rows = await hub.db.select().from(schema.agentMemory);
+    expect(rows.map((r) => r.content)).toEqual(['PRIVATE-WORKSPACE-MEMORY']);
+  });
+
+  it('device owned by a workspace member can read its memory (positive control)', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/devices/me/memory/${taskId}`,
+      headers: { authorization: `Bearer ${ownerDeviceToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { content: string }).content).toBe('PRIVATE-WORKSPACE-MEMORY');
+  });
+});
+
+// Security finding 6 (NEXT-UP.md): validation failures must not echo Zod issues.
+describe('PATCH /devices/:deviceId validation error verbosity (finding 6)', () => {
+  let hub: Hub;
+  let cookie: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie } = await setupAdmin(hub));
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('returns generic invalid_input without the issues array', async () => {
+    const { id } = await registerDevice(hub, cookie, 'verbose-check');
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/devices/${id}`,
+      headers: { cookie },
+      payload: { name: 'has spaces!' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'invalid_input' });
   });
 });
