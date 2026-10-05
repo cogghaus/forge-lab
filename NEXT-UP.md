@@ -2,6 +2,21 @@
 
 ## Security findings - forge-hub (logged 2026-08-26)
 
+**Status 2026-10-05: findings 1-6 FIXED in `0a7cde5`, each with a regression test.** Deploy note:
+forge-hub now refuses to boot in production without `FORGE_HUB_WAKER_TOKEN` (compose passes it;
+the accserver `.env` has it). `cookieSecure` defaults to true and accepts only `1/true/0/false`.
+
+### Follow-ups found while fixing (not yet fixed)
+
+- `GET /agents/:id` returns workspace-scoped agents (incl. personality) to any logged-in user: same IDOR class as finding 1.
+- Docs POST/PATCH from a device check Heimdall policy only, not the device owner's membership; `GET /tasks?workspaceId=` skips membership for devices by design (`tasks.ts:702`). Same class as 1 and 3.
+- Agent memory on tasks with NO workspace is reachable by any device sharing the agentId. Needs a decision (e.g. restrict to the task creator).
+- `forge-mcp/src/tools/knowledge.ts:19,33,53` calls `/docs` and `/docs/:id`, which match no hub route; its docs tools may already be broken.
+- `forge-daemon` config boolean parsing turns any string other than `false`/`0` into true (`'no'` is true): same footgun as finding 5.
+- accserver `forge-lab-deploy.timer` has failed every run since at least 2026-08-24: `/datapool/docker/forge-lab/ghcr.env` missing (needs `GHCR_USER` + a `read:packages` token). Production is still on `e7c196e`.
+
+---
+
 Source: a dual-agent security review of `packages/forge-hub/src` (two independent reviewers on different model tiers). The top finding was reported by BOTH reviewers, so it is high-confidence. To be addressed next time work happens in this repo. Each fix should ship with a regression test.
 
 ### HIGH
