@@ -24,11 +24,11 @@ It grew out of vibe-forge, an earlier private prototype that ran the same idea a
 - Builds moved off the deploy host into CI, which publishes images to GHCR, so the host only pulls.
 - Two security reviews of the hub found cross-tenant access-control gaps. All findings were fixed with failing-first regression tests (#141, #142, #143). See [docs/security-review.md](docs/security-review.md).
 
-**Final test count: 1006 passing** (`pnpm test`, 2026-10-24):
+**Final test count: 1012 passing** (`pnpm test`, 2026-10-24):
 
 | Package | Tests |
 |---|---|
-| `forge-hub` | 691 |
+| `forge-hub` | 697 |
 | `forge-daemon` | 214 |
 | `forge-core` | 54 |
 | `forge-agents` | 25 |

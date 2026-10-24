@@ -6,11 +6,9 @@
 |---|---|---|
 | 2026-08-26: two independent reviewers on different model tiers, `packages/forge-hub/src` | Findings 1-6 below | #141 (`0a7cde5`) |
 | Follow-ups found while fixing 1-6 | `GET /agents/:id` IDOR; docs POST/PATCH from devices; `GET /tasks` scoping; agent memory on unscoped tasks; forge-mcp docs routes; daemon boolean env parsing; flat `POST /tasks` workspace injection | #142 |
-| 2026-10-24: independent review of hub routes for the same class | Task reads and claims; orchestrator context, assign and stale-task routes; task instructions; task comments; `/ws` event filtering | #143 |
+| 2026-10-24: independent review of hub routes for the same class | Task reads and claims; orchestrator context, assign and stale-task routes; task instructions; task comments; `/ws` event filtering; workspace listing for orchestrator devices (`GET /dispatcher/workspaces`); agent-instance visibility (`GET /agent-instances`) | #143 |
 
 The common root cause: routes trusted a device token, or a Heimdall device-type policy, as proof of tenancy, but any logged-in user can register a device of any type. The fixes authorize every caller through its user, meaning the session user or the device's owner (`packages/forge-hub/src/auth/access.ts`).
-
-PENDING-DECISION: the 2026-10-24 review also reported two medium items, orchestrator devices listing every workspace id (`GET /dispatcher/workspaces`) and every user seeing all agent instances (`GET /agent-instances`). This line is replaced once they are fixed or accepted.
 
 Operational items for the private deployment were tracked outside this public repository and are out of scope here.
 
