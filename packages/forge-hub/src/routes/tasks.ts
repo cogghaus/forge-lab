@@ -21,7 +21,12 @@ import {
   getUser,
 } from '../auth/middleware.js';
 import { createdByKeysForUser } from '../auth/task-owner.js';
-import { authorizeCallerForTask, authorizeCallerForWorkspace, callerUserId } from '../auth/access.js';
+import {
+  authorizeCallerForTask,
+  authorizeCallerForWorkspace,
+  authorizeUserForWorkspace,
+  callerUserId,
+} from '../auth/access.js';
 import type { EventBus } from '../events/bus.js';
 import { checkPolicy } from '../policy/engine.js';
 import type { PolicyPrincipal } from '../policy/engine.js';
@@ -1073,6 +1078,12 @@ export function registerTaskRoutes(
             action: 'task:assign',
             principal: decision.principal,
           });
+          return;
+        }
+        // Policy gates the device type; the workspace is gated by the owner.
+        const denied = await authorizeUserForWorkspace(db, device.userId, workspaceId, 'collaborator');
+        if (denied) {
+          await reply.code(denied.code).send({ error: denied.error });
           return;
         }
 
@@ -3043,6 +3054,11 @@ export function registerTaskRoutes(
         return;
       }
       const { workspaceId } = req.params;
+      const denied = await authorizeUserForWorkspace(db, device.userId, workspaceId);
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
       const { ttlMinutes } = StaleQuerySchema.parse(req.query);
 
       const cutoff = new Date(Date.now() - ttlMinutes * 60 * 1000);
@@ -3080,6 +3096,11 @@ export function registerTaskRoutes(
         return;
       }
       const { workspaceId } = req.params;
+      const denied = await authorizeUserForWorkspace(db, device.userId, workspaceId, 'collaborator');
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
       const { ttlMinutes } = StaleQuerySchema.parse(req.query);
 
       const cutoff = new Date(Date.now() - ttlMinutes * 60 * 1000);
@@ -3160,6 +3181,11 @@ export function registerTaskRoutes(
         return;
       }
       const { workspaceId } = req.params;
+      const denied = await authorizeUserForWorkspace(db, device.userId, workspaceId, 'collaborator');
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
       const { ttlMinutes } = StaleQuerySchema.parse(req.query);
 
       const cutoff = new Date(Date.now() - ttlMinutes * 60 * 1000);
