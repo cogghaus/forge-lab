@@ -1332,7 +1332,7 @@ describe('GET /dispatcher/workspaces', () => {
     expect(res.json()).toEqual([]);
   });
 
-  it('returns all active workspace IDs (ADR-004: scope=all, no membership filter)', async () => {
+  it('returns every active workspace the device owner is a member of (ADR-004)', async () => {
     const ws1Id = await createWorkspace(hub, cookie, { name: 'Workspace One', slug: 'ws-one' });
     const ws2Id = await createWorkspace(hub, cookie, { name: 'Workspace Two', slug: 'ws-two' });
 
@@ -1369,11 +1369,11 @@ describe('GET /dispatcher/workspaces', () => {
     expect(ids).not.toContain(archivedId);
   });
 
-  it('includes workspaces owned by other users (no membership filter)', async () => {
+  it('excludes workspaces the device owner is not a member of', async () => {
     const ownedId = await createWorkspace(hub, cookie, { name: 'Owned WS', slug: 'owned-ws' });
 
-    // Workspace owned by a second user — FM device owner has no membership, but
-    // ADR-004 scope=all means FM sees it anyway.
+    // Workspace owned by a second user. The FM device's owner has no membership,
+    // so the FM must not see it (ADR-004: the device's memberships).
     const { userId: otherId } = await setupSecondUser(hub);
     const otherWsId = nanoid();
     await hub.db.insert(schema.workspaces).values({
@@ -1396,6 +1396,6 @@ describe('GET /dispatcher/workspaces', () => {
     expect(res.statusCode).toBe(200);
     const ids = (res.json() as { id: string }[]).map((w) => w.id);
     expect(ids).toContain(ownedId);
-    expect(ids).toContain(otherWsId);
+    expect(ids).not.toContain(otherWsId);
   });
 });

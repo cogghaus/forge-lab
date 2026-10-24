@@ -545,3 +545,108 @@ describe('cross-tenant: /ws event stream', () => {
   });
 });
 
+
+describe('cross-tenant: GET /dispatcher/workspaces', () => {
+  let hub: Hub;
+  let f: Fixture;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    f = await setupFixture(hub);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('outsider FM does not see workspaces its owner is not a member of', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/dispatcher/workspaces',
+      headers: bearer(f.outsiderFmToken),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]);
+  });
+
+  it('owner\'s FM sees the workspace (positive control)', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/dispatcher/workspaces',
+      headers: bearer(f.ownerFmToken),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([{ id: f.workspaceId }]);
+  });
+});
+
+describe('cross-tenant: GET /agent-instances', () => {
+  let hub: Hub;
+  let f: Fixture;
+  let ownerInstanceId: string;
+  let outsiderInstanceId: string;
+
+  async function createInstance(token: string, agentId: string): Promise<string> {
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/agent-instances',
+      headers: bearer(token),
+      payload: { agentId },
+    });
+    expect(res.statusCode).toBe(201);
+    return (res.json() as { id: string }).id;
+  }
+
+  async function listIds(headers: Record<string, string>): Promise<string[]> {
+    const res = await hub.fastify.inject({ method: 'GET', url: '/agent-instances', headers });
+    expect(res.statusCode).toBe(200);
+    return (res.json() as { instances: { id: string }[] }).instances.map((i) => i.id);
+  }
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    f = await setupFixture(hub);
+    const agentRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/agents',
+      headers: { cookie: f.adminCookie },
+      payload: { name: 'instance-agent', personality: 'coder', runtimeId: 'claude-code' },
+    });
+    const agentId = (agentRes.json() as { id: string }).id;
+    ownerInstanceId = await createInstance(f.ownerWorkerToken, agentId);
+    outsiderInstanceId = await createInstance(f.outsiderWorkerToken, agentId);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('a non-admin user lists only instances on their own devices', async () => {
+    expect(await listIds({ cookie: f.outsiderCookie })).toEqual([outsiderInstanceId]);
+  });
+
+  it('a non-admin user cannot read another user\'s instance by id (404)', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/agent-instances/${ownerInstanceId}`,
+      headers: { cookie: f.outsiderCookie },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('a non-admin user reads their own instance by id (positive control)', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/agent-instances/${outsiderInstanceId}`,
+      headers: { cookie: f.outsiderCookie },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('an admin lists every instance (positive control)', async () => {
+    const ids = await listIds({ cookie: f.adminCookie });
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain(ownerInstanceId);
+    expect(ids).toContain(outsiderInstanceId);
+  });
+});
