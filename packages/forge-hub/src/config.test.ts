@@ -11,7 +11,7 @@ function cookieSecureFor(value: string | undefined): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Security finding 5 (NEXT-UP.md): the session cookie's Secure flag defaults
+// Security finding 5 (docs/security-review.md): the session cookie's Secure flag defaults
 // on, and FORGE_HUB_COOKIE_SECURE is parsed explicitly. z.coerce.boolean()
 // turned 'false' and '0' into true, so the flag could not be disabled.
 // ---------------------------------------------------------------------------

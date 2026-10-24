@@ -197,7 +197,7 @@ describe('createHub - database safety guard (issue 15)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Security finding 4 (NEXT-UP.md): the waker endpoint must not silently go
+// Security finding 4 (docs/security-review.md): the waker endpoint must not silently go
 // public when FORGE_HUB_WAKER_TOKEN is omitted. Production refuses to boot,
 // mirroring the issue 15 in-memory DB guard above.
 // ---------------------------------------------------------------------------

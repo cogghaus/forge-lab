@@ -14,7 +14,7 @@ vi.mock('node:crypto', async (importOriginal) => {
 const WAKER_TOKEN = 'waker-test-token-0123456789abcdef';
 
 // ---------------------------------------------------------------------------
-// Security finding 4 (NEXT-UP.md): /waker/has-work must fail closed when no
+// Security finding 4 (docs/security-review.md): /waker/has-work must fail closed when no
 // token is configured, and compare the token in constant time.
 // ---------------------------------------------------------------------------
 
