@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { and, desc, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { schema } from '@forge-lab/core';
+import { schema, type WorkspaceRole } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { hasUniqueConstraint } from '../db/errors.js';
 import { findWorkspaceMembership, getDevice } from '../auth/middleware.js';
@@ -48,8 +48,32 @@ const ListDocsQuerySchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Read authorization
+// Authorization
 // ---------------------------------------------------------------------------
+
+/**
+ * Require that `userId` (a user, or a device's owning user) is a member of a
+ * live workspace. Returns the member's role, or sends the error reply and
+ * returns null. Devices are not workspace members themselves, and any user can
+ * register any device type, so a device is authorized through its owner.
+ */
+async function requireDocsMembership(
+  reply: FastifyReply,
+  db: Db,
+  workspaceId: string,
+  userId: string,
+): Promise<WorkspaceRole | null> {
+  const membership = await findWorkspaceMembership(db, workspaceId, userId);
+  if (!membership) {
+    await reply.code(403).send({ error: 'forbidden' });
+    return null;
+  }
+  if (membership.workspaceStatus === 'deleted') {
+    await reply.code(404).send({ error: 'not_found' });
+    return null;
+  }
+  return membership.role;
+}
 
 /**
  * Authorize a docs read (security finding 1, IDOR). Callers must be either a
@@ -78,16 +102,7 @@ async function authorizeDocsRead(
     return false;
   }
 
-  const membership = await findWorkspaceMembership(db, workspaceId, userId);
-  if (!membership) {
-    await reply.code(403).send({ error: 'forbidden' });
-    return false;
-  }
-  if (membership.workspaceStatus === 'deleted') {
-    await reply.code(404).send({ error: 'not_found' });
-    return false;
-  }
-  return true;
+  return (await requireDocsMembership(reply, db, workspaceId, userId)) !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +119,7 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
 
       if (req.authDevice) {
         const device = getDevice(req);
+        if ((await requireDocsMembership(reply, db, workspaceId, device.userId)) === null) return;
         const principal = buildDevicePrincipal(device);
         const decision = await checkPolicy(
           principal,
@@ -121,21 +137,7 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
         }
         updatedBy = device.agentId ?? `device:${device.id}`;
       } else if (req.authUser) {
-        // Verify workspace membership
-        const member = await db
-          .select({ role: schema.workspaceMembers.role })
-          .from(schema.workspaceMembers)
-          .where(
-            and(
-              eq(schema.workspaceMembers.workspaceId, workspaceId),
-              eq(schema.workspaceMembers.userId, req.authUser.id),
-            ),
-          )
-          .get();
-        if (!member) {
-          await reply.code(403).send({ error: 'forbidden' });
-          return;
-        }
+        if ((await requireDocsMembership(reply, db, workspaceId, req.authUser.id)) === null) return;
         updatedBy = `user:${req.authUser.id}`;
       } else {
         await reply.code(401).send({ error: 'unauthorized' });
@@ -232,28 +234,17 @@ export function registerDocsRoutes(fastify: FastifyInstance, db: Db): void {
     async (req, reply) => {
       const { workspaceId, key } = req.params;
       let updatedBy: string;
-      let memberRole: 'owner' | 'admin' | 'collaborator' | 'viewer' | undefined;
+      let memberRole: WorkspaceRole | undefined;
 
       if (req.authDevice) {
         const device = getDevice(req);
+        if ((await requireDocsMembership(reply, db, workspaceId, device.userId)) === null) return;
         updatedBy = device.agentId ?? `device:${device.id}`;
       } else if (req.authUser) {
-        const member = await db
-          .select({ role: schema.workspaceMembers.role })
-          .from(schema.workspaceMembers)
-          .where(
-            and(
-              eq(schema.workspaceMembers.workspaceId, workspaceId),
-              eq(schema.workspaceMembers.userId, req.authUser.id),
-            ),
-          )
-          .get();
-        if (!member) {
-          await reply.code(403).send({ error: 'forbidden' });
-          return;
-        }
+        const role = await requireDocsMembership(reply, db, workspaceId, req.authUser.id);
+        if (role === null) return;
         updatedBy = `user:${req.authUser.id}`;
-        memberRole = member.role as 'owner' | 'admin' | 'collaborator' | 'viewer';
+        memberRole = role;
       } else {
         await reply.code(401).send({ error: 'unauthorized' });
         return;
