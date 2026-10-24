@@ -281,3 +281,252 @@ describe('cross-tenant: orchestrator device routes on another workspace', () => 
     expect(requeue.json()).toEqual({ requeued: 1 });
   });
 });
+
+describe('cross-tenant: task instructions', () => {
+  let hub: Hub;
+  let f: Fixture;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    f = await setupFixture(hub);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function instructionRows(taskId: string) {
+    return hub.db.select().from(schema.taskInstructions).where(eq(schema.taskInstructions.taskId, taskId));
+  }
+
+  async function postInstruction(headers: Record<string, string>, taskId: string) {
+    return hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/instructions`,
+      headers,
+      payload: { priority: 'stop', body: 'PRIVATE-INSTRUCTION' },
+    });
+  }
+
+  it('outsider user cannot send stop/redirect to another tenant\'s task (403, nothing inserted)', async () => {
+    for (const id of [f.wsTaskId, f.unscopedTaskId]) {
+      const res = await postInstruction({ cookie: f.outsiderCookie }, id);
+      expect(res.statusCode).toBe(403);
+      expect(await instructionRows(id)).toHaveLength(0);
+    }
+  });
+
+  it('workspace viewer cannot send instructions (403 insufficient_role)', async () => {
+    const { cookie } = await setupUser(hub, f.adminCookie, {
+      email: 'viewer@example.com',
+      workspaceId: f.workspaceId,
+      workspaceRole: 'viewer',
+    });
+    const res = await postInstruction({ cookie }, f.wsTaskId);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'insufficient_role' });
+  });
+
+  it('outsider user and outsider device cannot read or ack instructions (403)', async () => {
+    const created = await postInstruction({ cookie: f.adminCookie }, f.wsTaskId);
+    expect(created.statusCode).toBe(201);
+    const { id: instrId } = created.json() as { id: string };
+
+    for (const headers of [{ cookie: f.outsiderCookie }, bearer(f.outsiderWorkerToken)]) {
+      const list = await hub.fastify.inject({ method: 'GET', url: `/tasks/${f.wsTaskId}/instructions`, headers });
+      expect(list.statusCode).toBe(403);
+      expect(list.body).not.toContain('PRIVATE-INSTRUCTION');
+      const ack = await hub.fastify.inject({
+        method: 'POST',
+        url: `/tasks/${f.wsTaskId}/instructions/${instrId}/ack`,
+        headers,
+      });
+      expect(ack.statusCode).toBe(403);
+    }
+    const [row] = await instructionRows(f.wsTaskId);
+    expect(row?.acknowledgedAt).toBeNull();
+  });
+
+  it('owner sends, owner\'s worker reads and acks (positive control)', async () => {
+    const created = await postInstruction({ cookie: f.adminCookie }, f.unscopedTaskId);
+    expect(created.statusCode).toBe(201);
+    const { id: instrId } = created.json() as { id: string };
+    const list = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks/${f.unscopedTaskId}/instructions`,
+      headers: bearer(f.ownerWorkerToken),
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.body).toContain('PRIVATE-INSTRUCTION');
+    const ack = await hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${f.unscopedTaskId}/instructions/${instrId}/ack`,
+      headers: bearer(f.ownerWorkerToken),
+    });
+    expect(ack.statusCode).toBe(200);
+  });
+});
+
+describe('cross-tenant: task comments', () => {
+  let hub: Hub;
+  let f: Fixture;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    f = await setupFixture(hub);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function commentRows(taskId: string) {
+    return hub.db.select().from(schema.taskComments).where(eq(schema.taskComments.taskId, taskId));
+  }
+
+  async function postComment(headers: Record<string, string>, taskId: string, body = 'INJECTED-COMMENT') {
+    return hub.fastify.inject({
+      method: 'POST',
+      url: `/tasks/${taskId}/comments`,
+      headers,
+      payload: { body, authorType: 'dispatcher' },
+    });
+  }
+
+  it('outsider user and outsider FM cannot comment on another tenant\'s task (403, nothing inserted)', async () => {
+    for (const headers of [{ cookie: f.outsiderCookie }, bearer(f.outsiderFmToken)]) {
+      for (const id of [f.wsTaskId, f.unscopedTaskId]) {
+        const res = await postComment(headers, id);
+        expect(res.statusCode).toBe(403);
+        expect(await commentRows(id)).toHaveLength(0);
+      }
+    }
+  });
+
+  it('workspace viewer cannot comment (403 insufficient_role)', async () => {
+    const { cookie } = await setupUser(hub, f.adminCookie, {
+      email: 'viewer@example.com',
+      workspaceId: f.workspaceId,
+      workspaceRole: 'viewer',
+    });
+    const res = await postComment({ cookie }, f.wsTaskId);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: 'insufficient_role' });
+  });
+
+  it('outsider user and outsider device cannot read comments (403)', async () => {
+    expect((await postComment({ cookie: f.adminCookie }, f.wsTaskId, 'PRIVATE-COMMENT')).statusCode).toBe(201);
+    for (const headers of [{ cookie: f.outsiderCookie }, bearer(f.outsiderWorkerToken)]) {
+      const res = await hub.fastify.inject({ method: 'GET', url: `/tasks/${f.wsTaskId}/comments`, headers });
+      expect(res.statusCode).toBe(403);
+      expect(res.body).not.toContain('PRIVATE-COMMENT');
+    }
+  });
+
+  it('owner and owner\'s FM comment, owner\'s worker reads (positive control)', async () => {
+    expect((await postComment({ cookie: f.adminCookie }, f.wsTaskId, 'PRIVATE-COMMENT')).statusCode).toBe(201);
+    expect((await postComment(bearer(f.ownerFmToken), f.wsTaskId, 'FM-COMMENT')).statusCode).toBe(201);
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks/${f.wsTaskId}/comments`,
+      headers: bearer(f.ownerWorkerToken),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('PRIVATE-COMMENT');
+    expect(res.body).toContain('FM-COMMENT');
+  });
+});
+
+describe('cross-tenant: /ws event stream', () => {
+  type Socket = Awaited<ReturnType<Hub['fastify']['injectWS']>>;
+  interface Received {
+    name?: string;
+    error?: string;
+    payload?: { taskId?: string };
+  }
+
+  let hub: Hub;
+  let f: Fixture;
+  const open: Socket[] = [];
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    f = await setupFixture(hub);
+    await hub.fastify.ready();
+  });
+
+  afterEach(async () => {
+    for (const s of open.splice(0)) s.terminate();
+    await hub.close();
+  });
+
+  async function connect(token: string): Promise<{ messages: Received[]; closed: Promise<void> }> {
+    const messages: Received[] = [];
+    let onClose: () => void = () => {};
+    const closed = new Promise<void>((resolve) => {
+      onClose = resolve;
+    });
+    const socket = await hub.fastify.injectWS(`/ws?token=${encodeURIComponent(token)}`, {}, {
+      onInit: (ws) => {
+        ws.on('message', (data) => messages.push(JSON.parse(String(data)) as Received));
+        ws.on('close', () => onClose());
+      },
+    });
+    open.push(socket);
+    return { messages, closed };
+  }
+
+  async function until(predicate: () => boolean): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for websocket message');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  function taskEvents(messages: Received[]): string[] {
+    return messages.filter((m) => m.name === 'task.created').map((m) => m.payload?.taskId ?? '');
+  }
+
+  it('an outsider device receives only events for tasks its owner can see', async () => {
+    const owner = await connect(f.ownerWorkerToken);
+    const outsider = await connect(f.outsiderWorkerToken);
+
+    const wsRes = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${f.workspaceId}/tasks`,
+      headers: { cookie: f.adminCookie },
+      payload: { projectPrefix: 'ws', title: 'Second workspace task' },
+    });
+    const ownerWsTask = (wsRes.json() as { id: string }).id;
+    const ownerUnscoped = await createTask(hub, f.adminCookie, { projectPrefix: 'fl', title: 'Second unscoped' });
+    // The outsider's own task. Delivery is ordered per socket, so once this
+    // arrives every earlier event has already been filtered.
+    const outsiderTask = await createTask(hub, f.outsiderCookie, { projectPrefix: 'ot', title: 'Outsider task' });
+    // Same role for the owner's socket: its arrival means outsiderTask was filtered.
+    const ownerSentinel = await createTask(hub, f.adminCookie, { projectPrefix: 'fl', title: 'Sentinel' });
+
+    await until(() => taskEvents(outsider.messages).includes(outsiderTask));
+    expect(taskEvents(outsider.messages)).toEqual([outsiderTask]);
+
+    await until(() => taskEvents(owner.messages).includes(ownerSentinel));
+    expect(taskEvents(owner.messages)).toEqual([ownerWsTask, ownerUnscoped, ownerSentinel]);
+  });
+
+  it('a deregistered device token is rejected', async () => {
+    const devices = await hub.fastify.inject({ method: 'GET', url: '/devices', headers: { cookie: f.outsiderCookie } });
+    const { devices: list } = devices.json() as { devices: { id: string; name: string }[] };
+    const worker = list.find((d) => d.name === 'outsider-worker');
+    const del = await hub.fastify.inject({
+      method: 'DELETE',
+      url: `/devices/${worker?.id ?? ''}`,
+      headers: { cookie: f.outsiderCookie },
+    });
+    expect(del.statusCode).toBeLessThan(300);
+
+    const conn = await connect(f.outsiderWorkerToken);
+    await until(() => conn.messages.length > 0);
+    expect(conn.messages[0]).toEqual({ error: 'unauthorized' });
+    await conn.closed;
+  });
+});
