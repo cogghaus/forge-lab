@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid';
 import { schema } from '@forge-lab/core';
 import { createSession } from '../auth/sessions.js';
 import { hashPassword } from '../auth/password.js';
-import { TEST_HUB_CONFIG, setupAdmin, setupUser, registerDevice, createWorkspace } from '../test-utils.js';
+import { TEST_HUB_CONFIG, setupAdmin, setupUser, registerDevice, createWorkspace, createTask } from '../test-utils.js';
 
 
 describe('POST /devices', () => {
@@ -749,5 +749,92 @@ describe('PATCH /devices/:deviceId validation error verbosity (finding 6)', () =
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: 'invalid_input' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Follow-up to finding 3: agent memory on tasks with NO workspace. There is no
+// workspace to check, so the rule is ownership: an unscoped task belongs to the
+// user who created it (directly, or through one of their devices; phase tasks
+// created by 'system' inherit their root's owner). Only devices owned by that
+// user may read or write its memory.
+// ---------------------------------------------------------------------------
+
+describe('/devices/me/memory/:taskId on unscoped tasks', () => {
+  let hub: Hub;
+  let adminCookie: string;
+  let taskId: string;
+  let ownerDeviceToken: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie: adminCookie } = await setupAdmin(hub));
+    taskId = await createTask(hub, adminCookie, { projectPrefix: 'unsc', title: 'Unscoped task' });
+    ({ token: ownerDeviceToken } = await registerDevice(hub, adminCookie, 'owner-architect', {
+      agentId: 'architect',
+    }));
+    const putRes = await hub.fastify.inject({
+      method: 'PUT',
+      url: `/devices/me/memory/${taskId}`,
+      headers: { authorization: `Bearer ${ownerDeviceToken}` },
+      payload: { content: 'PRIVATE-UNSCOPED-MEMORY' },
+    });
+    expect(putRes.statusCode).toBe(204);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function outsiderArchitectToken(): Promise<string> {
+    const { cookie } = await setupUser(hub, adminCookie, { email: 'outsider@example.com' });
+    const { token } = await registerDevice(hub, cookie, 'outsider-architect', { agentId: 'architect' });
+    return token;
+  }
+
+  it('device of another user cannot read an unscoped task\'s memory (403)', async () => {
+    const token = await outsiderArchitectToken();
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/devices/me/memory/${taskId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).not.toContain('PRIVATE-UNSCOPED-MEMORY');
+  });
+
+  it('device of another user cannot overwrite an unscoped task\'s memory (403)', async () => {
+    const token = await outsiderArchitectToken();
+    const res = await hub.fastify.inject({
+      method: 'PUT',
+      url: `/devices/me/memory/${taskId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { content: 'POISONED' },
+    });
+    expect(res.statusCode).toBe(403);
+    const rows = await hub.db.select().from(schema.agentMemory);
+    expect(rows.map((r) => r.content)).toEqual(['PRIVATE-UNSCOPED-MEMORY']);
+  });
+
+  it('a task created by one of the owner\'s devices is reachable by the owner\'s other devices', async () => {
+    const { token: fmToken } = await registerDevice(hub, adminCookie, 'owner-fm', {
+      agentId: 'forge-master',
+      deviceType: 'orchestrator',
+    });
+    const createRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${fmToken}` },
+      payload: { projectPrefix: 'unsc', title: 'Device-created' },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const deviceTaskId = (createRes.json() as { id: string }).id;
+    const res = await hub.fastify.inject({
+      method: 'PUT',
+      url: `/devices/me/memory/${deviceTaskId}`,
+      headers: { authorization: `Bearer ${ownerDeviceToken}` },
+      payload: { content: 'owner note' },
+    });
+    expect(res.statusCode).toBe(204);
   });
 });
