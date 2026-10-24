@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { and, eq, desc, asc, inArray, isNull, isNotNull, lt, or, count, gte, max, sql } from 'drizzle-orm';
+import { and, eq, desc, asc, inArray, isNull, isNotNull, lt, or, count, gte, max, sql, type SQL } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -22,6 +22,7 @@ import {
   getUser,
   findWorkspaceMembership,
 } from '../auth/middleware.js';
+import { createdByKeysForUser } from '../auth/task-owner.js';
 import type { EventBus } from '../events/bus.js';
 import { checkPolicy } from '../policy/engine.js';
 import type { PolicyPrincipal } from '../policy/engine.js';
@@ -745,11 +746,10 @@ export function registerTaskRoutes(
     await reply.code(201).send({ id });
   });
 
-  // Device-accessible flat task list. Without workspaceId returns unscoped tasks (null); with
-  // workspaceId returns that workspace's tasks. Intentionally does NOT verify workspace membership
-  // because daemons authenticate as devices, not workspace members. Callers must supply the correct
-  // workspaceId — a device that supplies an arbitrary workspaceId can read those task titles. This
-  // is acceptable: device tokens are provisioned by workspace owners and are semi-trusted.
+  // Device-accessible flat task list. With workspaceId returns that workspace's tasks, and the
+  // caller (user, or device owner) must be a member. Without workspaceId returns only the unscoped
+  // tasks the caller owns (auth/task-owner.ts): created by the user or one of their devices, plus
+  // system phase tasks under such a root.
   //
   // Sequenced root tasks (sequenceSpec IS NOT NULL AND phaseIndex IS NULL) are excluded from this
   // endpoint to prevent FM from claiming them — sequenced roots advance only via phase completion,
@@ -760,9 +760,31 @@ export function registerTaskRoutes(
       return;
     }
     const { workspaceId } = req.query;
-    const scopeClause = workspaceId
-      ? eq(schema.tasks.workspaceId, workspaceId)
-      : isNull(schema.tasks.workspaceId);
+    let scopeClause: SQL | undefined;
+    if (workspaceId) {
+      const denied = await authorizeCallerForWorkspace(db, req, workspaceId);
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
+      scopeClause = eq(schema.tasks.workspaceId, workspaceId);
+    } else {
+      const ownerKeys = await createdByKeysForUser(db, callerUserId(req) ?? '');
+      const ownedRoots = await db
+        .select({ id: schema.tasks.id })
+        .from(schema.tasks)
+        .where(and(isNull(schema.tasks.workspaceId), inArray(schema.tasks.createdBy, ownerKeys)));
+      const ownedRootIds = ownedRoots.map((r) => r.id);
+      scopeClause = and(
+        isNull(schema.tasks.workspaceId),
+        ownedRootIds.length > 0
+          ? or(
+              inArray(schema.tasks.createdBy, ownerKeys),
+              and(eq(schema.tasks.createdBy, 'system'), inArray(schema.tasks.parentId, ownedRootIds)),
+            )
+          : inArray(schema.tasks.createdBy, ownerKeys),
+      );
+    }
     // Exclude sequenced roots: only return tasks that have no sequenceSpec, OR are phase tasks.
     // This matches design doc Section 6.6: filter AND (sequence_spec IS NULL OR phase_index IS NOT NULL).
     const seqFilter = or(isNull(schema.tasks.sequenceSpec), isNotNull(schema.tasks.phaseIndex));
