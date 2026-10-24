@@ -11,7 +11,6 @@ import {
   formatPhaseTaskId,
   rankAtLeast,
   schema,
-  type WorkspaceRole,
 } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import {
@@ -20,9 +19,9 @@ import {
   requireWorkspaceMember,
   getWorkspace,
   getUser,
-  findWorkspaceMembership,
 } from '../auth/middleware.js';
 import { createdByKeysForUser } from '../auth/task-owner.js';
+import { authorizeCallerForWorkspace, callerUserId } from '../auth/access.js';
 import type { EventBus } from '../events/bus.js';
 import { checkPolicy } from '../policy/engine.js';
 import type { PolicyPrincipal } from '../policy/engine.js';
@@ -625,35 +624,6 @@ async function unblockSequencedTask(
     }
     throw err;
   }
-}
-
-/**
- * The user a flat-route caller acts for: the session user, or a device's
- * owning user. Devices are not workspace members themselves, and any user can
- * register any device type, so a device is authorized through its owner.
- */
-function callerUserId(req: FastifyRequest): string | null {
-  return req.authUser?.id ?? req.authDevice?.userId ?? null;
-}
-
-/**
- * Authorize a flat-route caller against a workspace. Returns the error reply
- * to send, or null when the caller's user is a member of the live workspace
- * at `minRole` or above.
- */
-async function authorizeCallerForWorkspace(
-  db: Db,
-  req: FastifyRequest,
-  workspaceId: string,
-  minRole?: WorkspaceRole,
-): Promise<{ code: number; error: string } | null> {
-  const userId = callerUserId(req);
-  if (userId === null) return { code: 401, error: 'unauthorized' };
-  const membership = await findWorkspaceMembership(db, workspaceId, userId);
-  if (!membership) return { code: 403, error: 'forbidden' };
-  if (membership.workspaceStatus === 'deleted') return { code: 404, error: 'not_found' };
-  if (minRole && !rankAtLeast(membership.role, minRole)) return { code: 403, error: 'insufficient_role' };
-  return null;
 }
 
 export interface TaskRouteOptions {
