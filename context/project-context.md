@@ -1,5 +1,7 @@
 # Project Context
 
+> **Historical record.** This project is retired. This file was loaded into agent prompts during development and refers to private notes and documents that are not part of this repository. It describes the project as it was, not current guidance.
+
 **This file is the single source of truth for all forge-lab agents working on forge-lab.**
 
 Every agent loads this file at session start. Update this when architecture or conventions change. The authoritative architectural decisions live in the `notez` MCP under the folder named `forge-lab` — when this file and notez disagree, notez wins.
