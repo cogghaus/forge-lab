@@ -13,6 +13,7 @@ import {
   findWorkspaceMembership,
 } from '../auth/middleware.js';
 import { generateToken, hashToken } from '../auth/tokens.js';
+import { resolveTaskOwnerUserId } from '../auth/task-owner.js';
 import { TokenBucketStore, createTokenBucketPreHandler } from '../rate-limit/index.js';
 import { checkPolicy } from '../policy/engine.js';
 import { summarizeZodIssues } from '../utils/validation.js';
@@ -95,7 +96,12 @@ async function authorizeMemoryAccess(
     .where(eq(schema.tasks.id, taskId))
     .get();
   if (!task) return { ok: false, code: 404, error: 'task_not_found' };
-  if (task.workspaceId === null) return { ok: true, workspaceId: '' };
+  if (task.workspaceId === null) {
+    // No workspace to check: only devices of the task's owner (see task-owner.ts).
+    const ownerId = await resolveTaskOwnerUserId(db, taskId);
+    if (ownerId !== device.userId) return { ok: false, code: 403, error: 'forbidden' };
+    return { ok: true, workspaceId: '' };
+  }
 
   const membership = await findWorkspaceMembership(db, task.workspaceId, device.userId);
   if (!membership) return { ok: false, code: 403, error: 'forbidden' };
