@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
 import { AgentInstanceStatusSchema, schema } from '@forge-lab/core';
@@ -51,12 +51,25 @@ export function registerAgentInstanceRoutes(fastify: FastifyInstance, db: Db): v
     },
   );
 
-  // User sees all; device sees only its own
+  // Admin sees all; a user sees instances on their own devices; a device sees
+  // only its own
   fastify.get('/agent-instances', { preHandler: requireUserOrDevice }, async (req) => {
-    if (req.authUser) {
+    if (req.authUser?.role === 'admin') {
       const instances = await db
         .select()
         .from(schema.agentInstances)
+        .orderBy(schema.agentInstances.startedAt);
+      return { instances };
+    }
+    if (req.authUser) {
+      const ownDevices = db
+        .select({ id: schema.devices.id })
+        .from(schema.devices)
+        .where(eq(schema.devices.userId, req.authUser.id));
+      const instances = await db
+        .select()
+        .from(schema.agentInstances)
+        .where(inArray(schema.agentInstances.deviceId, ownDevices))
         .orderBy(schema.agentInstances.startedAt);
       return { instances };
     }
@@ -81,7 +94,19 @@ export function registerAgentInstanceRoutes(fastify: FastifyInstance, db: Db): v
         await reply.code(404).send({ error: 'not_found' });
         return;
       }
+      if (req.authUser?.role === 'admin') {
+        return instance;
+      }
       if (req.authUser) {
+        const device = await db
+          .select({ userId: schema.devices.userId })
+          .from(schema.devices)
+          .where(eq(schema.devices.id, instance.deviceId))
+          .get();
+        if (device?.userId !== req.authUser.id) {
+          await reply.code(404).send({ error: 'not_found' });
+          return;
+        }
         return instance;
       }
       // Device can only see its own instances
