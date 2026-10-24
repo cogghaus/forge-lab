@@ -4265,3 +4265,93 @@ describe('flat POST /tasks workspace authorization', () => {
     expect(await workspaceTaskCount()).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Flat GET /tasks scoping (finding 3 follow-up; replaces the old "device tokens
+// are semi-trusted" rationale, since any user can register a device). With
+// workspaceId the caller (user, or device owner) must be a member. Without it
+// the caller sees only unscoped tasks it owns (see auth/task-owner.ts).
+// ---------------------------------------------------------------------------
+
+describe('flat GET /tasks authorization', () => {
+  let hub: Hub;
+  let adminCookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie: adminCookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, adminCookie, { slug: 'flat-get-ws' });
+    await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/tasks`,
+      headers: { cookie: adminCookie },
+      payload: { projectPrefix: 'ws', title: 'PRIVATE-WS-TASK' },
+    });
+    await createTask(hub, adminCookie, { projectPrefix: 'fl', title: 'PRIVATE-UNSCOPED-TASK' });
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function outsider(): Promise<{ cookie: string; token: string }> {
+    const { cookie } = await setupUser(hub, adminCookie, { email: 'outsider@example.com' });
+    const { token } = await registerDevice(hub, cookie, 'outsider-fm', { deviceType: 'orchestrator' });
+    return { cookie, token };
+  }
+
+  it('non-member user cannot list another workspace\'s tasks (403)', async () => {
+    const { cookie } = await outsider();
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks?workspaceId=${workspaceId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).not.toContain('PRIVATE-WS-TASK');
+  });
+
+  it('device owned by a non-member cannot list another workspace\'s tasks (403)', async () => {
+    const { token } = await outsider();
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks?workspaceId=${workspaceId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).not.toContain('PRIVATE-WS-TASK');
+  });
+
+  it('device owned by a member can list the workspace\'s tasks (positive control)', async () => {
+    const { token } = await registerDevice(hub, adminCookie, 'owner-fm', { deviceType: 'orchestrator' });
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/tasks?workspaceId=${workspaceId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('PRIVATE-WS-TASK');
+  });
+
+  it('unscoped listing hides other users\' unscoped tasks from users and devices', async () => {
+    const { cookie, token } = await outsider();
+    for (const headers of [{ cookie }, { authorization: `Bearer ${token}` }]) {
+      const res = await hub.fastify.inject({ method: 'GET', url: '/tasks', headers });
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { tasks: unknown[] }).tasks).toHaveLength(0);
+    }
+  });
+
+  it('unscoped listing shows the owner\'s unscoped tasks to the owner\'s devices', async () => {
+    const { token } = await registerDevice(hub, adminCookie, 'owner-worker', { agentId: 'architect' });
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const { tasks } = res.json() as { tasks: { title: string }[] };
+    expect(tasks.map((t) => t.title)).toEqual(['PRIVATE-UNSCOPED-TASK']);
+  });
+});
