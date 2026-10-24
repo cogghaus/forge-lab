@@ -17,10 +17,13 @@ FROM node:20-slim AS runner
 RUN addgroup --system --gid 1001 forge && adduser --system --uid 1001 forge
 WORKDIR /app
 ENV NODE_ENV=production
-# Copy built output and package.json, then npm-install prod deps without pnpm symlinks
+# Copy built output and package.json, then npm-install prod deps without pnpm symlinks.
+# devDependencies are stripped first: npm rejects the workspace: protocol
+# (@forge-lab/hub, used only by tests) even when --omit=dev would skip it.
 COPY --from=builder /repo/packages/forge-mcp/dist ./dist
 COPY --from=builder /repo/packages/forge-mcp/package.json ./package.json
-RUN npm install --omit=dev --no-fund --no-audit && chown -R forge:forge /app
+RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));delete p.devDependencies;fs.writeFileSync('package.json',JSON.stringify(p,null,2))" \
+  && npm install --omit=dev --no-fund --no-audit && chown -R forge:forge /app
 USER forge
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
