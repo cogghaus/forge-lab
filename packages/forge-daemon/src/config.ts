@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { envBoolean } from '@forge-lab/core';
 
 const ConfigSchema = z.object({
   hubUrl: z.string().url(),
@@ -11,19 +12,9 @@ const ConfigSchema = z.object({
   // C3: allow operators to disable --dangerously-skip-permissions via env.
   // Defaults to true since background agents run unattended with no human
   // to approve tool calls. Set FORGE_DAEMON_SKIP_PERMISSIONS=false to disable.
-  // z.coerce.boolean() is NOT used here: Boolean('false') === true (non-empty
-  // string is truthy). Instead we preprocess so 'false'/'0'/'' → false and
-  // undefined/empty → true (the safe default for unattended daemon use).
-  // An explicitly empty env var (FORGE_DAEMON_SKIP_PERMISSIONS="") is treated
-  // as "not set" and defaults to true, not false.
-  skipPermissions: z.preprocess(
-    (val) => {
-      if (val === undefined || val === '') return true;
-      if (val === 'false' || val === '0') return false;
-      return Boolean(val);
-    },
-    z.boolean(),
-  ),
+  // Strict parsing (envBoolean): only 1/true/0/false; unset or empty takes the
+  // default; anything else (e.g. 'no') fails at boot instead of meaning true.
+  skipPermissions: envBoolean(true),
   // Optional workspace scope. When set, daemon only processes tasks in this
   // workspace. When unset, daemon processes tasks across all workspaces.
   workspaceId: z.string().optional(),
@@ -34,15 +25,8 @@ const ConfigSchema = z.object({
   // When true, daemon operates as the FM orchestrator (dispatcher mode):
   // polls pending_dispatcher_action tasks, spawns FM agent, does not claim
   // worker tasks. Requires workspaceId to be set.
-  // Same boolean-preprocess pattern as skipPermissions (avoids Boolean('false')===true).
-  dispatcherMode: z.preprocess(
-    (val) => {
-      if (val === undefined || val === '') return false;
-      if (val === 'false' || val === '0') return false;
-      return Boolean(val);
-    },
-    z.boolean(),
-  ),
+  // Strict parsing, same as skipPermissions.
+  dispatcherMode: envBoolean(false),
   // Stale assignment TTL in minutes used by the dispatcher to requeue tasks
   // that have been assigned but not claimed within this window. Default: 30.
   staleTtlMinutes: z.coerce.number().int().min(1).optional(),

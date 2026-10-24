@@ -7,3 +7,4 @@ export * from './types/events.js';
 export * from './types/workspace.js';
 export * from './runtime/agent-runtime.js';
 export * as schema from './schema/index.js';
+export * from './config/env-boolean.js';
