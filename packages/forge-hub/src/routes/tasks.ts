@@ -21,7 +21,7 @@ import {
   getUser,
 } from '../auth/middleware.js';
 import { createdByKeysForUser } from '../auth/task-owner.js';
-import { authorizeCallerForWorkspace, callerUserId } from '../auth/access.js';
+import { authorizeCallerForTask, authorizeCallerForWorkspace, callerUserId } from '../auth/access.js';
 import type { EventBus } from '../events/bus.js';
 import { checkPolicy } from '../policy/engine.js';
 import type { PolicyPrincipal } from '../policy/engine.js';
@@ -853,6 +853,11 @@ export function registerTaskRoutes(
       await reply.code(404).send({ error: 'not_found' });
       return;
     }
+    const denied = await authorizeCallerForTask(db, req, task);
+    if (denied) {
+      await reply.code(denied.code).send({ error: denied.error });
+      return;
+    }
     return task;
   });
 
@@ -862,6 +867,20 @@ export function registerTaskRoutes(
       return;
     }
     const id = TaskIdSchema.parse(req.params.id);
+    const task = await db
+      .select({ id: schema.tasks.id, workspaceId: schema.tasks.workspaceId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    if (!task) {
+      await reply.code(404).send({ error: 'not_found' });
+      return;
+    }
+    const denied = await authorizeCallerForTask(db, req, task);
+    if (denied) {
+      await reply.code(denied.code).send({ error: denied.error });
+      return;
+    }
     const history = await db
       .select()
       .from(schema.taskHistory)
@@ -897,12 +916,19 @@ export function registerTaskRoutes(
       }
 
       const existing = await db
-        .select({ id: schema.tasks.id })
+        .select({ id: schema.tasks.id, workspaceId: schema.tasks.workspaceId })
         .from(schema.tasks)
         .where(eq(schema.tasks.id, id))
         .get();
       if (!existing) {
         await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+      // Claiming starts work on the task, so the device's owner needs write
+      // access: collaborator in the workspace, or owner of an unscoped task.
+      const denied = await authorizeCallerForTask(db, req, existing, 'collaborator');
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
         return;
       }
 
