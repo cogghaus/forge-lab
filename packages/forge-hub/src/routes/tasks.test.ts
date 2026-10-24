@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { createHub, type Hub } from '../app.js';
 import { schema } from '@forge-lab/core';
-import { TEST_HUB_CONFIG, setupAdmin, registerDevice, createTask, createWorkspace } from '../test-utils.js';
+import { TEST_HUB_CONFIG, setupAdmin, setupUser, registerDevice, createTask, createWorkspace } from '../test-utils.js';
 import { sweepExpiredLeases } from './tasks.js';
 
 describe('/workspaces/:workspaceId/tasks', () => {
@@ -4181,5 +4181,87 @@ describe('terminal transition idempotency (M3 issue 14)', () => {
     expect(res.statusCode).toBeLessThan(500);
     expect(res.statusCode).toBe(409);
     expect((res.json() as { error: string }).error).toBe('task_failed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Flat POST /tasks with a workspaceId (found while fixing the finding 3
+// follow-ups). The flat route accepts workspaceId so FM can file subtasks, but
+// any user can mint a device token, so the caller (user, or device owner) must
+// hold collaborator rank in that workspace, matching
+// POST /workspaces/:workspaceId/tasks. Otherwise anyone could queue work for
+// another workspace's agents.
+// ---------------------------------------------------------------------------
+
+describe('flat POST /tasks workspace authorization', () => {
+  let hub: Hub;
+  let adminCookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    ({ cookie: adminCookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, adminCookie, { slug: 'flat-post-ws' });
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function workspaceTaskCount(): Promise<number> {
+    const rows = await hub.db.select().from(schema.tasks).where(eq(schema.tasks.workspaceId, workspaceId));
+    return rows.length;
+  }
+
+  it('non-member user cannot create a task in another workspace (403, nothing inserted)', async () => {
+    const { cookie } = await setupUser(hub, adminCookie, { email: 'outsider@example.com' });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'inj', title: 'Injected', workspaceId },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(await workspaceTaskCount()).toBe(0);
+  });
+
+  it('device owned by a non-member cannot create a task in another workspace (403)', async () => {
+    const { cookie } = await setupUser(hub, adminCookie, { email: 'outsider@example.com' });
+    const { token } = await registerDevice(hub, cookie, 'outsider-fm', { deviceType: 'orchestrator' });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { projectPrefix: 'inj', title: 'Injected', workspaceId },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(await workspaceTaskCount()).toBe(0);
+  });
+
+  it('workspace viewer cannot create a task through the flat route (403)', async () => {
+    const { cookie } = await setupUser(hub, adminCookie, {
+      email: 'viewer@example.com',
+      workspaceId,
+      workspaceRole: 'viewer',
+    });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { cookie },
+      payload: { projectPrefix: 'inj', title: 'Injected', workspaceId },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('device owned by a workspace owner can create a task there (positive control)', async () => {
+    const { token } = await registerDevice(hub, adminCookie, 'owner-fm', { deviceType: 'orchestrator' });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: '/tasks',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { projectPrefix: 'sub', title: 'Subtask', workspaceId },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(await workspaceTaskCount()).toBe(1);
   });
 });
