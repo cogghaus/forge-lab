@@ -193,3 +193,91 @@ describe('cross-tenant: POST /tasks/:id/claim', () => {
     }
   });
 });
+
+describe('cross-tenant: orchestrator device routes on another workspace', () => {
+  let hub: Hub;
+  let f: Fixture;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: TEST_HUB_CONFIG });
+    f = await setupFixture(hub);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function makeStale(): Promise<void> {
+    await hub.db
+      .update(schema.tasks)
+      .set({ status: 'assigned', assignedAgentId: 'architect', assignedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) })
+      .where(eq(schema.tasks.id, f.wsTaskId));
+  }
+
+  it('outsider FM cannot read the workspace context bundle (403)', async () => {
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${f.workspaceId}/context`,
+      headers: bearer(f.outsiderFmToken),
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('outsider FM cannot assign a task in the workspace (403, task untouched)', async () => {
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${f.workspaceId}/tasks/${f.wsTaskId}/assign`,
+      headers: bearer(f.outsiderFmToken),
+      payload: { agentId: 'architect' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect((await taskRow(hub, f.wsTaskId))?.status).toBe('pending_agent');
+  });
+
+  it('outsider FM cannot list stale assigned tasks (403)', async () => {
+    await makeStale();
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${f.workspaceId}/tasks/stale-assigned`,
+      headers: bearer(f.outsiderFmToken),
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).not.toContain('PRIVATE-WS-TASK');
+  });
+
+  it('outsider FM cannot requeue stale tasks (403, task untouched)', async () => {
+    await makeStale();
+    for (const path of ['stale-assigned/requeue', 'stale-phase/requeue']) {
+      const res = await hub.fastify.inject({
+        method: 'POST',
+        url: `/workspaces/${f.workspaceId}/tasks/${path}`,
+        headers: bearer(f.outsiderFmToken),
+      });
+      expect(res.statusCode).toBe(403);
+    }
+    expect((await taskRow(hub, f.wsTaskId))?.status).toBe('assigned');
+  });
+
+  it('owner\'s FM reads context, assigns and requeues (positive control)', async () => {
+    const ctx = await hub.fastify.inject({
+      method: 'GET',
+      url: `/workspaces/${f.workspaceId}/context`,
+      headers: bearer(f.ownerFmToken),
+    });
+    expect(ctx.statusCode).toBe(200);
+    const assign = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${f.workspaceId}/tasks/${f.wsTaskId}/assign`,
+      headers: bearer(f.ownerFmToken),
+      payload: { agentId: 'architect' },
+    });
+    expect(assign.statusCode).toBe(200);
+    await makeStale();
+    const requeue = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${f.workspaceId}/tasks/stale-assigned/requeue`,
+      headers: bearer(f.ownerFmToken),
+    });
+    expect(requeue.json()).toEqual({ requeued: 1 });
+  });
+});
