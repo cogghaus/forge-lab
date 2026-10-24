@@ -11,9 +11,17 @@ import {
   formatPhaseTaskId,
   rankAtLeast,
   schema,
+  type WorkspaceRole,
 } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
-import { requireDevice, getDevice, requireWorkspaceMember, getWorkspace, getUser } from '../auth/middleware.js';
+import {
+  requireDevice,
+  getDevice,
+  requireWorkspaceMember,
+  getWorkspace,
+  getUser,
+  findWorkspaceMembership,
+} from '../auth/middleware.js';
 import type { EventBus } from '../events/bus.js';
 import { checkPolicy } from '../policy/engine.js';
 import type { PolicyPrincipal } from '../policy/engine.js';
@@ -618,6 +626,35 @@ async function unblockSequencedTask(
   }
 }
 
+/**
+ * The user a flat-route caller acts for: the session user, or a device's
+ * owning user. Devices are not workspace members themselves, and any user can
+ * register any device type, so a device is authorized through its owner.
+ */
+function callerUserId(req: FastifyRequest): string | null {
+  return req.authUser?.id ?? req.authDevice?.userId ?? null;
+}
+
+/**
+ * Authorize a flat-route caller against a workspace. Returns the error reply
+ * to send, or null when the caller's user is a member of the live workspace
+ * at `minRole` or above.
+ */
+async function authorizeCallerForWorkspace(
+  db: Db,
+  req: FastifyRequest,
+  workspaceId: string,
+  minRole?: WorkspaceRole,
+): Promise<{ code: number; error: string } | null> {
+  const userId = callerUserId(req);
+  if (userId === null) return { code: 401, error: 'unauthorized' };
+  const membership = await findWorkspaceMembership(db, workspaceId, userId);
+  if (!membership) return { code: 403, error: 'forbidden' };
+  if (membership.workspaceStatus === 'deleted') return { code: 404, error: 'not_found' };
+  if (minRole && !rankAtLeast(membership.role, minRole)) return { code: 403, error: 'insufficient_role' };
+  return null;
+}
+
 export interface TaskRouteOptions {
   /** In_progress claim lease TTL in seconds. See config.ts resolveTaskLeaseSeconds. */
   leaseTtlSeconds: number;
@@ -638,6 +675,16 @@ export function registerTaskRoutes(
       return;
     }
     const body = CreateTaskInputSchema.parse(req.body);
+    // A supplied workspaceId needs collaborator rank, as POST
+    // /workspaces/:workspaceId/tasks does; otherwise any caller could queue
+    // work for another workspace's agents.
+    if (body.workspaceId != null) {
+      const denied = await authorizeCallerForWorkspace(db, req, body.workspaceId, 'collaborator');
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
+    }
     const maxSeq = await getMaxRootSeq(db, body.projectPrefix);
     const id = formatTaskId(body.projectPrefix, maxSeq + 1);
     const createdBy = user ? `user:${user.id}` : `device:${device!.id}`;
@@ -669,9 +716,8 @@ export function registerTaskRoutes(
       priority: body.priority ?? 'normal',
       goalId: body.goalId || null,
       parentId,
-      // Devices may supply workspaceId to associate subtasks with a workspace.
-      // Device tokens are provisioned by workspace owners and are semi-trusted
-      // (same rationale as GET /tasks?workspaceId= above).
+      // Devices may supply workspaceId to associate subtasks with a workspace
+      // (authorized against the device owner's membership above).
       workspaceId: body.workspaceId ?? null,
       // Reactive agents (e.g. Scribe) self-create follow-up tasks pre-assigned
       // to themselves so only their daemon claims them.
