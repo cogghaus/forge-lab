@@ -116,6 +116,19 @@ export function registerAgentRoutes(fastify: FastifyInstance, db: Db): void {
         await reply.code(404).send({ error: 'not_found' });
         return;
       }
+      // Global agents are readable by any user (as GET /agents). A
+      // workspace-scoped agent and its personality need membership, any role.
+      if (agent.workspaceId !== null) {
+        const membership = await findWorkspaceMembership(db, agent.workspaceId, getUser(req).id);
+        if (!membership) {
+          await reply.code(403).send({ error: 'forbidden' });
+          return;
+        }
+        if (membership.workspaceStatus === 'deleted') {
+          await reply.code(404).send({ error: 'not_found' });
+          return;
+        }
+      }
       return agent;
     },
   );
