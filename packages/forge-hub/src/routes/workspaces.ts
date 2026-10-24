@@ -262,10 +262,9 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
   );
 
   // ---------------------------------------------------------------------------
-  // Dispatcher workspace enumeration — returns all active workspace IDs.
-  // Orchestrator-device-only (Heimdall workspace:list).
-  // ADR-004 single fleet (scope=all): FM enumerates every active workspace
-  // regardless of which user owns it.
+  // Dispatcher workspace enumeration: the active workspaces the device's owner
+  // is a member of. Orchestrator-device-only (Heimdall workspace:list).
+  // ADR-004 single fleet (scope=all): FM serves every membership of its owner.
   // ---------------------------------------------------------------------------
 
   fastify.get(
@@ -291,6 +290,13 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
       const rows = await db
         .select({ id: schema.workspaces.id })
         .from(schema.workspaces)
+        .innerJoin(
+          schema.workspaceMembers,
+          and(
+            eq(schema.workspaceMembers.workspaceId, schema.workspaces.id),
+            eq(schema.workspaceMembers.userId, device.userId),
+          ),
+        )
         .where(eq(schema.workspaces.status, 'active'));
       return rows;
     },
