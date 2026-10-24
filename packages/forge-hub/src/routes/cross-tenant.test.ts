@@ -529,4 +529,19 @@ describe('cross-tenant: /ws event stream', () => {
     expect(conn.messages[0]).toEqual({ error: 'unauthorized' });
     await conn.closed;
   });
+
+  it('deregistering a connected device ends its stream', async () => {
+    const devices = await hub.fastify.inject({ method: 'GET', url: '/devices', headers: { cookie: f.adminCookie } });
+    const { devices: list } = devices.json() as { devices: { id: string; name: string }[] };
+    const worker = list.find((d) => d.name === 'owner-worker');
+    const conn = await connect(f.ownerWorkerToken);
+    await until(() => conn.messages.length > 0);
+
+    await hub.fastify.inject({ method: 'DELETE', url: `/devices/${worker?.id ?? ''}`, headers: { cookie: f.adminCookie } });
+    await createTask(hub, f.adminCookie, { projectPrefix: 'fl', title: 'After deregister' });
+
+    await conn.closed;
+    expect(taskEvents(conn.messages)).toEqual([]);
+  });
 });
+
