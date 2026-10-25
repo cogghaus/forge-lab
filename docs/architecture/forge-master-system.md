@@ -250,7 +250,7 @@ The system doesn't learn in the ML sense. It **accumulates context**. FM on day 
 
 ## Hub Endpoints Reference
 
-### New endpoints (not yet implemented)
+### New endpoints (as planned; all shipped, some at different paths, see `packages/forge-hub/src/routes`)
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|

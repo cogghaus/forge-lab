@@ -1,7 +1,7 @@
 # Heimdall Policy Engine
 
 **Date**: 2026-05-27
-**Status**: Draft
+**Status**: Partially implemented, then retired with the project. Phases 1-3 shipped (rule engine, database-backed rules, audit trail). Unlike this design, the shipped engine fails open when database rules cannot load, and device principals carry no workspace membership, so tenancy is enforced by explicit checks in each route instead. See the README's Lessons section.
 **Authors**: Aegis, Architect
 **Reviewed-by**: TBD
 **Supersedes**: ADR-001 (Heimdall placeholder — unscoped)

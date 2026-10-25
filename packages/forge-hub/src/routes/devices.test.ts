@@ -644,7 +644,7 @@ describe('POST /devices/:deviceId/rotate-token', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Security finding 3 (NEXT-UP.md): cross-workspace agent memory. agentId is
+// Security finding 3 (docs/security-review.md): cross-workspace agent memory. agentId is
 // often a shared built-in role (e.g. 'architect'), so (agentId, workspaceId)
 // is a partition key, not an authorization boundary. The device's owning user
 // must be a member of the task's workspace before agentMemory is touched.
@@ -725,7 +725,7 @@ describe('/devices/me/memory/:taskId workspace isolation (finding 3)', () => {
   });
 });
 
-// Security finding 6 (NEXT-UP.md): validation failures must not echo Zod issues.
+// Security finding 6 (docs/security-review.md): validation failures must not echo Zod issues.
 describe('PATCH /devices/:deviceId validation error verbosity (finding 6)', () => {
   let hub: Hub;
   let cookie: string;

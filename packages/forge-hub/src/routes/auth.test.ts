@@ -655,7 +655,7 @@ describe('Session management (/auth/sessions)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Security finding 6 (NEXT-UP.md): login user-enumeration timing oracle and
+// Security finding 6 (docs/security-review.md): login user-enumeration timing oracle and
 // verbose validation errors. An unknown email must still pay for one bcrypt
 // compare at the configured cost, and 400s must not echo Zod issues.
 // ---------------------------------------------------------------------------

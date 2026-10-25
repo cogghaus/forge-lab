@@ -374,9 +374,12 @@ shows the full history timeline and streams the agent log over SSE.
   of their working directory; a "failed" status with a legitimate-looking
   artifact in the wrong place is a done-file path bug, not necessarily a
   broken agent run.
-- **A task sits in `in_progress` forever:** there is no automatic
-  reclaim for a daemon that crashes mid-task. Cancel it manually
-  (`POST /tasks/:id/cancel` or the dashboard's cancel action) and retry.
+- **A task sits in `in_progress` after its daemon crashed:** the hub's
+  reclaim sweep returns it to the queue once its lease expires
+  (`FORGE_HUB_TASK_LEASE_SECONDS`, default 30 minutes). After
+  `FORGE_HUB_TASK_MAX_RECLAIMS` reclaims (default 3) it fails the task
+  instead. See `docs/design/m3-reliability.md`. To recover sooner, cancel
+  it from the dashboard and retry.
 
 ---
 

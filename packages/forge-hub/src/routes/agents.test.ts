@@ -329,7 +329,7 @@ describe('/agents routes', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Security finding 2 (NEXT-UP.md): global agents (workspaceId IS NULL) are
+// Security finding 2 (docs/security-review.md): global agents (workspaceId IS NULL) are
 // shared across workspaces, so create/update/delete is admin-only. The same
 // /agents/:id handlers also reach workspace-scoped agents, which are gated on
 // workspace membership at collaborator rank (matching POST

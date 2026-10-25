@@ -662,7 +662,7 @@ describe('/workspaces/:workspaceId/docs', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Security finding 1 (NEXT-UP.md): IDOR on workspace docs reads. Both GETs
+// Security finding 1 (docs/security-review.md): IDOR on workspace docs reads. Both GETs
 // must enforce workspace membership, for users directly and for orchestrator
 // devices via the device's owning user (any user can register an orchestrator
 // device, so the device path is not a trust boundary on its own).

@@ -1,5 +1,7 @@
 # Project Architecture
 
+> **Historical record.** This project is retired. This file was loaded into agent prompts during development and refers to private notes and documents that are not part of this repository. It describes the project as it was, not current guidance.
+
 This file records the architectural decisions and guardrails that apply to forge-lab specifically. It complements `context/project-context.md` (which contains tech stack and conventions) by focusing on *why* forge-lab is shaped the way it is.
 
 **Source of truth:** the notez folder named `forge-lab`, especially the note titled "forge-lab: Architecture Decisions (SETTLED)". When this file and notez disagree, notez wins. Update this file when a decision is settled in notez so agents can read it without MCP access.
