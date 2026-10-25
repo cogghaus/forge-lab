@@ -11,7 +11,6 @@ import {
   formatPhaseTaskId,
   rankAtLeast,
   schema,
-  type WorkspaceRole,
 } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import {
@@ -20,9 +19,14 @@ import {
   requireWorkspaceMember,
   getWorkspace,
   getUser,
-  findWorkspaceMembership,
 } from '../auth/middleware.js';
 import { createdByKeysForUser } from '../auth/task-owner.js';
+import {
+  authorizeCallerForTask,
+  authorizeCallerForWorkspace,
+  authorizeUserForWorkspace,
+  callerUserId,
+} from '../auth/access.js';
 import type { EventBus } from '../events/bus.js';
 import { checkPolicy } from '../policy/engine.js';
 import type { PolicyPrincipal } from '../policy/engine.js';
@@ -627,35 +631,6 @@ async function unblockSequencedTask(
   }
 }
 
-/**
- * The user a flat-route caller acts for: the session user, or a device's
- * owning user. Devices are not workspace members themselves, and any user can
- * register any device type, so a device is authorized through its owner.
- */
-function callerUserId(req: FastifyRequest): string | null {
-  return req.authUser?.id ?? req.authDevice?.userId ?? null;
-}
-
-/**
- * Authorize a flat-route caller against a workspace. Returns the error reply
- * to send, or null when the caller's user is a member of the live workspace
- * at `minRole` or above.
- */
-async function authorizeCallerForWorkspace(
-  db: Db,
-  req: FastifyRequest,
-  workspaceId: string,
-  minRole?: WorkspaceRole,
-): Promise<{ code: number; error: string } | null> {
-  const userId = callerUserId(req);
-  if (userId === null) return { code: 401, error: 'unauthorized' };
-  const membership = await findWorkspaceMembership(db, workspaceId, userId);
-  if (!membership) return { code: 403, error: 'forbidden' };
-  if (membership.workspaceStatus === 'deleted') return { code: 404, error: 'not_found' };
-  if (minRole && !rankAtLeast(membership.role, minRole)) return { code: 403, error: 'insufficient_role' };
-  return null;
-}
-
 export interface TaskRouteOptions {
   /** In_progress claim lease TTL in seconds. See config.ts resolveTaskLeaseSeconds. */
   leaseTtlSeconds: number;
@@ -883,6 +858,11 @@ export function registerTaskRoutes(
       await reply.code(404).send({ error: 'not_found' });
       return;
     }
+    const denied = await authorizeCallerForTask(db, req, task);
+    if (denied) {
+      await reply.code(denied.code).send({ error: denied.error });
+      return;
+    }
     return task;
   });
 
@@ -892,6 +872,20 @@ export function registerTaskRoutes(
       return;
     }
     const id = TaskIdSchema.parse(req.params.id);
+    const task = await db
+      .select({ id: schema.tasks.id, workspaceId: schema.tasks.workspaceId })
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .get();
+    if (!task) {
+      await reply.code(404).send({ error: 'not_found' });
+      return;
+    }
+    const denied = await authorizeCallerForTask(db, req, task);
+    if (denied) {
+      await reply.code(denied.code).send({ error: denied.error });
+      return;
+    }
     const history = await db
       .select()
       .from(schema.taskHistory)
@@ -927,12 +921,19 @@ export function registerTaskRoutes(
       }
 
       const existing = await db
-        .select({ id: schema.tasks.id })
+        .select({ id: schema.tasks.id, workspaceId: schema.tasks.workspaceId })
         .from(schema.tasks)
         .where(eq(schema.tasks.id, id))
         .get();
       if (!existing) {
         await reply.code(404).send({ error: 'not_found' });
+        return;
+      }
+      // Claiming starts work on the task, so the device's owner needs write
+      // access: collaborator in the workspace, or owner of an unscoped task.
+      const denied = await authorizeCallerForTask(db, req, existing, 'collaborator');
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
         return;
       }
 
@@ -1077,6 +1078,12 @@ export function registerTaskRoutes(
             action: 'task:assign',
             principal: decision.principal,
           });
+          return;
+        }
+        // Policy gates the device type; the workspace is gated by the owner.
+        const denied = await authorizeUserForWorkspace(db, device.userId, workspaceId, 'collaborator');
+        if (denied) {
+          await reply.code(denied.code).send({ error: denied.error });
           return;
         }
 
@@ -3047,6 +3054,11 @@ export function registerTaskRoutes(
         return;
       }
       const { workspaceId } = req.params;
+      const denied = await authorizeUserForWorkspace(db, device.userId, workspaceId);
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
       const { ttlMinutes } = StaleQuerySchema.parse(req.query);
 
       const cutoff = new Date(Date.now() - ttlMinutes * 60 * 1000);
@@ -3084,6 +3096,11 @@ export function registerTaskRoutes(
         return;
       }
       const { workspaceId } = req.params;
+      const denied = await authorizeUserForWorkspace(db, device.userId, workspaceId, 'collaborator');
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
       const { ttlMinutes } = StaleQuerySchema.parse(req.query);
 
       const cutoff = new Date(Date.now() - ttlMinutes * 60 * 1000);
@@ -3164,6 +3181,11 @@ export function registerTaskRoutes(
         return;
       }
       const { workspaceId } = req.params;
+      const denied = await authorizeUserForWorkspace(db, device.userId, workspaceId, 'collaborator');
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
       const { ttlMinutes } = StaleQuerySchema.parse(req.query);
 
       const cutoff = new Date(Date.now() - ttlMinutes * 60 * 1000);

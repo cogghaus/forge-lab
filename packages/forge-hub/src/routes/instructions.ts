@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { TaskIdSchema, schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { requireUser, getUser, requireUserOrDevice } from '../auth/middleware.js';
+import { authorizeCallerForTask } from '../auth/access.js';
 
 const CreateInstructionInputSchema = z.object({
   priority: z.enum(['redirect', 'stop']),
@@ -13,7 +14,11 @@ const CreateInstructionInputSchema = z.object({
 
 async function getTask(db: Db, taskId: string) {
   return db
-    .select({ id: schema.tasks.id, assignedDeviceId: schema.tasks.assignedDeviceId })
+    .select({
+      id: schema.tasks.id,
+      workspaceId: schema.tasks.workspaceId,
+      assignedDeviceId: schema.tasks.assignedDeviceId,
+    })
     .from(schema.tasks)
     .where(eq(schema.tasks.id, taskId))
     .get();
@@ -34,6 +39,12 @@ export function registerInstructionRoutes(fastify: FastifyInstance, db: Db): voi
       const task = await getTask(db, taskId);
       if (!task) {
         await reply.code(404).send({ error: 'task_not_found' });
+        return;
+      }
+      // Read access: workspace membership, or ownership of an unscoped task.
+      const denied = await authorizeCallerForTask(db, req, task);
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
         return;
       }
       if (
@@ -71,6 +82,12 @@ export function registerInstructionRoutes(fastify: FastifyInstance, db: Db): voi
         await reply.code(404).send({ error: 'task_not_found' });
         return;
       }
+      // stop and redirect change a running agent's work: collaborator.
+      const denied = await authorizeCallerForTask(db, req, task, 'collaborator');
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
       const body = CreateInstructionInputSchema.parse(req.body);
       const id = nanoid();
       await db.insert(schema.taskInstructions).values({
@@ -98,6 +115,12 @@ export function registerInstructionRoutes(fastify: FastifyInstance, db: Db): voi
       const task = await getTask(db, taskId);
       if (!task) {
         await reply.code(404).send({ error: 'task_not_found' });
+        return;
+      }
+      // An ack marks the instruction handled, so it is a write: collaborator.
+      const denied = await authorizeCallerForTask(db, req, task, 'collaborator');
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
         return;
       }
       if (

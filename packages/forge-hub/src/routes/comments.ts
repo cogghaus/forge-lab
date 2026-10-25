@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { TaskIdSchema, schema } from '@forge-lab/core';
 import type { Db } from '../db/index.js';
 import { requireUserOrDevice } from '../auth/middleware.js';
+import { authorizeCallerForTask } from '../auth/access.js';
 
 const CreateCommentInputSchema = z.object({
   body: z.string().min(1).max(50_000),
@@ -38,6 +39,11 @@ export function registerCommentRoutes(fastify: FastifyInstance, db: Db): void {
         await reply.code(404).send({ error: 'task_not_found' });
         return;
       }
+      const denied = await authorizeCallerForTask(db, req, task);
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
+        return;
+      }
       const comments = await db
         .select()
         .from(schema.taskComments)
@@ -61,6 +67,12 @@ export function registerCommentRoutes(fastify: FastifyInstance, db: Db): void {
       const task = await getTask(db, taskId);
       if (!task) {
         await reply.code(404).send({ error: 'task_not_found' });
+        return;
+      }
+      // Writing to a task's thread: collaborator, or owner of an unscoped task.
+      const denied = await authorizeCallerForTask(db, req, task, 'collaborator');
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
         return;
       }
       const input = CreateCommentInputSchema.parse(req.body);

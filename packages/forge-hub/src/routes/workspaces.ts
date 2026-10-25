@@ -6,6 +6,7 @@ import { CreateWorkspaceInputSchema, RepoUrlSchema, RepoBranchSchema, DEFAULT_WO
 import type { Db } from '../db/index.js';
 import { hasUniqueConstraint } from '../db/errors.js';
 import { requireUser, requireDevice, requireWorkspaceMember, getUser, getWorkspace, getDevice } from '../auth/middleware.js';
+import { authorizeUserForWorkspace } from '../auth/access.js';
 import { checkPolicy } from '../policy/engine.js';
 import { buildDevicePrincipal } from '../policy/principals.js';
 
@@ -261,10 +262,9 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
   );
 
   // ---------------------------------------------------------------------------
-  // Dispatcher workspace enumeration — returns all active workspace IDs.
-  // Orchestrator-device-only (Heimdall workspace:list).
-  // ADR-004 single fleet (scope=all): FM enumerates every active workspace
-  // regardless of which user owns it.
+  // Dispatcher workspace enumeration: the active workspaces the device's owner
+  // is a member of. Orchestrator-device-only (Heimdall workspace:list).
+  // ADR-004 single fleet (scope=all): FM serves every membership of its owner.
   // ---------------------------------------------------------------------------
 
   fastify.get(
@@ -290,6 +290,13 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
       const rows = await db
         .select({ id: schema.workspaces.id })
         .from(schema.workspaces)
+        .innerJoin(
+          schema.workspaceMembers,
+          and(
+            eq(schema.workspaceMembers.workspaceId, schema.workspaces.id),
+            eq(schema.workspaceMembers.userId, device.userId),
+          ),
+        )
         .where(eq(schema.workspaces.status, 'active'));
       return rows;
     },
@@ -320,6 +327,12 @@ export function registerWorkspaceRoutes(fastify: FastifyInstance, db: Db): void 
           action: 'context:read',
           principal: ctxDecision.principal,
         });
+        return;
+      }
+      // Policy gates the device type; the workspace is gated by the owner.
+      const denied = await authorizeUserForWorkspace(db, device.userId, workspaceId);
+      if (denied) {
+        await reply.code(denied.code).send({ error: denied.error });
         return;
       }
 
