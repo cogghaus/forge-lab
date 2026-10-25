@@ -1,23 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-
-/**
- * Strict boolean env var (security finding 5). z.coerce.boolean() is NOT used:
- * it is Boolean(value), so 'false' and '0' coerce to true. Accepts only
- * '1'/'true' (true) and '0'/'false' (false); unset or empty takes the default.
- * Anything else is rejected at boot rather than guessed, so a typo cannot
- * silently flip a security flag. Real booleans pass through for callers that
- * build config objects directly.
- */
-function envBoolean(defaultValue: boolean) {
-  return z.preprocess(
-    (val) => (val === undefined || val === '' ? defaultValue : val),
-    z.union([
-      z.boolean(),
-      z.enum(['1', 'true', '0', 'false']).transform((v) => v === '1' || v === 'true'),
-    ]),
-  );
-}
+// Strict boolean env parsing (security finding 5), shared with forge-daemon.
+import { envBoolean } from '@forge-lab/core';
 
 const ConfigSchema = z.object({
   port: z.coerce.number().int().min(0).max(65535).default(3000),

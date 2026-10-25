@@ -466,6 +466,81 @@ describe('/agents mutation authorization (finding 2)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /agents/:id read authorization (follow-up to finding 2, same IDOR class
+// as finding 1). Global agents are readable by any logged-in user, matching
+// GET /agents. A workspace-scoped agent (including its personality) is only
+// readable by members of the owning workspace, at any role.
+// ---------------------------------------------------------------------------
+
+describe('GET /agents/:id read authorization', () => {
+  let hub: Hub;
+  let adminCookie: string;
+  let workspaceId: string;
+  let wsAgentId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
+    ({ cookie: adminCookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, adminCookie, { slug: 'agents-read' });
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/agents`,
+      headers: { cookie: adminCookie },
+      payload: { name: 'ws-secret', personality: 'PRIVATE-WS-PERSONALITY', runtimeId: 'claude-code' },
+    });
+    expect(res.statusCode).toBe(201);
+    wsAgentId = (res.json() as { id: string }).id;
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  it('non-member cannot read a workspace-scoped agent (403, no personality leaked)', async () => {
+    const { cookie } = await setupUser(hub, adminCookie, { email: 'outsider@example.com' });
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/agents/${wsAgentId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.body).not.toContain('PRIVATE-WS-PERSONALITY');
+  });
+
+  it('workspace viewer can read a workspace-scoped agent', async () => {
+    const { cookie } = await setupUser(hub, adminCookie, {
+      email: 'viewer@example.com',
+      workspaceId,
+      workspaceRole: 'viewer',
+    });
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/agents/${wsAgentId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { personality: string }).personality).toBe('PRIVATE-WS-PERSONALITY');
+  });
+
+  it('any logged-in user can read a global agent', async () => {
+    const createRes = await hub.fastify.inject({
+      method: 'POST',
+      url: '/agents',
+      headers: { cookie: adminCookie },
+      payload: { name: 'shared', personality: 'shared personality', runtimeId: 'claude-code' },
+    });
+    const globalId = (createRes.json() as { id: string }).id;
+    const { cookie } = await setupUser(hub, adminCookie, { email: 'anyone@example.com' });
+    const res = await hub.fastify.inject({
+      method: 'GET',
+      url: `/agents/${globalId}`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /agents/performance
 // ---------------------------------------------------------------------------
 

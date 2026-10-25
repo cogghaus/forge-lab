@@ -205,3 +205,30 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ FORGE_DAEMON_HUB_URL: 'not-a-url', FORGE_DAEMON_DEVICE_TOKEN: 'tok' })).toThrow();
   });
 });
+
+// Strict boolean env vars (same footgun as hub security finding 5). Only
+// '1'/'true'/'0'/'false' are accepted; anything else fails at boot instead of
+// being guessed, so FORGE_DAEMON_SKIP_PERMISSIONS=no cannot silently mean yes.
+describe('loadConfig strict booleans', () => {
+  it('FORGE_DAEMON_SKIP_PERMISSIONS=no throws instead of enabling skip', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_SKIP_PERMISSIONS: 'no' })).toThrow();
+  });
+
+  it('FORGE_DAEMON_SKIP_PERMISSIONS=off throws instead of enabling skip', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_SKIP_PERMISSIONS: 'off' })).toThrow();
+  });
+
+  it('FORGE_DAEMON_DISPATCHER_MODE=yes throws instead of guessing', () => {
+    expect(() => loadConfig({ ...REQUIRED, FORGE_DAEMON_DISPATCHER_MODE: 'yes' })).toThrow();
+  });
+
+  it('accepts 1 as true for both flags', () => {
+    const cfg = loadConfig({
+      ...REQUIRED,
+      FORGE_DAEMON_SKIP_PERMISSIONS: '1',
+      FORGE_DAEMON_DISPATCHER_MODE: '1',
+    });
+    expect(cfg.skipPermissions).toBe(true);
+    expect(cfg.dispatcherMode).toBe(true);
+  });
+});

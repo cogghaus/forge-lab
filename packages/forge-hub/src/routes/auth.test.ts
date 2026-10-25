@@ -429,7 +429,11 @@ describe('GET /auth/email/verify', () => {
   });
 });
 
-describe('rate limiting on auth endpoints', () => {
+// Each login miss runs a real bcrypt compare against the dummy hash (finding 6),
+// so draining the 10-request bucket is CPU-bound: ~2-3s alone, past vitest's 5s
+// default when other test files load the machine. The longer timeout is for
+// that cost only; it does not relax any assertion.
+describe('rate limiting on auth endpoints', { timeout: 20_000 }, () => {
   let hub: Hub;
 
   beforeEach(async () => {

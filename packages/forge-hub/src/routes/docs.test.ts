@@ -761,3 +761,85 @@ describe('docs GET workspace isolation (finding 1, IDOR)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Follow-up to finding 1: docs writes from a device. Heimdall policy decides
+// what a device's role may do, but any user can register an orchestrator
+// device, so the device's owning user must also be a member of the workspace.
+// ---------------------------------------------------------------------------
+
+describe('docs POST/PATCH device workspace isolation', () => {
+  let hub: Hub;
+  let adminCookie: string;
+  let workspaceId: string;
+
+  beforeEach(async () => {
+    hub = await createHub({ config: { ...TEST_HUB_CONFIG } });
+    ({ cookie: adminCookie } = await setupAdmin(hub));
+    workspaceId = await createWorkspace(hub, adminCookie, { slug: 'docs-write-ws' });
+    const ownerFm = await registerOrchestrator(hub, adminCookie);
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${ownerFm}` },
+      payload: { key: 'existing-doc', title: 'Existing', content: 'ORIGINAL-CONTENT', category: 'adr' },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  afterEach(async () => {
+    await hub.close();
+  });
+
+  async function outsiderFmToken(): Promise<string> {
+    const { cookie } = await setupUser(hub, adminCookie, { email: 'outsider@example.com' });
+    return registerOrchestrator(hub, cookie);
+  }
+
+  it('orchestrator device owned by a non-member cannot POST a doc (403, nothing inserted)', async () => {
+    const token = await outsiderFmToken();
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { key: 'planted-doc', title: 'Planted', content: 'PLANTED', category: 'adr' },
+    });
+    expect(res.statusCode).toBe(403);
+    const rows = await hub.db
+      .select()
+      .from(schema.workspaceDocs)
+      .where(eq(schema.workspaceDocs.key, 'planted-doc'));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('orchestrator device owned by a non-member cannot PATCH a doc (403, unchanged)', async () => {
+    const token = await outsiderFmToken();
+    const res = await hub.fastify.inject({
+      method: 'PATCH',
+      url: `/workspaces/${workspaceId}/docs/existing-doc`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { content: 'POISONED' },
+    });
+    expect(res.statusCode).toBe(403);
+    const doc = await hub.db
+      .select({ content: schema.workspaceDocs.content })
+      .from(schema.workspaceDocs)
+      .where(eq(schema.workspaceDocs.key, 'existing-doc'))
+      .get();
+    expect(doc?.content).toBe('ORIGINAL-CONTENT');
+  });
+
+  it('POST on a deleted workspace returns 404 for a member user', async () => {
+    await hub.db
+      .update(schema.workspaces)
+      .set({ status: 'deleted' })
+      .where(eq(schema.workspaces.id, workspaceId));
+    const res = await hub.fastify.inject({
+      method: 'POST',
+      url: `/workspaces/${workspaceId}/docs`,
+      headers: { cookie: adminCookie },
+      payload: { key: 'late-doc', title: 'Late', content: 'late', category: 'adr' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+});
