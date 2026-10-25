@@ -29,7 +29,7 @@
   "dependencies": {
     "@forge-lab/agents": "workspace:*",
     "@forge-lab/core": "workspace:*",
-    "nanoid": "^5.1.11",
+    "nanoid": "^5.1.16",
     "ws": "^8.21.0",
     "zod": "^3.25.76"
   },
